@@ -1,0 +1,30 @@
+name: Deploy Test Server to DigitalOcean
+
+on:
+  push:
+    branches:
+      - test
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Droplet via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          script_stop: true
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" || true
+            cd /root/test-server
+            git fetch origin test
+            git reset --hard origin/test
+            npm install
+            npx prisma migrate deploy
+            npx prisma generate
+            npm run build
+            pm2 restart test-logistic-server --update-env || pm2 start dist/server.js --name "test-logistic-server"
