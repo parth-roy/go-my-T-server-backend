@@ -1960,3 +1960,31 @@ model GigPricingConfig {
 
   @@map("gig_pricing_config")
 }
+model FormDriverLead {
+  id              String      @id @default(uuid())
+  name            String
+  phone           String
+  alternatePhone  String?
+  city            String
+  vehicleType     VehicleType
+  vehicleNumber   String
+  aadharNumber    String
+  dlNumber        String
+
+  // Document URLs (S3)
+  profilePhotoUrl String?
+  aadharFrontUrl  String?
+  aadharBackUrl   String?
+  dlFrontUrl      String?
+  dlBackUrl       String?
+  rcBookUrl       String?
+  insuranceUrl    String?
+
+  status          LeadStatus  @default(PENDING)
+  notes           String?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@map("form_driver_leads")
+}
