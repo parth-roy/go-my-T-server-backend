@@ -10,11 +10,11 @@ export function globalErrorHandler(
   res: Response,
   _next: NextFunction
 ): void {
-  if (err instanceof ZodError) {
+  if (err instanceof ZodError || err.name === 'ZodError') {
     res.status(400).json({
       success: false,
       message: 'Validation failed',
-      errors: err.issues.map((e) => ({
+      errors: (err as ZodError).issues.map((e: any) => ({
         field: e.path.join('.'),
         message: e.message,
       })),
