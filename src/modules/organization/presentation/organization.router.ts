@@ -45,10 +45,6 @@ organizationRouter.post(
 );
 
 
-organizationRouter.get('/:id', authenticate, resolveContext, organizationController.get);
-organizationRouter.put('/:id', authenticate, resolveContext, validate(updateOrganizationSchema, 'body'), organizationController.update);
-organizationRouter.delete('/:id', authenticate, resolveContext, organizationController.delete);
-
 // M1: Branch CRUD sub-router
 organizationRouter.use(
   '/branches',
@@ -90,5 +86,10 @@ organizationRouter.use('/employment-assignments', authenticate, resolveContext, 
 // M5: Project + Shift sub-routers
 organizationRouter.use('/work-schedules', authenticate, resolveContext, workScheduleRouter);
 organizationRouter.use('/shifts', authenticate, resolveContext, shiftRouter);
+
+// Organization CRUD (Must be at the bottom to prevent wildcard shadowing)
+organizationRouter.get('/:id', authenticate, resolveContext, organizationController.get);
+organizationRouter.put('/:id', authenticate, resolveContext, validate(updateOrganizationSchema, 'body'), organizationController.update);
+organizationRouter.delete('/:id', authenticate, resolveContext, organizationController.delete);
 
 export { organizationRouter };
