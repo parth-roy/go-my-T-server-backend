@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { RecordPunchController } from '../controllers/RecordPunchController';
+import { TimeTrackingStatusController } from '../controllers/TimeTrackingStatusController';
 import { RecordPunchCommandHandler } from '../../application/commands/RecordPunchCommandHandler';
 import { PrismaTimeTrackingRepository } from '../../infrastructure/database/PrismaTimeTrackingRepository';
 
@@ -20,10 +21,14 @@ export function createTimeTrackingRouter(prisma: PrismaClient): Router {
 
   // 3. Initialize Presentation Controllers
   const recordPunchController = new RecordPunchController(recordPunchCommandHandler);
+  const statusController = new TimeTrackingStatusController(prisma);
 
   // 4. Define Routes
   // POST /api/v1/time-tracking/punches
   router.post('/punches', recordPunchController.recordPunch);
+  
+  // GET /api/v1/time-tracking/status
+  router.get('/status', statusController.getStatus);
 
   return router;
 }

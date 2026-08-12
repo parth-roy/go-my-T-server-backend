@@ -28,11 +28,13 @@ const getTimelineUseCase = new GetAssignmentTimelineUseCase(assignmentRepo);
 const controller = new EmploymentAssignmentController(
   createUseCase,
   transitionUseCase,
-  getTimelineUseCase
+  getTimelineUseCase,
+  prisma
 );
 
 // All routes here should be mounted under /api/v1/organization/employment-assignments
 // Workspace middleware is assumed to be mounted at the parent level, resolving req.context
+employmentAssignmentRouter.get('/', controller.list);
 employmentAssignmentRouter.post('/', controller.create);
 employmentAssignmentRouter.post('/:membershipId/transition', controller.transition);
 employmentAssignmentRouter.get('/:membershipId/timeline', controller.getTimeline);

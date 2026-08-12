@@ -14,8 +14,6 @@ export class RecordPunchController {
   public recordPunch = async (req: Request, res: Response): Promise<void> => {
     try {
       const {
-        workerId,
-        organizationId,
         eventType,
         recordedAt,
         deviceTime,
@@ -23,6 +21,9 @@ export class RecordPunchController {
         workContext,
         verification
       } = req.body;
+      
+      const workerId = req.user!.id;
+      const organizationId = req.context!.organization?.id || '';
 
       // Extract unique request correlation headers
       const commandId = req.headers['x-command-id'] as string || crypto.randomUUID();

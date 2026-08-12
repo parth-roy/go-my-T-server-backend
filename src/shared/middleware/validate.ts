@@ -9,7 +9,12 @@ export function validate(schema: ZodSchema, target: Target = 'body') {
       const result = schema.safeParse(req[target]);
       if (!result.success) return next(result.error);
       
-      req[target] = result.data;
+      if (target === 'query') {
+        Object.keys(req.query).forEach(key => delete req.query[key]);
+        Object.assign(req.query, result.data);
+      } else {
+        req[target] = result.data;
+      }
       next();
     } catch (err) {
       next(err);

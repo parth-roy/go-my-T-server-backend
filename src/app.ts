@@ -41,6 +41,9 @@ import { organizationRouter, initializeOrganizationModule } from '@modules/organ
 import { razorpayWebhook } from '@modules/payment/payment.controller';
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
 import { createPerformanceRouter } from '@modules/time-tracking/presentation/performance/routes/PerformanceRoutes';
+import { createTimeTrackingRouter } from '@modules/time-tracking/presentation/routers/TimeTrackingRouter';
+import { authenticate } from '@shared/middleware/auth.middleware';
+import { resolveContext } from '@shared/middleware/context.middleware';
 
 export function createApp(): Application {
   const app = express();
@@ -219,6 +222,9 @@ export function createApp(): Application {
 
   // Time Tracking - Performance
   app.use('/api/v1/performance', createPerformanceRouter(prisma));
+
+  // Time Tracking - Core (Punches, Status)
+  app.use('/api/v1/time-tracking', authenticate, resolveContext, createTimeTrackingRouter(prisma));
 
   app.use(notFoundHandler);
   app.use(sentryErrorHandler);

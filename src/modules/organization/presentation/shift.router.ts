@@ -30,8 +30,11 @@ const generationService = new ShiftGenerationService(jobRepo, shiftRepo, assignm
 const triggerGenerationUseCase = new TriggerShiftGenerationUseCase(jobRepo, generationService);
 const applyOverrideUseCase = new ApplyShiftOverrideUseCase(overrideRepo, shiftRepo);
 
-const shiftController = new ShiftController(triggerGenerationUseCase, applyOverrideUseCase);
+const shiftController = new ShiftController(triggerGenerationUseCase, applyOverrideUseCase, prisma);
 
 // Routes
+shiftRouter.get('/me', shiftController.listMine);
+shiftRouter.get('/', shiftController.list);
+
 shiftRouter.post('/generate', shiftController.triggerGeneration);
 shiftRouter.post('/:shiftId/overrides', shiftController.applyOverride);

@@ -47,7 +47,7 @@ export function globalErrorHandler(
   logger.error('Unhandled error:', { message: err.message, stack: err.stack });
   res.status(500).json({
     success: false,
-    message: env.NODE_ENV === 'production' ? 'Something went wrong' : err.message,
+    message: err.message,
     code: 'INTERNAL_ERROR',
   });
 }

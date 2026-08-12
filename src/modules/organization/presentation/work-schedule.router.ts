@@ -26,11 +26,13 @@ const publishVersionUseCase = new PublishScheduleTemplateVersionUseCase(versionR
 const assignScheduleUseCase = new AssignScheduleUseCase(assignmentRepo, versionRepo);
 const resolveScheduleUseCase = new ResolveScheduleUseCase(resolutionService);
 
-const templateController = new WorkScheduleTemplateController(createTemplateUseCase, publishVersionUseCase);
+const templateController = new WorkScheduleTemplateController(createTemplateUseCase, publishVersionUseCase, prisma);
 const assignmentController = new ScheduleAssignmentController(assignScheduleUseCase, resolveScheduleUseCase);
 
 // Routes
+workScheduleRouter.get('/templates', templateController.list);
 workScheduleRouter.post('/templates', templateController.createTemplate);
+workScheduleRouter.get('/templates/:id', templateController.getDetail);
 workScheduleRouter.post('/templates/:templateId/versions/:versionId/publish', templateController.publishVersion);
 
 workScheduleRouter.post('/assignments', assignmentController.assignSchedule);
