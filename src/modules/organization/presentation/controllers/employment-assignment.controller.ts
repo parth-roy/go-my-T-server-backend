@@ -29,7 +29,7 @@ export class EmploymentAssignmentController {
         },
         include: {
           membership: {
-            include: { user: { select: { firstName: true, lastName: true, email: true } } }
+            include: { user: { select: { name: true, email: true } } }
           }
         },
         skip,
@@ -45,8 +45,8 @@ export class EmploymentAssignmentController {
         assignmentNumber: r.assignmentNumber,
         membershipId: r.membershipId,
         user: r.membership ? {
-          firstName: r.membership.user.firstName,
-          lastName: r.membership.user.lastName,
+          name: r.membership.user.name,
+          
           email: r.membership.user.email
         } : null,
         employmentTypeId: r.employmentTypeId,

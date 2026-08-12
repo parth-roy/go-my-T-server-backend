@@ -25,7 +25,7 @@ export class ShiftController {
 
       const shifts = await this.prisma.shiftInstance.findMany({
         where: {
-          organizationId: context.organization?.id || "",
+          organizationId: orgId,
           startTime: { gte: startDate },
           endTime: { lte: endDate }
         },
@@ -55,7 +55,7 @@ export class ShiftController {
       if (!context || !user) throw AppError.unauthorized('Context missing');
 
       const membership = await this.prisma.organizationMembership.findFirst({
-        where: { organizationId: context.organization?.id || "", userId: user.id }
+        where: { organizationId: orgId, userId: user.id }
       });
 
       if (!membership) throw AppError.unauthorized('Membership not found');
@@ -65,7 +65,7 @@ export class ShiftController {
 
       const shifts = await this.prisma.shiftInstance.findMany({
         where: {
-          organizationId: context.organization?.id || "",
+          organizationId: orgId,
           membershipId: membership.id,
           startTime: { gte: startDate },
           endTime: { lte: endDate }
@@ -118,3 +118,5 @@ export class ShiftController {
     }
   };
 }
+
+

@@ -14,10 +14,11 @@ export class WorkScheduleTemplateController {
   public list = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const context = req.context;
-      if (!context) throw AppError.unauthorized('Context missing');
+      const orgId = context?.organization?.id;
+      if (!context || !orgId) throw AppError.unauthorized('Missing organization context');
       
       const templates = await this.prisma.workScheduleTemplate.findMany({
-        where: { organizationId: context.organization?.id || "" },
+        where: { organizationId: orgId },
         include: {
           versions: {
             where: { status: 'PUBLISHED' },
@@ -47,12 +48,13 @@ export class WorkScheduleTemplateController {
     try {
       const templateId = req.params.id as string;
       const context = req.context;
-      if (!context) throw AppError.unauthorized('Context missing');
+      const orgId = context?.organization?.id;
+      if (!context || !orgId) throw AppError.unauthorized('Missing organization context');
       
       const template = await this.prisma.workScheduleTemplate.findFirst({
         where: { 
           id: templateId,
-          organizationId: context.organization?.id || ""
+          organizationId: orgId
         },
         include: {
           versions: {
@@ -98,3 +100,4 @@ export class WorkScheduleTemplateController {
     }
   };
 }
+
