@@ -1,0 +1,1 @@
+export class ApplyReliabilityAdjustment { constructor(public readonly workerId: string) {} }

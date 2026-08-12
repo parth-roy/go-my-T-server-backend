@@ -1,3 +1,5 @@
+import { RequestContext } from '../context/request-context';
+
 declare global {
   namespace Express {
     interface Request {
@@ -6,6 +8,7 @@ declare global {
         phone: string;
         role: string;
       };
+      context?: RequestContext;
     }
   }
 }

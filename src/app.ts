@@ -34,10 +34,13 @@ import { driverWalletRouter } from '@modules/driver-wallet/driver-wallet.router'
 import { fleetWalletRouter }  from '@modules/fleet-wallet/fleet-wallet.router';
 import { publicLeadsRouter, adminLeadsRouter } from '@modules/leads/leads.router';
 import { publicContactRouter, adminContactRouter } from '@modules/contact/contact.router';
+// import { formDriverLeadRouter } from '@modules/form-driver-leads/form-driver-leads.router';
 import { gigRouter } from '@modules/gig/gig.router';
 import { sentryErrorHandler } from '@config/sentry';
+import { organizationRouter, initializeOrganizationModule } from '@modules/organization/organization.module';
 import { razorpayWebhook } from '@modules/payment/payment.controller';
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
+import { createPerformanceRouter } from '@modules/time-tracking/presentation/performance/routes/PerformanceRoutes';
 
 export function createApp(): Application {
   const app = express();
@@ -176,6 +179,7 @@ export function createApp(): Application {
   app.use('/api/v1/wallet', walletRouter);
   app.use('/api/v1/payments', paymentRouter);
   app.use('/api/v1/pricing', pricingRouter);
+  // app.use('/api/v1/form-driver-leads', formDriverLeadRouter);
 
   app.use('/api/v1/rewards', rewardsRouter);
   app.use('/api/v1/fleet', fleetRouter);
@@ -194,6 +198,17 @@ export function createApp(): Application {
   app.use('/api/v1/fleet-wallet',  fleetWalletRouter);
   app.use('/api/v1/gigs', gigRouter);
 
+  // ── Organization Domain (Feature-Flagged) ─────────────────────────────────
+  // Mount ONLY when ORGANIZATION_DOMAIN_ENABLED=true.
+  // Default: false (fail-closed). Set to 'true' after M0 staging validation.
+  if (env.ORGANIZATION_DOMAIN_ENABLED) {
+    initializeOrganizationModule();
+    app.use('/api/v1/organizations', organizationRouter);
+    logger.info('Organization Domain: ENABLED — routes mounted at /api/v1/organizations');
+  } else {
+    logger.info('Organization Domain: DISABLED — routes not mounted (ORGANIZATION_DOMAIN_ENABLED=false)');
+  }
+
   // Leads
   app.use('/api/v1/leads', publicLeadsRouter);
   app.use('/api/v1/admin/leads', adminLeadsRouter);
@@ -201,6 +216,9 @@ export function createApp(): Application {
   // Contact
   app.use('/api/v1/contact', publicContactRouter);
   app.use('/api/v1/admin/contact-messages', adminContactRouter);
+
+  // Time Tracking - Performance
+  app.use('/api/v1/performance', createPerformanceRouter(prisma));
 
   app.use(notFoundHandler);
   app.use(sentryErrorHandler);

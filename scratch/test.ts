@@ -1,0 +1,1 @@
+import { PrismaClient } from '@prisma/client'; const prisma = new PrismaClient(); async function run() { const d = await prisma.workerPerformanceDashboard.findFirst(); console.log('DASHBOARD', d); const c = await prisma.workerAdherenceReadModel.findFirst(); console.log('ADHERENCE', c); } run().catch(console.error).finally(() => prisma.$disconnect());

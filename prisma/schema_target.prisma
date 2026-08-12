@@ -1,0 +1,850 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = "postgresql://prisma:prisma@localhost:5432/logistic_local?sslmode=disable"
+  directUrl  = "postgresql://prisma:prisma@localhost:5432/logistic_local?sslmode=disable"
+  extensions = [pg_trgm]
+}
+
+model User {
+  id                     String           @id @default(uuid())
+  phone                  String           @unique
+  name                   String?
+  email                  String?          @unique
+  profileImageUrl        String?
+  role                   UserRole         @default(CUSTOMER)
+  isActive               Boolean          @default(true)
+  language               String           @default("en")
+  fcmToken               String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  profileComplete        Boolean          @default(false)
+  usageType              String?          @default("Personal Usage")
+  whatsappOptIn          Boolean          @default(true)
+  bidAwardsAccepted      BidAward[]       @relation("BidAwardCustomer")
+  bidMessagesSent        BidMessage[]     @relation("BidMessageSender")
+  bidRevisionsAuthored   BidRevision[]    @relation("BidRevisionAuthor")
+  bookings               Booking[]        @relation("CustomerBookings")
+  coinBalance            CoinBalance?
+  driver                 Driver?
+  gstDetails             GstDetail[]
+  marketplaceBidsCreated MarketplaceBid[] @relation("MarketplaceBidCreatedBy")
+  refreshTokens          RefreshToken[]
+  addresses              SavedAddress[]
+  supportTickets         SupportTicket[]
+  wallet                 Wallet?
+
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+model SavedAddress {
+  id           String   @id @default(uuid())
+  userId       String
+  label        String
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String
+  pincode      String
+  latitude     Float
+  longitude    Float
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("saved_addresses")
+}
+
+model RecentSearch {
+  id         String   @id @default(uuid())
+  userId     String?
+  placeId    String
+  address    String
+  latitude   Float
+  longitude  Float
+  searchType String   @default("pickup")
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("recent_searches")
+}
+
+model GstDetail {
+  id           String   @id @default(uuid())
+  userId       String
+  gstin        String
+  businessName String?
+  isVerified   Boolean  @default(false)
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("gst_details")
+}
+
+model Driver {
+  id                String              @id @default(uuid())
+  userId            String              @unique
+  licenseNumber     String              @unique
+  vehicleId         String?             @unique
+  status            DriverStatus        @default(OFFLINE)
+  rating            Float               @default(5.0)
+  totalTrips        Int                 @default(0)
+  isDocVerified     Boolean             @default(false)
+  isActive          Boolean             @default(true)
+  currentLat        Float?
+  currentLng        Float?
+  lastLocationAt    DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  dlNumber          String?
+  dlUlipRawResponse Json?
+  dlVerifStatus     UlipVerifStatus     @default(PENDING)
+  dlVerifiedAt      DateTime?
+  dob               DateTime?
+  permitTypes       String?
+  bookings          Booking[]
+  documents         DriverDocument[]
+  earnings          DriverEarning[]
+  subscription      DriverSubscription?
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle           Vehicle?            @relation(fields: [vehicleId], references: [id])
+  marketplaceBids   MarketplaceBid[]
+
+  @@index([licenseNumber(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@map("drivers")
+}
+
+model DriverSubscription {
+  id               String           @id @default(uuid())
+  driverId         String           @unique
+  plan             SubscriptionPlan
+  pricePerMonth    Int
+  startDate        DateTime         @default(now())
+  endDate          DateTime
+  isActive         Boolean          @default(true)
+  paymentReference String?
+  paymentMethod    String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  driver           Driver           @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@map("driver_subscriptions")
+}
+
+model Vehicle {
+  id                String          @id @default(uuid())
+  registrationNo    String          @unique
+  type              VehicleType
+  make              String
+  model             String
+  year              Int
+  color             String?
+  capacityKg        Float
+  imageUrl          String?
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  chassisNumber     String?
+  engineNumber      String?
+  ownerName         String?
+  rcUlipRawResponse Json?
+  rcVerifStatus     UlipVerifStatus @default(PENDING)
+  rcVerifiedAt      DateTime?
+  driver            Driver?
+
+  @@map("vehicles")
+}
+
+model VerificationLog {
+  id          String          @id @default(uuid())
+  entityType  String
+  entityId    String
+  apiCalled   String
+  requestBody Json
+  response    Json
+  status      UlipVerifStatus
+  calledAt    DateTime        @default(now())
+  calledBy    String
+
+  @@index([entityId, entityType])
+  @@index([calledAt])
+  @@map("verification_logs")
+}
+
+model DriverDocument {
+  id             String         @id @default(uuid())
+  driverId       String
+  type           String
+  fileUrl        String
+  status         DocumentStatus @default(PENDING)
+  rejectedReason String?
+  verifiedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime       @default(now())
+  driver         Driver         @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@map("driver_documents")
+}
+
+model DriverEarning {
+  id          String    @id @default(uuid())
+  driverId    String
+  bookingId   String    @unique
+  grossAmount Float
+  commission  Float
+  netAmount   Float
+  paidAt      DateTime?
+  createdAt   DateTime  @default(now())
+  booking     Booking   @relation(fields: [bookingId], references: [id])
+  driver      Driver    @relation(fields: [driverId], references: [id])
+
+  @@map("driver_earnings")
+}
+
+model Booking {
+  id                      String                   @id @default(uuid())
+  bookingNumber           String                   @unique
+  customerId              String
+  driverId                String?
+  pickupLat               Float
+  pickupLng               Float
+  pickupAddress           String
+  vehicleType             VehicleType
+  hasLoadingService       Boolean                  @default(false)
+  receiverName            String?
+  receiverPhone           String?
+  gstin                   String?
+  gstBusinessName         String?
+  status                  BookingStatus            @default(DRAFT)
+  estimatedDistance       Float?
+  estimatedDuration       Int?
+  estimatedPickupEta      Int?
+  actualPickupTime        DateTime?
+  actualDeliveryTime      DateTime?
+  baseFare                Float?
+  distanceFare            Float?
+  loadingCharge           Float?
+  surgeMultiplier         Float                    @default(1.0)
+  coinsRedeemed           Float                    @default(0)
+  discountAmount          Float                    @default(0)
+  taxAmount               Float?
+  totalFare               Float?
+  paymentStatus           PaymentStatus            @default(PENDING)
+  paymentMethod           PaymentMethod?
+  paymentRef              String?
+  customerRating          Float?
+  driverRating            Float?
+  customerNote            String?
+  invoiceUrl              String?
+  cancellationReason      String?
+  cancelledBy             String?
+  cancellationTime        DateTime?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  pickupOtp               String?
+  bookingMode             BookingMode              @default(INSTANT)
+  bidWindowMinutes        Int                      @default(10)
+  marketplaceVersion      Int                      @default(0)
+  awardedFleetOwnerId     String?
+  goodsType               String                   @default("General Goods")
+  goodsDescription        String?
+  goodsWeightKg           Float?
+  goodsQuantity           Int                      @default(1)
+  goodsLengthCm           Float?
+  goodsWidthCm            Float?
+  goodsHeightCm           Float?
+  declaredGoodsValue      Float?
+  handlingInstructions    String?
+  containsRestrictedGoods Boolean                  @default(false)
+  goodsImageUrls          String[]                 @default([])
+  laborRequired           Boolean                  @default(false)
+  laborersCount           Int?
+  laborType               LaborType?
+  laborCharge             Float?
+  bidAwards               BidAward[]
+  bidWindow               BidWindow?
+  locationHistory         BookingLocationHistory[]
+  stops                   BookingStop[]
+  customer                User                     @relation("CustomerBookings", fields: [customerId], references: [id])
+  driver                  Driver?                  @relation(fields: [driverId], references: [id])
+  earning                 DriverEarning?
+  marketplaceBids         MarketplaceBid[]
+
+  @@index([bookingMode, status])
+  @@index([awardedFleetOwnerId, status])
+  @@index([laborRequired, status])
+  @@map("bookings")
+}
+
+model BookingStop {
+  id            String  @id @default(uuid())
+  bookingId     String
+  sequence      Int
+  latitude      Float
+  longitude     Float
+  address       String
+  receiverName  String?
+  receiverPhone String?
+  isCompleted   Boolean @default(false)
+  booking       Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("booking_stops")
+}
+
+model BookingLocationHistory {
+  id         String   @id @default(uuid())
+  bookingId  String
+  latitude   Float
+  longitude  Float
+  recordedAt DateTime @default(now())
+  driverId   String?
+  speedKmh   Float?
+  headingDeg Float?
+  accuracyM  Float?
+  tripPhase  String?
+  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([driverId, recordedAt])
+  @@map("booking_location_history")
+}
+
+model BidWindow {
+  id                 String           @id @default(uuid())
+  bookingId          String           @unique
+  status             BidWindowStatus  @default(OPEN)
+  opensAt            DateTime         @default(now())
+  closesAt           DateTime
+  lockedAt           DateTime?
+  closedAt           DateTime?
+  version            Int              @default(1)
+  maxRevisionsPerBid Int              @default(20)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @default(now()) @updatedAt
+  booking            Booking          @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bids               MarketplaceBid[]
+
+  @@index([status, closesAt])
+  @@map("bid_windows")
+}
+
+model MarketplaceBid {
+  id                   String               @id @default(uuid())
+  bookingId            String
+  windowId             String
+  participantKey       String
+  partyType            BidPartyType
+  driverId             String?
+  fleetOwnerId         String?
+  createdByUserId      String
+  status               MarketplaceBidStatus @default(OPEN)
+  latestRevisionNumber Int                  @default(0)
+  latestRevisionId     String?
+  submittedAt          DateTime             @default(now())
+  withdrawnAt          DateTime?
+  rejectedAt           DateTime?
+  closedAt             DateTime?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @default(now()) @updatedAt
+  awards               BidAward[]
+  messages             BidMessage[]
+  revisions            BidRevision[]
+  booking              Booking              @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  createdBy            User                 @relation("MarketplaceBidCreatedBy", fields: [createdByUserId], references: [id])
+  driver               Driver?              @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  window               BidWindow            @relation(fields: [windowId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, participantKey])
+  @@index([bookingId, status])
+  @@index([driverId, status])
+  @@index([fleetOwnerId, status])
+  @@map("marketplace_bids")
+}
+
+model BidRevision {
+  id                 String                @id @default(uuid())
+  bidId              String
+  revisionNumber     Int
+  previousRevisionId String?
+  authorUserId       String
+  authorSide         BidRevisionAuthorSide
+  idempotencyKey     String                @unique
+  quotedAmount       Decimal               @db.Decimal(12, 2)
+  gstAmount          Decimal               @db.Decimal(12, 2)
+  customerTotal      Decimal               @db.Decimal(12, 2)
+  pickupCommitmentAt DateTime
+  transitMinutes     Int
+  expiresAt          DateTime
+  vehicleType        VehicleType
+  vehicleId          String?
+  inclusions         String[]              @default([])
+  exclusions         String[]              @default([])
+  note               String?
+  termsSnapshot      Json
+  createdAt          DateTime              @default(now())
+  awards             BidAward?
+  messages           BidMessage[]
+  author             User                  @relation("BidRevisionAuthor", fields: [authorUserId], references: [id])
+  bid                MarketplaceBid        @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  previousRevision   BidRevision?          @relation("BidRevisionHistory", fields: [previousRevisionId], references: [id], onDelete: Restrict)
+  nextRevisions      BidRevision[]         @relation("BidRevisionHistory")
+
+  @@unique([bidId, revisionNumber])
+  @@index([bidId, createdAt])
+  @@index([expiresAt])
+  @@map("bid_revisions")
+}
+
+model BidMessage {
+  id              String         @id @default(uuid())
+  bidId           String
+  senderUserId    String
+  clientMessageId String         @unique
+  type            BidMessageType @default(TEXT)
+  message         String
+  revisionId      String?
+  createdAt       DateTime       @default(now())
+  bid             MarketplaceBid @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  revision        BidRevision?   @relation(fields: [revisionId], references: [id])
+  sender          User           @relation("BidMessageSender", fields: [senderUserId], references: [id])
+
+  @@index([bidId, createdAt])
+  @@map("bid_messages")
+}
+
+model BidAward {
+  id                      String         @id @default(uuid())
+  bookingId               String
+  bidId                   String
+  revisionId              String         @unique
+  customerId              String
+  status                  BidAwardStatus @default(PAYMENT_PENDING)
+  activeKey               String?        @unique
+  quotedAmount            Decimal        @db.Decimal(12, 2)
+  gstAmount               Decimal        @db.Decimal(12, 2)
+  customerTotal           Decimal        @db.Decimal(12, 2)
+  previousPricingSnapshot Json
+  acceptedAt              DateTime       @default(now())
+  paymentDeadline         DateTime
+  confirmedAt             DateTime?
+  expiredAt               DateTime?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @default(now()) @updatedAt
+  bid                     MarketplaceBid @relation(fields: [bidId], references: [id])
+  booking                 Booking        @relation(fields: [bookingId], references: [id])
+  customer                User           @relation("BidAwardCustomer", fields: [customerId], references: [id])
+  revision                BidRevision    @relation(fields: [revisionId], references: [id])
+
+  @@index([bookingId, status])
+  @@index([status, paymentDeadline])
+  @@map("bid_awards")
+}
+
+model Wallet {
+  id            String              @id @default(uuid())
+  userId        String              @unique
+  cachedBalance Float               @default(0)
+  updatedAt     DateTime            @updatedAt
+  createdAt     DateTime            @default(now())
+  transactions  WalletTransaction[]
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id           String                  @id @default(uuid())
+  walletId     String
+  type         WalletTransactionType
+  reason       WalletTransactionReason
+  amount       Float
+  balanceAfter Float
+  referenceId  String?
+  note         String?
+  createdAt    DateTime                @default(now())
+  wallet       Wallet                  @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@map("wallet_transactions")
+}
+
+model CoinBalance {
+  id            String            @id @default(uuid())
+  userId        String            @unique
+  cachedBalance Float             @default(0)
+  updatedAt     DateTime          @updatedAt
+  createdAt     DateTime          @default(now())
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions  CoinTransaction[]
+
+  @@map("coin_balances")
+}
+
+model CoinTransaction {
+  id            String              @id @default(uuid())
+  coinBalanceId String
+  type          CoinTransactionType
+  coins         Float
+  balanceAfter  Float
+  referenceId   String?
+  expiresAt     DateTime?
+  note          String?
+  createdAt     DateTime            @default(now())
+  coinBalance   CoinBalance         @relation(fields: [coinBalanceId], references: [id], onDelete: Cascade)
+
+  @@map("coin_transactions")
+}
+
+model SupportTicket {
+  id        String              @id @default(uuid())
+  userId    String
+  bookingId String?
+  subject   String
+  status    SupportTicketStatus @default(OPEN)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  messages  SupportMessage[]
+  user      User                @relation(fields: [userId], references: [id])
+
+  @@map("support_tickets")
+}
+
+model SupportMessage {
+  id            String        @id @default(uuid())
+  ticketId      String
+  senderId      String
+  isAgent       Boolean       @default(false)
+  content       String
+  attachmentUrl String?
+  createdAt     DateTime      @default(now())
+  ticket        SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@map("support_messages")
+}
+
+model VehicleTypePricing {
+  id           String      @id @default(uuid())
+  vehicleType  VehicleType @unique
+  baseFare     Float
+  pricePerKm   Float
+  minFare      Float
+  capacityKg   Float
+  capacityDesc String
+  estimatedEta Int
+  displayName  String
+  imageUrl     String?
+  isActive     Boolean     @default(true)
+  updatedAt    DateTime    @updatedAt
+
+  @@map("vehicle_type_pricing")
+}
+
+model Announcement {
+  id        String    @id @default(uuid())
+  title     String
+  body      String
+  imageUrl  String?
+  linkUrl   String?
+  isActive  Boolean   @default(true)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("announcements")
+}
+
+model PerformanceEvent {
+  eventId          String   @id @default(uuid()) @db.Uuid
+  aggregateId      String   @db.Uuid
+  aggregateVersion Int
+  eventType        String
+  payload          Json
+  metadata         Json
+  timestamp        DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([aggregateId, aggregateVersion])
+  @@index([aggregateId, aggregateVersion])
+  @@index([timestamp])
+  @@map("time_performance_events")
+}
+
+model WorkerPerformanceCycle {
+  id                String              @id @db.Uuid
+  workerId          String              @db.Uuid
+  membershipId      String?             @db.Uuid
+  cycleId           String
+  status            String
+  finalScore        Float?
+  finalRating       String?
+  adherenceSnapshot Json?
+  policySnapshot    Json?
+  aggregateVersion  Int                 @default(1)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime            @updatedAt @db.Timestamptz(6)
+  evaluations       ManagerEvaluation[]
+  objectives        WorkerObjective[]
+
+  membership OrganizationMembership? @relation(fields: [membershipId], references: [id])
+
+  @@unique([workerId, membershipId, cycleId])
+  @@index([workerId, status])
+}
+
+model WorkerObjective {
+  id                       String                 @id @db.Uuid
+  workerPerformanceCycleId String                 @db.Uuid
+  title                    String
+  description              String?
+  weight                   Float                  @default(1.0)
+  status                   String
+  aggregateVersion         Int                    @default(1)
+  createdAt                DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime               @updatedAt @db.Timestamptz(6)
+  keyResults               KeyResult[]
+  cycle                    WorkerPerformanceCycle @relation(fields: [workerPerformanceCycleId], references: [id], onDelete: Cascade)
+
+  @@index([workerPerformanceCycleId])
+}
+
+model KeyResult {
+  id                String          @id @db.Uuid
+  workerObjectiveId String          @db.Uuid
+  title             String
+  targetValue       Float
+  currentValue      Float           @default(0.0)
+  unit              String
+  aggregateVersion  Int             @default(1)
+  createdAt         DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @db.Timestamptz(6)
+  objective         WorkerObjective @relation(fields: [workerObjectiveId], references: [id], onDelete: Cascade)
+
+  @@index([workerObjectiveId])
+}
+
+model ManagerEvaluation {
+  id                       String                 @id @db.Uuid
+  workerPerformanceCycleId String                 @db.Uuid
+  managerId                String                 @db.Uuid
+  rating                   String
+  feedbackEncrypted        String?
+  aggregateVersion         Int                    @default(1)
+  submittedAt              DateTime               @default(now()) @db.Timestamptz(6)
+  cycle                    WorkerPerformanceCycle @relation(fields: [workerPerformanceCycleId], references: [id], onDelete: Cascade)
+
+  @@index([workerPerformanceCycleId])
+}
+
+model PerformanceScoringPolicy {
+  id               String    @id @db.Uuid
+  policyId         String
+  version          String
+  effectiveFrom    DateTime  @db.Timestamptz(6)
+  effectiveTo      DateTime? @db.Timestamptz(6)
+  status           String
+  okrWeight        Float
+  adherenceWeight  Float
+  ratingThresholds Json
+  aggregateVersion Int       @default(1)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+  organizationId   String?   @db.Uuid
+
+  organization     Organization? @relation(fields: [organizationId], references: [id])
+
+  @@unique([policyId, version, organizationId])
+  @@index([status])
+}
+
+model WorkerAdherenceReadModel {
+  id               String   @id @db.Uuid
+  workerId         String   @db.Uuid
+  windowStart      DateTime @db.Timestamptz(6)
+  windowEnd        DateTime @db.Timestamptz(6)
+  score            Float
+  policyVersion    String
+  status           String
+  aggregateVersion Int
+  calculatedAt     DateTime @db.Timestamptz(6)
+
+  @@unique([workerId, windowStart, windowEnd])
+}
+
+model WorkerPerformanceDashboard {
+  id                      String   @id @db.Uuid
+  workerId                String   @db.Uuid
+  cycleId                 String
+  status                  String
+  objectivesProgress      Json
+  latestAdherenceSnapshot Json?
+  projectionVersion       String   @default("1.0")
+  updatedAt               DateTime @updatedAt @db.Timestamptz(6)
+  organizationId          String?  @db.Uuid
+  membershipId            String?  @db.Uuid
+
+  membership   OrganizationMembership? @relation(fields: [membershipId], references: [id])
+  organization Organization?           @relation(fields: [organizationId], references: [id])
+
+  @@unique([workerId, membershipId, cycleId])
+}
+
+enum UserRole {
+  CUSTOMER
+  DRIVER
+  ADMIN
+}
+
+enum SubscriptionPlan {
+  BASIC
+  STANDARD
+  PRO
+  PREMIUM
+}
+
+enum VehicleType {
+  BIKE
+  THREE_WHEELER
+  TATA_ACE
+  MINI_TRUCK
+}
+
+enum BookingStatus {
+  DRAFT
+  CONFIRMED
+  DRIVER_ASSIGNED
+  DRIVER_ARRIVING
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum PaymentMethod {
+  WALLET
+  UPI
+  NETBANKING
+  CARD
+  CASH
+  COINS
+}
+
+enum BookingMode {
+  INSTANT
+  PRIVATE_BID
+}
+
+enum BidWindowStatus {
+  OPEN
+  LOCKED
+  CLOSED
+  EXPIRED
+  WITHDRAWN
+}
+
+enum BidPartyType {
+  DRIVER
+  FLEET_OWNER
+}
+
+enum MarketplaceBidStatus {
+  OPEN
+  ACCEPTED
+  WITHDRAWN
+  REJECTED
+  NOT_SELECTED
+  EXPIRED
+}
+
+enum BidRevisionAuthorSide {
+  CUSTOMER
+  PROVIDER
+}
+
+enum BidMessageType {
+  TEXT
+  SYSTEM
+}
+
+enum BidAwardStatus {
+  PAYMENT_PENDING
+  PAYMENT_RECONCILING
+  CONFIRMED
+  EXPIRED
+  CANCELLED
+}
+
+enum WalletTransactionType {
+  CREDIT
+  DEBIT
+}
+
+enum WalletTransactionReason {
+  TOP_UP
+  BOOKING_PAYMENT
+  REFUND
+  CASHBACK
+  ADMIN_CREDIT
+}
+
+enum CoinTransactionType {
+  EARN
+  REDEEM
+  EXPIRE
+}
+
+enum DriverStatus {
+  OFFLINE
+  AVAILABLE
+  ON_TRIP
+  BREAK
+}
+
+enum DocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum UlipVerifStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  MANUAL_REVIEW
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum LaborType {
+  LOADING
+  UNLOADING
+  BOTH
+}

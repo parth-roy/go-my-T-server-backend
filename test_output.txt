@@ -1,0 +1,99 @@
+
+> server@1.0.0 test:compliance:coverage
+> vitest run --coverage
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vitest.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90mD:/Projects/Parther_Technologies/logistic/server[39m
+      [2mCoverage enabled with [22m[33mv8[39m
+
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/cqrs/__tests__/BaseProjector.spec.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/RestrictionSet.spec.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/CredentialStateMachine.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/presentation/compliance/__tests__/WorkerComplianceController.spec.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/ConfidenceScore.spec.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/ExpiryDate.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/sagas/__tests__/DocumentLifecycleSaga.spec.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/sagas/__tests__/SuspensionCascadingSaga.spec.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/presentation/compliance/__tests__/ComplianceControllers.spec.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/WorkerCompliance.spec.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 145[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/commands/__tests__/ComplianceCommandHandlers.spec.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/sagas/__tests__/CredentialVerificationSaga.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/sagas/__tests__/BaseSaga.spec.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/WorkerCredential.spec.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/presentation/compliance/__tests__/ComplianceRoutes.spec.ts [2m([22m[2m1 test[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/cqrs/__tests__/ProjectionReplayEngine.spec.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/queries/__tests__/ComplianceQueryHandlers.spec.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/VerificationAudit.spec.ts [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/application/compliance/cqrs/__tests__/ComplianceProjectors.spec.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/ComplianceExemption.spec.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/ComplianceEvaluationService.spec.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/RegulatoryRuleEngine.spec.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/RegulatoryHierarchy.spec.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32mΓ£ô[39m src/modules/time-tracking/domain/aggregates/compliance/__tests__/ExpiryCalculationService.spec.ts [2m([22m[2m1 test[22m[2m)[22m[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m25 passed[39m[22m[90m (25)[39m
+[2m      Tests [22m [1m[32m126 passed[39m[22m[90m (126)[39m
+[2m   Start at [22m 15:56:47
+[2m   Duration [22m 1.94s[2m (transform 2.01s, setup 0ms, import 3.41s, tests 660ms, environment 7ms)[22m
+
+[34m % [39m[2mCoverage report from [22m[33mv8[39m
+-------------------|---------|----------|---------|---------|-------------------
+File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+-------------------|---------|----------|---------|---------|-------------------
+All files          |   97.94 |    91.47 |   92.71 |   98.47 |                   
+ ...iance/commands |     100 |      100 |     100 |     100 |                   
+  ...ceCommands.ts |     100 |      100 |     100 |     100 |                   
+ ...mands/handlers |     100 |      100 |     100 |     100 |                   
+  ...ndHandlers.ts |     100 |      100 |     100 |     100 |                   
+ ...qrs/projectors |   81.25 |     92.3 |   70.37 |   81.25 |                   
+  BaseProjector.ts |     100 |      100 |     100 |     100 |                   
+  ...Projectors.ts |   71.42 |    85.71 |      68 |   71.42 | 26-30,49-53,69-73 
+ ...ce/cqrs/replay |     100 |      100 |     100 |     100 |                   
+  ...playEngine.ts |     100 |      100 |     100 |     100 |                   
+ ...ce/integration |     100 |      100 |     100 |     100 |                   
+  ...tionEvents.ts |     100 |      100 |     100 |     100 |                   
+ ...liance/queries |     100 |      100 |     100 |     100 |                   
+  ...nceQueries.ts |     100 |      100 |     100 |     100 |                   
+ ...eries/handlers |     100 |      100 |     100 |     100 |                   
+  ...ryHandlers.ts |     100 |      100 |     100 |     100 |                   
+ ...mpliance/sagas |   96.34 |     92.5 |   81.81 |   98.75 |                   
+  BaseSaga.ts      |     100 |      100 |     100 |     100 |                   
+  ...cationSaga.ts |      85 |    83.33 |      75 |   94.44 | 30                
+  ...ecycleSaga.ts |     100 |     87.5 |     100 |     100 | 35                
+  ...cadingSaga.ts |     100 |      100 |      50 |     100 |                   
+ ...iance/services |     100 |     87.5 |   84.61 |     100 |                   
+  ...ionService.ts |     100 |     87.5 |   84.61 |     100 | 86                
+ ...tes/compliance |   98.24 |       95 |   94.11 |     100 |                   
+  ....aggregate.ts |   98.24 |       95 |   94.11 |     100 | 112               
+ ...iance/entities |     100 |      100 |     100 |     100 |                   
+  ...ion.entity.ts |     100 |      100 |     100 |     100 |                   
+  ...dit.entity.ts |     100 |      100 |     100 |     100 |                   
+  ...ial.entity.ts |     100 |      100 |     100 |     100 |                   
+ ...pliance/events |     100 |      100 |     100 |     100 |                   
+  ...anceEvents.ts |     100 |      100 |     100 |     100 |                   
+ ...iance/policies |     100 |      100 |     100 |     100 |                   
+  ...yHierarchy.ts |     100 |      100 |     100 |     100 |                   
+ ...iance/services |     100 |      100 |     100 |     100 |                   
+  ...ionService.ts |     100 |      100 |     100 |     100 |                   
+  ...ionService.ts |     100 |      100 |     100 |     100 |                   
+  ...RuleEngine.ts |     100 |      100 |     100 |     100 |                   
+ ...state-machines |     100 |       75 |     100 |     100 |                   
+  ...ateMachine.ts |     100 |       75 |     100 |     100 | 27                
+ .../value-objects |   95.45 |    93.33 |     100 |   95.45 |                   
+  ...ceScore.vo.ts |     100 |      100 |     100 |     100 |                   
+  ...ialData.vo.ts |     100 |      100 |     100 |     100 |                   
+  ExpiryDate.vo.ts |   85.71 |       90 |     100 |   85.71 | 8                 
+  ...napshot.vo.ts |     100 |      100 |     100 |     100 |                   
+  ...tionSet.vo.ts |     100 |      100 |     100 |     100 |                   
+ ...ce/controllers |     100 |    81.25 |     100 |     100 |                   
+  ...Controller.ts |     100 |       75 |     100 |     100 | 43                
+  ...ontrollers.ts |     100 |      100 |     100 |     100 |                   
+  ...Controller.ts |     100 |       75 |     100 |     100 | 65                
+  ...Controller.ts |     100 |    83.33 |     100 |     100 | 61                
+ ...pliance/routes |     100 |      100 |     100 |     100 |                   
+  ...anceRoutes.ts |     100 |      100 |     100 |     100 |                   
+-------------------|---------|----------|---------|---------|-------------------

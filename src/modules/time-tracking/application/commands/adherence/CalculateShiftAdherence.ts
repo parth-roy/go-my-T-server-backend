@@ -1,0 +1,1 @@
+export class CalculateShiftAdherence { constructor(public readonly shiftId: string) {} }

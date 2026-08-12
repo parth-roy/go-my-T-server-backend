@@ -113,6 +113,11 @@ const envSchema = z.object({
   RAZORPAYX_PAYOUTS_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
   MULTI_PARTY_TRANSFERS_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
 
+  // ── Organization Domain feature flag ──────────────────────────────
+  // Fail closed by default. Flip to 'true' once M0 is validated on staging.
+  // Controls route mounting in app.ts and entry guards in organization services.
+  ORGANIZATION_DOMAIN_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+
   // ── Private marketplace bidding ───────────────────────────────────
   BID_DEFAULT_WINDOW_MINUTES: numStr('10'),
   BID_PAYMENT_DEADLINE_MINUTES: numStr('10'),

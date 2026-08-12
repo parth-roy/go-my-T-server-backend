@@ -1,0 +1,1 @@
+export class AcknowledgeInfraction { constructor(public readonly infractionId: string) {} }

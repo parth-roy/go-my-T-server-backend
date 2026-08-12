@@ -300,14 +300,25 @@ model User {
   bidMessagesSent        BidMessage[]     @relation("BidMessageSender")
   bidAwardsAccepted      BidAward[]       @relation("BidAwardCustomer")
 
-  usageType       String? @default("Personal Usage")
-  whatsappOptIn   Boolean @default(true)
+  usageType       String?                            @default("Personal Usage")
+  whatsappOptIn   Boolean                            @default(true)
+  invitationsSent OrganizationMembershipInvitation[] @relation("OrgInvitedBy")
+
+  orgCreated        Organization[]           @relation("OrgCreatedBy")
+  orgVerified       Organization[]           @relation("OrgVerifiedBy")
+  memberships       OrganizationMembership[]
+  branchManaged     OrganizationBranch[]     @relation("BranchManager")
+  departmentManaged OrganizationDepartment[] @relation("DepartmentManager")
+  teamLed           OrganizationTeam[]       @relation("TeamLeader")
+
   profileComplete Boolean @default(false)
 
   // Enterprise specific relations
-  teamMembers TeamMember[]  @relation("EnterpriseTeamMembers")
-  ScratchCard ScratchCard[]
-  GigJob      GigJob[]
+  teamMembers        TeamMember[]    @relation("EnterpriseTeamMembers")
+  ScratchCard        ScratchCard[]
+  GigJob             GigJob[]
+  overridesRequested ShiftOverride[] @relation("OverrideRequestedBy")
+  overridesApproved  ShiftOverride[] @relation("OverrideApprovedBy")
 
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -1867,11 +1878,11 @@ model Lead {
   companyName String?
   phone       String
   city        String
-  role      String
-  status    LeadStatus @default(PENDING)
-  notes     String?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  role        String
+  status      LeadStatus @default(PENDING)
+  notes       String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   @@map("leads")
 }
@@ -1959,4 +1970,893 @@ model GigPricingConfig {
   updatedBy   String? // admin userId who last changed this
 
   @@map("gig_pricing_config")
+}
+
+// --- RESTORED ORGANIZATION MODELS ---
+enum OrganizationType {
+  COMPANY
+  CONTRACTOR
+  VENDOR
+  OTHER
+}
+
+enum OrganizationStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum OrgVerifStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum OrganizationRole {
+  PRIMARY_OWNER
+  ORG_ADMIN
+  HR
+  SUPERVISOR
+  EMPLOYEE
+  VIEWER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+}
+
+enum BranchStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum DepartmentStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum TeamStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum DesignationStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum EmploymentCategory {
+  GIG_INDEPENDENT
+  FLEET_MANAGED_CONTRACTOR
+  THIRD_PARTY_AGENCY
+  FULL_TIME_EMPLOYEE
+  PART_TIME_EMPLOYEE
+}
+
+enum EmploymentAssignmentStatus {
+  ACTIVE
+  SCHEDULED
+  COMPLETED
+  TERMINATED
+  CANCELLED
+}
+
+enum EmploymentTransitionReason {
+  NEW_HIRE
+  PROMOTION
+  TRANSFER
+  EMPLOYMENT_TYPE_CHANGE
+  DESIGNATION_CHANGE
+  TEAM_CHANGE
+  DEPARTMENT_CHANGE
+  BRANCH_CHANGE
+  RETURN_FROM_LEAVE
+  MARKETPLACE_CONVERSION
+  REHIRE
+  TERMINATION
+}
+
+enum ShiftGenerationTrigger {
+  MANUAL
+  CRON
+  SCHEDULE_CHANGED
+  ASSIGNMENT_CHANGED
+  RETRY
+}
+
+enum ShiftGenerationJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ShiftLifecycleStatus {
+  DRAFT
+  GENERATED
+  PUBLISHED
+  ACKNOWLEDGED
+  CHECKIN_OPEN
+  IN_PROGRESS
+  CHECKOUT_PENDING
+  COMPLETED
+  MISSED
+  EXPIRED
+  CANCELLED
+  ARCHIVED
+}
+
+enum ShiftOverrideStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Organization {
+  id        String  @id @default(uuid())
+  slug      String  @unique
+  name      String
+  legalName String?
+  gstin     String? @unique
+  panNumber String? @unique
+
+  organizationType   OrganizationType   @default(COMPANY)
+  status             OrganizationStatus @default(PENDING)
+  verificationStatus OrgVerifStatus     @default(PENDING)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  createdById String?
+  createdBy   User?   @relation("OrgCreatedBy", fields: [createdById], references: [id])
+
+  verifiedById String?
+  verifiedBy   User?     @relation("OrgVerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt   DateTime?
+
+  memberships             OrganizationMembership[]
+  invitations             OrganizationMembershipInvitation[]
+  branches                OrganizationBranch[]
+  departments             OrganizationDepartment[]
+  OrganizationTeam        OrganizationTeam[]
+  OrganizationDesignation OrganizationDesignation[]
+  employmentTypes         OrganizationEmploymentType[]
+  WorkScheduleTemplate    WorkScheduleTemplate[]
+
+  shiftInstances      ShiftInstance[]
+  shiftGenerationJobs ShiftGenerationJob[]
+  scheduleAssignments ScheduleAssignment[]
+
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id             String @id @default(uuid())
+  organizationId String
+  userId         String
+
+  role   OrganizationRole @default(VIEWER)
+  status MembershipStatus @default(ACTIVE)
+
+  joinedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assignments   OrganizationEmploymentAssignment[]
+  ShiftInstance ShiftInstance[]
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId])
+  @@map("organization_memberships")
+}
+
+model OrganizationMembershipInvitation {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  phone String
+  email String?
+
+  role      OrganizationRole
+  tokenHash String           @unique
+  status    InvitationStatus @default(PENDING)
+
+  capabilitySnapshot Json?
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  inviterId String
+  inviter   User   @relation("OrgInvitedBy", fields: [inviterId], references: [id])
+
+  @@index([organizationId, phone])
+  @@index([tokenHash])
+  @@map("organization_membership_invitations")
+}
+
+model OrganizationBranch {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction)
+
+  name        String
+  code        String
+  description String?
+
+  address    String
+  city       String
+  state      String
+  country    String @default("India")
+  postalCode String
+  latitude   Float?
+  longitude  Float?
+
+  phone String?
+  email String?
+
+  managerId String?
+  manager   User?   @relation("BranchManager", fields: [managerId], references: [id], onDelete: SetNull)
+
+  status BranchStatus @default(ACTIVE)
+
+  departments OrganizationDepartment[]
+
+  createdAt             DateTime                           @default(now())
+  updatedAt             DateTime                           @updatedAt
+  deletedAt             DateTime?
+  OrganizationTeam      OrganizationTeam[]
+  employmentAssignments OrganizationEmploymentAssignment[]
+
+  @@unique([organizationId, code])
+  @@unique([organizationId, name])
+  @@index([organizationId, status, deletedAt, createdAt])
+  @@index([organizationId, deletedAt, createdAt, id])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([managerId])
+  @@map("organization_branches")
+}
+
+model OrganizationDepartment {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction)
+
+  branchId String
+  branch   OrganizationBranch @relation(fields: [branchId], references: [id], onDelete: NoAction)
+
+  name        String
+  code        String
+  description String?
+
+  managerId String?
+  manager   User?   @relation("DepartmentManager", fields: [managerId], references: [id], onDelete: SetNull)
+
+  status DepartmentStatus @default(ACTIVE)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  teams                 OrganizationTeam[]
+  employmentAssignments OrganizationEmploymentAssignment[]
+
+  @@unique([branchId, code])
+  @@unique([branchId, name])
+  @@index([organizationId, branchId, status, deletedAt, createdAt])
+  @@index([branchId, deletedAt, createdAt, id])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([managerId])
+  @@map("organization_departments")
+}
+
+model OrganizationTeam {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction)
+
+  branchId String
+  branch   OrganizationBranch @relation(fields: [branchId], references: [id], onDelete: NoAction)
+
+  departmentId String
+  department   OrganizationDepartment @relation(fields: [departmentId], references: [id], onDelete: NoAction)
+
+  name        String
+  code        String
+  description String?
+
+  leaderId String?
+  leader   User?   @relation("TeamLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+
+  status TeamStatus @default(ACTIVE)
+
+  createdAt             DateTime                           @default(now())
+  updatedAt             DateTime                           @updatedAt
+  deletedAt             DateTime?
+  employmentAssignments OrganizationEmploymentAssignment[]
+
+  @@unique([departmentId, code])
+  @@unique([departmentId, name])
+  @@index([organizationId, branchId, departmentId, status, deletedAt, createdAt])
+  @@index([leaderId])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@map("organization_teams")
+}
+
+model OrganizationDesignation {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String
+  code        String
+  description String?
+  level       Int?
+
+  status DesignationStatus @default(ACTIVE)
+
+  createdAt             DateTime                           @default(now())
+  updatedAt             DateTime                           @updatedAt
+  deletedAt             DateTime?
+  employmentAssignments OrganizationEmploymentAssignment[]
+
+  @@unique([organizationId, code])
+  @@unique([organizationId, name])
+  @@index([organizationId, status, deletedAt, createdAt])
+  @@map("organization_designations")
+}
+
+model OrganizationEmploymentType {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  code     String
+  name     String
+  category EmploymentCategory
+
+  rulesConfig Json @default("{}")
+
+  version  Int     @default(1)
+  isActive Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  assignments OrganizationEmploymentAssignment[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive, deletedAt])
+  @@map("organization_employment_types")
+}
+
+model OrganizationEmploymentAssignment {
+  id               String @id @default(uuid())
+  assignmentNumber String @unique
+
+  membershipId String
+  membership   OrganizationMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  employmentTypeId           String
+  employmentType             OrganizationEmploymentType @relation(fields: [employmentTypeId], references: [id])
+  employmentTypeNameSnapshot String
+
+  designationId           String?
+  designation             OrganizationDesignation? @relation(fields: [designationId], references: [id])
+  designationNameSnapshot String?
+
+  branchId           String?
+  branch             OrganizationBranch? @relation(fields: [branchId], references: [id])
+  branchNameSnapshot String?
+
+  departmentId           String?
+  department             OrganizationDepartment? @relation(fields: [departmentId], references: [id])
+  departmentNameSnapshot String?
+
+  teamId           String?
+  team             OrganizationTeam? @relation(fields: [teamId], references: [id])
+  teamNameSnapshot String?
+
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+
+  status             EmploymentAssignmentStatus @default(ACTIVE)
+  transitionMetadata Json                       @default("{}")
+
+  version       Int             @default(1)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  ShiftInstance ShiftInstance[]
+
+  @@index([membershipId, status])
+  @@index([effectiveFrom, effectiveUntil])
+  @@map("organization_employment_assignments")
+}
+
+model WorkScheduleTemplate {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  code        String
+  name        String
+  description String?
+
+  isActive Boolean @default(true)
+
+  versions WorkScheduleTemplateVersion[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive, deletedAt])
+  @@map("work_schedule_templates")
+}
+
+model WorkScheduleTemplateVersion {
+  id         String               @id @default(uuid())
+  templateId String
+  template   WorkScheduleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  versionNumber Int
+  status        TemplateVersionStatus @default(DRAFT)
+
+  // Strict WorkScheduleConfiguration mapping stored as JSON
+  configurationData Json
+
+  assignments ScheduleAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([templateId, versionNumber])
+  @@map("work_schedule_template_versions")
+}
+
+model ShiftGenerationJob {
+  id             String                   @id @default(uuid())
+  organizationId String
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  windowStart    DateTime                 @db.Date
+  windowEnd      DateTime                 @db.Date
+  status         ShiftGenerationJobStatus
+  generatedCount Int                      @default(0)
+  skippedCount   Int                      @default(0)
+  failedCount    Int                      @default(0)
+  startedAt      DateTime?                @db.Timestamptz
+  completedAt    DateTime?                @db.Timestamptz
+  trigger        ShiftGenerationTrigger
+  createdAt      DateTime                 @default(now()) @db.Timestamptz
+  updatedAt      DateTime                 @updatedAt @db.Timestamptz
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model ShiftInstance {
+  id               String                           @id @default(uuid())
+  organizationId   String
+  organization     Organization                     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membershipId     String
+  membership       OrganizationMembership           @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  assignmentId     String
+  assignment       OrganizationEmploymentAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  date             DateTime                         @db.Date
+  status           ShiftLifecycleStatus
+  startTime        DateTime                         @db.Timestamptz
+  endTime          DateTime                         @db.Timestamptz
+  expectedDuration Int // minutes
+
+  // Snapshots (Immutable Single Source of Truth)
+  scheduleSnapshot   Json // Includes template version, break rules, grace rules, etc.
+  assignmentSnapshot Json // Includes designation, dept, employment type
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  overrides ShiftOverride[]
+  timeline  ShiftTimelineEvent[]
+
+  @@unique([membershipId, date])
+  @@index([organizationId, date])
+  @@index([assignmentId])
+  @@index([status])
+}
+
+model ShiftOverride {
+  id                String              @id @default(uuid())
+  shiftId           String
+  status            ShiftOverrideStatus
+  overrideStartTime DateTime?           @db.Timestamptz
+  overrideEndTime   DateTime?           @db.Timestamptz
+  reason            String
+  requestedBy       String
+  requestedByUser   User                @relation("OverrideRequestedBy", fields: [requestedBy], references: [id])
+  approvedBy        String?
+  approvedByUser    User?               @relation("OverrideApprovedBy", fields: [approvedBy], references: [id])
+  createdAt         DateTime            @default(now()) @db.Timestamptz
+  updatedAt         DateTime            @updatedAt @db.Timestamptz
+
+  shift ShiftInstance @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([shiftId])
+}
+
+model ShiftTimelineEvent {
+  id        String                 @id @default(uuid())
+  shiftId   String
+  eventType ShiftTimelineEventType
+  timestamp DateTime               @default(now()) @db.Timestamptz
+  metadata  Json? // Any additional context (e.g. location, device)
+
+  shift ShiftInstance @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([shiftId])
+}
+
+enum ShiftTimelineEventType {
+  GENERATED
+  PUBLISHED
+  VIEWED
+  ACCEPTED
+  OVERRIDE_APPLIED
+  CHECKIN
+  BREAK_START
+  BREAK_END
+  CHECKOUT
+  APPROVED
+  PAYROLL_LOCKED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum TemplateVersionStatus {
+  DRAFT
+  VALIDATED
+  PUBLISHED
+  ARCHIVED
+}
+
+model ScheduleAssignment {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  targetType ScheduleTargetType
+  targetId   String
+
+  scheduleTemplateVersionId String
+  scheduleTemplateVersion   WorkScheduleTemplateVersion @relation(fields: [scheduleTemplateVersionId], references: [id])
+
+  reason ScheduleAssignmentReason @default(DEFAULT)
+
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+
+  status  EmploymentAssignmentStatus @default(ACTIVE)
+  version Int                        @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, targetType, targetId, status])
+  @@index([effectiveFrom, effectiveUntil])
+  @@map("schedule_assignments")
+}
+
+enum ScheduleTargetType {
+  ORGANIZATION
+  BRANCH
+  DEPARTMENT
+  TEAM
+  ASSIGNMENT
+}
+
+enum ScheduleAssignmentReason {
+  DEFAULT
+  TRANSFER
+  TEMP_OVERRIDE
+  PROJECT
+  SEASONAL
+  EMERGENCY
+  MANUAL
+}
+
+// RESTORED MODELS
+model WorkerCompliance {
+  id               String   @id @db.Uuid // Matches workerId 1:1
+  organizationId   String   @db.Uuid
+  status           String // COMPLIANT, NON_COMPLIANT, PENDING_VERIFICATION
+  policySnapshot   Json
+  aggregateVersion Int      @default(1)
+  createdAt        DateTime @default(now()) @db.Timestamptz
+  updatedAt        DateTime @updatedAt @db.Timestamptz
+
+  credentials WorkerCredential[]
+  exemptions  ComplianceExemption[]
+
+  @@index([organizationId, status])
+}
+
+model WorkerComplianceDashboard {
+  id                String   @id @db.Uuid // Matches workerId
+  organizationId    String   @db.Uuid
+  status            String
+  activeCredentials Json
+  expiringSoon      Json
+  projectionVersion String   @default("1.0")
+  updatedAt         DateTime @updatedAt @db.Timestamptz
+
+  @@index([organizationId])
+}
+
+model WorkerCredential {
+  id                 String    @id @db.Uuid
+  workerComplianceId String    @db.Uuid
+  type               String // CDL_A, MEDICAL_TIER_1, BACKGROUND_CHECK
+  status             String // DRAFT, VERIFYING, ACTIVE, EXPIRING, EXPIRED, SUSPENDED, REVOKED, ARCHIVED
+  expiryDate         DateTime? @db.Timestamptz
+  credentialData     Json // Encrypted JSON
+  restrictionSet     Json?
+
+  aggregateVersion Int      @default(1)
+  createdAt        DateTime @default(now()) @db.Timestamptz
+  updatedAt        DateTime @updatedAt @db.Timestamptz
+
+  compliance WorkerCompliance    @relation(fields: [workerComplianceId], references: [id], onDelete: Cascade)
+  audits     VerificationAudit[]
+
+  @@index([workerComplianceId, status])
+  @@index([expiryDate])
+}
+
+model KeyResult {
+  id                String   @id @db.Uuid
+  workerObjectiveId String   @db.Uuid
+  title             String
+  targetValue       Float
+  currentValue      Float    @default(0.0)
+  unit              String
+  aggregateVersion  Int      @default(1)
+  createdAt         DateTime @default(now()) @db.Timestamptz
+  updatedAt         DateTime @updatedAt @db.Timestamptz
+
+  objective WorkerObjective @relation(fields: [workerObjectiveId], references: [id], onDelete: Cascade)
+
+  @@index([workerObjectiveId])
+}
+
+model WorkerObjective {
+  id                       String   @id @db.Uuid
+  workerPerformanceCycleId String   @db.Uuid
+  title                    String
+  description              String?
+  weight                   Float    @default(1.0)
+  status                   String
+  aggregateVersion         Int      @default(1)
+  createdAt                DateTime @default(now()) @db.Timestamptz
+  updatedAt                DateTime @updatedAt @db.Timestamptz
+
+  cycle      WorkerPerformanceCycle @relation(fields: [workerPerformanceCycleId], references: [id], onDelete: Cascade)
+  keyResults KeyResult[]
+
+  @@index([workerPerformanceCycleId])
+}
+
+model ManagerEvaluation {
+  id                       String   @id @db.Uuid
+  workerPerformanceCycleId String   @db.Uuid
+  managerId                String   @db.Uuid
+  rating                   String
+  feedbackEncrypted        String? // Encrypted text
+  aggregateVersion         Int      @default(1)
+  submittedAt              DateTime @default(now()) @db.Timestamptz
+
+  cycle WorkerPerformanceCycle @relation(fields: [workerPerformanceCycleId], references: [id], onDelete: Cascade)
+
+  @@index([workerPerformanceCycleId])
+}
+
+model WorkerPerformanceCycle {
+  id                String   @id @db.Uuid
+  workerId          String   @db.Uuid
+  cycleId           String
+  status            String // DRAFT, ACTIVE, MANAGER_REVIEW, CALIBRATING, CLOSED
+  finalScore        Float?
+  finalRating       String?
+  adherenceSnapshot Json?
+  policySnapshot    Json?
+  aggregateVersion  Int      @default(1)
+  createdAt         DateTime @default(now()) @db.Timestamptz
+  updatedAt         DateTime @updatedAt @db.Timestamptz
+
+  objectives  WorkerObjective[]
+  evaluations ManagerEvaluation[]
+
+  @@unique([workerId, cycleId])
+  @@index([workerId, status])
+}
+
+model PerformanceEvent {
+  eventId          String   @id @default(uuid()) @db.Uuid
+  aggregateId      String   @db.Uuid // WorkerPerformanceCycle ID or PerformanceScoringPolicy ID
+  aggregateVersion Int
+  eventType        String
+  payload          Json // Encrypted for manager feedback (Crypto-Shredding)
+  metadata         Json
+  timestamp        DateTime @default(now()) @db.Timestamptz
+
+  @@index([aggregateId, aggregateVersion])
+  @@index([timestamp])
+  @@map("time_performance_events")
+}
+
+model TimeTrackingOutbox {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @unique
+  eventType String
+  payload   Json
+  published Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([published, createdAt])
+}
+
+model CommandInbox {
+  commandId   String   @id
+  processedAt DateTime @default(now()) @db.Timestamptz
+  handlerName String
+}
+
+model WorkerAttendanceEvent {
+  eventId     String @id @default(uuid()) @db.Uuid
+  aggregateId String // e.g., WorkerId-YYYY-MM-DD
+
+  eventVersion  String @default("1.0")
+  schemaVersion String @default("1.0")
+
+  commandId     String
+  correlationId String
+  causationId   String
+
+  workerId       String @db.Uuid
+  organizationId String @db.Uuid
+
+  eventType  String
+  recordedAt DateTime @db.Timestamptz
+  deviceTime DateTime @db.Timestamptz
+  serverTime DateTime @default(now()) @db.Timestamptz
+  source     String
+
+  workContext  Json
+  verification Json
+
+  @@index([aggregateId])
+  @@index([organizationId, recordedAt])
+}
+
+model WorkerPresence {
+  workerId       String   @id @db.Uuid
+  organizationId String   @db.Uuid
+  status         String
+  lastSeenAt     DateTime @db.Timestamptz
+  workContext    Json?
+
+  projectionVersion String   @default("1.0")
+  updatedAt         DateTime @updatedAt @db.Timestamptz
+}
+
+model ProjectionCheckpoint {
+  projectionName String   @id
+  lastEventId    String
+  updatedAt      DateTime @updatedAt @db.Timestamptz
+}
+
+model PerformanceScoringPolicy {
+  id               String    @id @db.Uuid
+  policyId         String
+  version          String
+  effectiveFrom    DateTime  @db.Timestamptz
+  effectiveTo      DateTime? @db.Timestamptz
+  status           String // DRAFT, ACTIVE, ARCHIVED
+  okrWeight        Float
+  adherenceWeight  Float
+  ratingThresholds Json
+  aggregateVersion Int       @default(1)
+  createdAt        DateTime  @default(now()) @db.Timestamptz
+  updatedAt        DateTime  @updatedAt @db.Timestamptz
+
+  @@unique([policyId, version])
+  @@index([status])
+}
+
+model WorkerPerformanceDashboard {
+  id                      String   @id @db.Uuid // Matches WorkerPerformanceCycle ID
+  workerId                String   @db.Uuid
+  cycleId                 String
+  status                  String
+  objectivesProgress      Json
+  latestAdherenceSnapshot Json?
+  projectionVersion       String   @default("1.0")
+  updatedAt               DateTime @updatedAt @db.Timestamptz
+
+  @@unique([workerId, cycleId])
+}
+
+model WorkerAdherenceReadModel {
+  id               String   @id @db.Uuid
+  workerId         String   @db.Uuid
+  windowStart      DateTime @db.Timestamptz
+  windowEnd        DateTime @db.Timestamptz
+  score            Float
+  policyVersion    String
+  status           String // CALCULATED, PENDING
+  aggregateVersion Int
+  calculatedAt     DateTime @db.Timestamptz
+
+  @@unique([workerId, windowStart, windowEnd])
+}
+
+model ComplianceExemption {
+  id                 String   @id @db.Uuid
+  workerComplianceId String   @db.Uuid
+  type               String // EMERGENCY_OVERRIDE, GRACE_PERIOD
+  reason             String
+  grantedBy          String   @db.Uuid // Admin/Authority ID
+  expiresAt          DateTime @db.Timestamptz
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  compliance WorkerCompliance @relation(fields: [workerComplianceId], references: [id], onDelete: Cascade)
+
+  @@index([workerComplianceId])
+  @@index([expiresAt])
+}
+
+model VerificationAudit {
+  id                 String   @id @db.Uuid
+  workerCredentialId String   @db.Uuid
+  verificationSource String // AI_VISION, MANUAL_HR, GOV_API
+  confidenceScore    Float
+  auditDetails       Json
+  verifiedAt         DateTime @default(now()) @db.Timestamptz
+
+  credential WorkerCredential @relation(fields: [workerCredentialId], references: [id], onDelete: Cascade)
+
+  @@index([workerCredentialId])
+}
+
+model ComplianceEvent {
+  eventId       String   @id @default(uuid()) @db.Uuid
+  aggregateId   String   @db.Uuid // WorkerCompliance ID (WorkerId)
+  eventVersion  String   @default("1.0")
+  schemaVersion String   @default("1.0")
+  eventType     String
+  payload       Json // Encrypted for PII/PHI (Crypto-Shredding)
+  timestamp     DateTime @default(now()) @db.Timestamptz
+
+  @@index([aggregateId])
+  @@index([timestamp])
 }

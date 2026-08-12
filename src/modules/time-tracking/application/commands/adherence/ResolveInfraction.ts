@@ -1,0 +1,1 @@
+export class ResolveInfraction { constructor(public readonly infractionId: string) {} }

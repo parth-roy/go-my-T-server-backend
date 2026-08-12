@@ -1,0 +1,15 @@
+export enum MembershipStatus {
+  INVITED = 'INVITED',
+  ACTIVE = 'ACTIVE',
+  SUSPENDED = 'SUSPENDED',
+  TERMINATED = 'TERMINATED'
+}
+
+export enum OrganizationRole {
+  PRIMARY_OWNER = 'PRIMARY_OWNER',
+  ORG_ADMIN = 'ORG_ADMIN',
+  HR = 'HR',
+  SUPERVISOR = 'SUPERVISOR',
+  EMPLOYEE = 'EMPLOYEE',
+  VIEWER = 'VIEWER'
+}

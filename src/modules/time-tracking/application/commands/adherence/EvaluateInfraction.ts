@@ -1,0 +1,1 @@
+export class EvaluateInfraction { constructor(public readonly shiftAdherenceId: string) {} }

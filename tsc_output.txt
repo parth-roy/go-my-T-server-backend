@@ -1,0 +1,53 @@
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(76,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(89,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(104,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(123,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(130,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(144,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(157,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/__tests__/WorkerComplianceApplicationService.spec.ts(172,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/compliance/services/WorkerComplianceApplicationService.ts(59,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(116,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(146,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(169,44): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(178,44): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(190,44): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(221,44): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(232,44): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(262,44): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/__tests__/PerformanceApplicationService.spec.ts(283,44): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/application/performance/services/PerformanceApplicationService.ts(55,7): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/modules/time-tracking/domain/aggregates/compliance/__tests__/ComplianceEvaluationService.spec.ts(9,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/domain/aggregates/compliance/__tests__/ComplianceEvaluationService.spec.ts(18,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/domain/aggregates/compliance/__tests__/RegulatoryRuleEngine.spec.ts(8,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/domain/aggregates/compliance/__tests__/RegulatoryRuleEngine.spec.ts(18,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/domain/aggregates/compliance/__tests__/WorkerCompliance.spec.ts(14,12): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/domain/aggregates/compliance/WorkerCompliance.aggregate.ts(85,127): error TS2554: Expected 4 arguments, but got 6.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(8,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(19,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(52,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(57,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(63,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(72,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(81,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(90,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(110,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(125,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(132,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(155,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/__tests__/WorkerPerformanceCycle.spec.ts(160,42): error TS2554: Expected 4-6 arguments, but got 3.
+src/modules/time-tracking/domain/aggregates/performance/PerformanceScoringPolicy.aggregate.ts(66,72): error TS2345: Argument of type 'Date' is not assignable to parameter of type 'string'.
+src/modules/time-tracking/infrastructure/__tests__/adapters/TestPrismaWorkerComplianceRepository.ts(24,24): error TS2554: Expected 8 arguments, but got 7.
+src/modules/time-tracking/infrastructure/__tests__/auth/RealPerformanceAuthorizationService.integration.spec.ts(37,47): error TS2353: Object literal may only specify known properties, and 'role' does not exist in type '{ id: string; phone: string; rootRole: string; }'.
+src/modules/time-tracking/infrastructure/__tests__/auth/RealPerformanceAuthorizationService.integration.spec.ts(62,49): error TS2353: Object literal may only specify known properties, and 'role' does not exist in type '{ id: string; phone: string; rootRole: string; }'.
+src/modules/time-tracking/infrastructure/__tests__/auth/RealPerformanceAuthorizationService.integration.spec.ts(85,47): error TS2353: Object literal may only specify known properties, and 'role' does not exist in type '{ id: string; phone: string; rootRole: string; }'.
+src/modules/time-tracking/infrastructure/__tests__/auth/RealPerformanceAuthorizationService.integration.spec.ts(109,47): error TS2353: Object literal may only specify known properties, and 'role' does not exist in type '{ id: string; phone: string; rootRole: string; }'.
+src/modules/time-tracking/infrastructure/__tests__/performance/PrismaPerformanceRepositories.spec.ts(104,47): error TS2345: Argument of type '{ workerId: string; cycleId: string; }' is not assignable to parameter of type '{ workerId: string; membershipId: string; cycleId: string; }'.
+  Property 'membershipId' is missing in type '{ workerId: string; cycleId: string; }' but required in type '{ workerId: string; membershipId: string; cycleId: string; }'.
+src/modules/time-tracking/infrastructure/__tests__/performance/PrismaPerformanceRepositories.spec.ts(113,47): error TS2345: Argument of type '{ workerId: string; cycleId: string; }' is not assignable to parameter of type '{ workerId: string; membershipId: string; cycleId: string; }'.
+  Property 'membershipId' is missing in type '{ workerId: string; cycleId: string; }' but required in type '{ workerId: string; membershipId: string; cycleId: string; }'.
+src/modules/time-tracking/infrastructure/__tests__/performance/PrismaPerformanceRepositories.spec.ts(128,43): error TS2345: Argument of type '{ workerId: string; cycleId: string; }' is not assignable to parameter of type '{ workerId: string; membershipId: string; cycleId: string; }'.
+  Property 'membershipId' is missing in type '{ workerId: string; cycleId: string; }' but required in type '{ workerId: string; membershipId: string; cycleId: string; }'.
+src/modules/time-tracking/infrastructure/repositories/performance/PrismaPerformanceRepositories.ts(178,7): error TS2345: Argument of type 'Date' is not assignable to parameter of type 'string'.
+src/modules/time-tracking/infrastructure/repositories/performance/PrismaPerformanceRepositories.ts(200,7): error TS2345: Argument of type 'Date' is not assignable to parameter of type 'string'.

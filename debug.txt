@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Error</title>
+</head>
+<body>
+<pre>TypeError: () =&gt; {<br>			return {<br>				appService: mockAppService,<br>				...mockQueryHandlers<br>			};<br>		} is not a constructor<br> &nbsp; &nbsp;at new PerformanceModuleDI (file:///D:/Projects/Parther_Technologies/logistic/server/node_modules/@vitest/spy/dist/index.js:309:27)<br> &nbsp; &nbsp;at getWorkerController (D:/Projects/Parther_Technologies/logistic/server/src/modules/time-tracking/presentation/performance/routes/PerformanceRoutes.ts:15:16)<br> &nbsp; &nbsp;at D:/Projects/Parther_Technologies/logistic/server/src/modules/time-tracking/presentation/performance/routes/PerformanceRoutes.ts:34:103<br> &nbsp; &nbsp;at Layer.handleRequest (D:\Projects\Parther_Technologies\logistic\server\node_modules\router\lib\layer.js:152:17)<br> &nbsp; &nbsp;at next (D:\Projects\Parther_Technologies\logistic\server\node_modules\router\lib\route.js:157:13)<br> &nbsp; &nbsp;at Route.dispatch (D:\Projects\Parther_Technologies\logistic\server\node_modules\router\lib\route.js:117:3)<br> &nbsp; &nbsp;at handle (D:\Projects\Parther_Technologies\logistic\server\node_modules\router\index.js:435:11)<br> &nbsp; &nbsp;at Layer.handleRequest (D:\Projects\Parther_Technologies\logistic\server\node_modules\router\lib\layer.js:152:17)<br> &nbsp; &nbsp;at D:\Projects\Parther_Technologies\logistic\server\node_modules\router\index.js:295:15<br> &nbsp; &nbsp;at param (D:\Projects\Parther_Technologies\logistic\server\node_modules\router\index.js:600:14)</pre>
+</body>
+</html>
