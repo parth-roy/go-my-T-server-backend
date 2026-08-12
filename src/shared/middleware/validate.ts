@@ -5,14 +5,14 @@ type Target = 'body' | 'query' | 'params';
 
 export function validate(schema: ZodSchema, target: Target = 'body') {
   return (req: Request, _res: Response, next: NextFunction) => {
-    const result = schema.safeParse(req[target]);
-    if (!result.success) return next(result.error);
-    Object.defineProperty(req, target, {
-      value: result.data,
-      writable: true,
-      enumerable: true,
-      configurable: true
-    });
-    next();
+    try {
+      const result = schema.safeParse(req[target]);
+      if (!result.success) return next(result.error);
+      
+      req[target] = result.data;
+      next();
+    } catch (err) {
+      next(err);
+    }
   };
 }
