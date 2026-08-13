@@ -14,7 +14,10 @@ export class ShiftController {
   public list = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const context = req.context;
-      if (!context) throw AppError.unauthorized('Context missing');
+      const orgId = context?.organization?.id;
+      if (!context || !orgId) {
+        throw AppError.unauthorized('Missing organization context');
+      }
 
       const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date();
       const endDate = req.query.endDate ? new Date(req.query.endDate as string) : new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -52,7 +55,10 @@ export class ShiftController {
     try {
       const context = req.context;
       const user = req.user;
-      if (!context || !user) throw AppError.unauthorized('Context missing');
+      const orgId = context?.organization?.id;
+      if (!context || !user || !orgId) {
+        throw AppError.unauthorized('Missing organization context');
+      }
 
       const membership = await this.prisma.organizationMembership.findFirst({
         where: { organizationId: orgId, userId: user.id }
