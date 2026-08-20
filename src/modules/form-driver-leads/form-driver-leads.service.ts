@@ -9,7 +9,7 @@ export class FormDriverLeadService {
   async createLead(data: any, files: { [fieldname: string]: Express.Multer.File[] }) {
     // Extract textual data
     const {
-      name, phone, altPhone, city, vehicleType, vehicleNumber, aadharNumber, dlNumber
+      name, email, phone, altPhone, city, state, transportHub, vehicleType, vehicleNumber, aadharNumber, dlNumber
     } = data;
 
     // Upload files to S3 sequentially (or in parallel)
@@ -42,9 +42,12 @@ export class FormDriverLeadService {
     const lead = await prisma.formDriverLead.create({
       data: {
         name,
+        email,
         phone,
         alternatePhone: altPhone || null,
         city,
+        state,
+        transportHub,
         vehicleType: vehicleType as VehicleType,
         vehicleNumber,
         aadharNumber,
@@ -103,18 +106,26 @@ export class FormDriverLeadService {
 
     const sheets = google.sheets({ version: 'v4', auth });
 
+    // 1: Lead ID, 2: Reg Date, 3: Name, 4: Email, 5: Phone, 6: Alt Phone, 7: City, 8: State, 9: Hub, 
+    // 10: Vehicle Type, 11: Vehicle Num, 12: DL, 13: Aadhaar, 14: Status, 15: Last Contact, 16: Notes, 
+    // 17: Doc 1, 18: Doc 2, 19: Doc 3, 20: Doc 4, 21: Doc 5, 22: Doc 6, 23: Doc 7
     const row = [
       lead.id,
-      new Date(lead.createdAt).toLocaleString(),
+      new Date(lead.createdAt).toISOString().split('T')[0],
       lead.name,
+      lead.email || '',
       lead.phone,
       lead.alternatePhone || '',
       lead.city,
-      lead.vehicleType,
-      lead.vehicleNumber,
-      lead.aadharNumber,
-      lead.dlNumber,
+      lead.state || '',
+      lead.transportHub || '',
+      lead.vehicleType || '',
+      lead.vehicleNumber || '',
+      lead.dlNumber || '',
+      lead.aadharNumber || '',
       lead.status,
+      '',
+      lead.notes || '',
       lead.profilePhotoUrl || '',
       lead.aadharFrontUrl || '',
       lead.aadharBackUrl || '',
@@ -126,7 +137,7 @@ export class FormDriverLeadService {
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'Sheet1!A:R', 
+      range: 'Sheet1!A:W', 
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [row]

@@ -1983,6 +1983,9 @@ model FormDriverLead {
   name            String
   phone           String
   alternatePhone  String?
+  email           String?
+  state           String?
+  transportHub    String?
   city            String
   vehicleType     VehicleType
   vehicleNumber   String
