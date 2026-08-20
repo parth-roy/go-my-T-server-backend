@@ -107,6 +107,11 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+  // Google Sheets
+  GOOGLE_SPREADSHEET_ID: z.string().optional(),
+  GOOGLE_CLIENT_EMAIL: z.string().optional(),
+  GOOGLE_PRIVATE_KEY: z.string().optional(),
+
   // ── Outbound payment safety controls ─────────────────────────────
   // Fail closed until RazorpayX access and the payout flows are certified.
   // Standard inbound Razorpay collections are not controlled by these flags.

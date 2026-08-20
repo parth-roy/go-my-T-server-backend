@@ -1865,13 +1865,31 @@ model Lead {
   id          String     @id @default(uuid())
   name        String
   companyName String?
+  email       String?
   phone       String
+  altPhone    String?
   city        String
-  role      String
-  status    LeadStatus @default(PENDING)
-  notes     String?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  state       String?
+  transportHub String?
+  role        String
+  vehicleType String?
+  vehicleNumber String?
+  aadharNumber String?
+  dlNumber    String?
+  
+  // Document URLs
+  profilePhoto String?
+  aadharFront  String?
+  aadharBack   String?
+  dlFront      String?
+  dlBack       String?
+  rcBook       String?
+  insurance    String?
+
+  status      LeadStatus @default(PENDING)
+  notes       String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   @@map("leads")
 }

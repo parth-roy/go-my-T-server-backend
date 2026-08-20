@@ -1,20 +1,86 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
+import { googleSheetsService } from '@shared/services/googleSheets.service';
+import { s3Service, UploadFolder } from '../upload/upload.service';
 
 export const createLead = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { name, companyName, phone, city, role } = req.body;
+    const { 
+      name, companyName, email, phone, altPhone, city, state, transportHub, 
+      role, vehicleType, vehicleNumber, aadharNumber, dlNumber 
+    } = req.body;
+
+    // Handle File Uploads via DO Spaces (S3)
+    const files = req.files as Express.Multer.File[] || [];
+    const documentUrls: Record<string, string> = {};
+
+    for (const file of files) {
+      const uploadResult = await s3Service.uploadFile(
+        file.buffer, 
+        file.originalname, 
+        file.mimetype, 
+        UploadFolder.DOCUMENTS
+      );
+      if (uploadResult.success && uploadResult.url) {
+        documentUrls[file.fieldname] = uploadResult.url;
+      }
+    }
 
     const lead = await prisma.lead.create({
       data: {
-        name,
+        name: name || '',
         companyName,
-        phone,
-        city,
-        role
+        email,
+        phone: phone || '',
+        altPhone,
+        city: city || '',
+        state,
+        transportHub,
+        role: role || '',
+        vehicleType,
+        vehicleNumber,
+        aadharNumber,
+        dlNumber,
+        profilePhoto: documentUrls['profilePhoto'],
+        aadharFront: documentUrls['aadharFront'],
+        aadharBack: documentUrls['aadharBack'],
+        dlFront: documentUrls['dlFront'],
+        dlBack: documentUrls['dlBack'],
+        rcBook: documentUrls['rcBook'],
+        insurance: documentUrls['insurance'],
       }
     });
+
+    // Map exact columns to match CSV:
+    // 1: Lead ID, 2: Reg Date, 3: Name, 4: Email, 5: Phone, 6: Alt Phone, 7: City, 8: State, 9: Hub, 
+    // 10: Vehicle Type, 11: Vehicle Num, 12: DL, 13: Aadhaar, 14: Status, 15: Last Contact, 16: Notes, 
+    // 17: Doc 1, 18: Doc 2, 19: Doc 3, 20: Doc 4, 21: Doc 5, 22: Doc 6, 23: Doc 7
+    googleSheetsService.appendLead([
+      lead.id,
+      new Date().toISOString().split('T')[0],
+      lead.name,
+      lead.email || '',
+      lead.phone,
+      lead.altPhone || '',
+      lead.city,
+      lead.state || '',
+      lead.transportHub || '',
+      lead.vehicleType || '',
+      lead.vehicleNumber || '',
+      lead.dlNumber || '',
+      lead.aadharNumber || '',
+      'PENDING',
+      '',
+      '',
+      lead.profilePhoto || '',
+      lead.aadharFront || '',
+      lead.aadharBack || '',
+      lead.dlFront || '',
+      lead.dlBack || '',
+      lead.rcBook || '',
+      lead.insurance || ''
+    ]).catch(err => console.error('Sheet append error:', err));
 
     res.status(201).json({
       success: true,
