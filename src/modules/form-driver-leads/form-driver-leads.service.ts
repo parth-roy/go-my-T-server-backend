@@ -9,8 +9,33 @@ export class FormDriverLeadService {
   async createLead(data: any, files: { [fieldname: string]: Express.Multer.File[] }) {
     // Extract textual data
     const {
-      name, email, phone, altPhone, city, state, transportHub, vehicleType, vehicleNumber, aadharNumber, dlNumber
+      name, email, phone, altPhone, city, state, transportHub, vehicleType, vehicleNumber, aadharNumber, dlNumber,
+      givenAddress, givenStreet, givenDistrict, givenState, givenPincode, givenLat, givenLng,
+      autoAddress, autoStreet, autoDistrict, autoState, autoPincode, autoLat, autoLng
     } = data;
+
+    // Haversine Distance Calculation (if both coordinates are provided)
+    let locationDistance = null;
+    let isLocationVerified = false;
+
+    if (givenLat && givenLng && autoLat && autoLng) {
+      const R = 6371e3; // Earth radius in meters
+      const lat1 = parseFloat(givenLat) * Math.PI / 180;
+      const lat2 = parseFloat(autoLat) * Math.PI / 180;
+      const deltaLat = (parseFloat(autoLat) - parseFloat(givenLat)) * Math.PI / 180;
+      const deltaLng = (parseFloat(autoLng) - parseFloat(givenLng)) * Math.PI / 180;
+
+      const a = Math.sin(deltaLat/2) * Math.sin(deltaLat/2) +
+                Math.cos(lat1) * Math.cos(lat2) *
+                Math.sin(deltaLng/2) * Math.sin(deltaLng/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      locationDistance = R * c; // in meters
+
+      // Mark verified if distance is less than 5000 meters (5km) - giving some leeway for inaccurate browser GPS
+      if (locationDistance <= 5000) {
+        isLocationVerified = true;
+      }
+    }
 
     // Upload files to S3 sequentially (or in parallel)
     const uploadedUrls: Record<string, string> = {};
@@ -59,6 +84,27 @@ export class FormDriverLeadService {
         dlBackUrl: uploadedUrls['dlBackUrl'] || null,
         rcBookUrl: uploadedUrls['rcBookUrl'] || null,
         insuranceUrl: uploadedUrls['insuranceUrl'] || null,
+
+        // Given Location
+        givenAddress: givenAddress || null,
+        givenStreet: givenStreet || null,
+        givenDistrict: givenDistrict || null,
+        givenState: givenState || null,
+        givenPincode: givenPincode || null,
+        givenLat: givenLat ? parseFloat(givenLat) : null,
+        givenLng: givenLng ? parseFloat(givenLng) : null,
+
+        // Auto Location
+        autoAddress: autoAddress || null,
+        autoStreet: autoStreet || null,
+        autoDistrict: autoDistrict || null,
+        autoState: autoState || null,
+        autoPincode: autoPincode || null,
+        autoLat: autoLat ? parseFloat(autoLat) : null,
+        autoLng: autoLng ? parseFloat(autoLng) : null,
+
+        locationDistance: locationDistance,
+        isLocationVerified: isLocationVerified,
       }
     });
 

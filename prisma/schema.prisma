@@ -2004,6 +2004,28 @@ model FormDriverLead {
   status          LeadStatus  @default(PENDING)
   notes           String?
 
+  // Location Data (Given by User)
+  givenAddress    String?
+  givenStreet     String?
+  givenDistrict   String?
+  givenState      String?
+  givenPincode    String?
+  givenLat        Float?
+  givenLng        Float?
+
+  // Location Data (Auto-Fetched from Background GPS)
+  autoAddress     String?
+  autoStreet      String?
+  autoDistrict    String?
+  autoState       String?
+  autoPincode     String?
+  autoLat         Float?
+  autoLng         Float?
+
+  // Location Verification
+  locationDistance   Float?
+  isLocationVerified Boolean @default(false)
+
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
