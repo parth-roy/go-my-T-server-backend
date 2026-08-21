@@ -2031,3 +2031,37 @@ model FormDriverLead {
 
   @@map("form_driver_leads")
 }
+
+model FormGigLead {
+  id              String      @id @default(uuid())
+  firstName       String
+  lastName        String
+  phone           String
+  jobType         String
+  city            String
+  area            String?
+  vehicleType     String?
+  vehicleMake     String?
+  aadharNumber    String
+  panNumber       String
+  dlNumber        String?
+  rcNumber        String?
+  insuranceDetails String?
+
+  status          LeadStatus  @default(PENDING)
+  notes           String?
+
+  // Location Data (From LocationPicker)
+  givenAddress    String?
+  givenStreet     String?
+  givenDistrict   String?
+  givenState      String?
+  givenPincode    String?
+  givenLat        Float?
+  givenLng        Float?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@map("form_gig_leads")
+}

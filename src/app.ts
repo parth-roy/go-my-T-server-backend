@@ -35,6 +35,7 @@ import { fleetWalletRouter }  from '@modules/fleet-wallet/fleet-wallet.router';
 import { publicLeadsRouter, adminLeadsRouter } from '@modules/leads/leads.router';
 import { publicContactRouter, adminContactRouter } from '@modules/contact/contact.router';
 import { formDriverLeadRouter } from '@modules/form-driver-leads/form-driver-leads.router';
+import { formGigLeadRouter } from '@modules/form-gig-leads/form-gig-leads.router';
 import { gigRouter } from '@modules/gig/gig.router';
 import { sentryErrorHandler } from '@config/sentry';
 import { razorpayWebhook } from '@modules/payment/payment.controller';
@@ -178,6 +179,7 @@ export function createApp(): Application {
   app.use('/api/v1/payments', paymentRouter);
   app.use('/api/v1/pricing', pricingRouter);
   app.use('/api/v1/form-driver-leads', formDriverLeadRouter);
+  app.use('/api/v1/form-gig-leads', formGigLeadRouter);
 
   app.use('/api/v1/rewards', rewardsRouter);
   app.use('/api/v1/fleet', fleetRouter);
@@ -210,3 +212,4 @@ export function createApp(): Application {
 
   return app;
 }
+
