@@ -23,8 +23,15 @@ export const FormGigLeadService = {
       if (files[key] && files[key].length > 0) {
         const file = files[key][0];
         try {
-          const url = await s3Service.uploadFile(file, UploadFolder.PARTNER_DOCUMENTS);
-          uploadedUrls[key + 'Url'] = url;
+          const result = await s3Service.uploadFile(
+            file.buffer,
+            file.originalname,
+            file.mimetype,
+            UploadFolder.DOCUMENTS
+          );
+          if (result.success && result.url) {
+            uploadedUrls[key + 'Url'] = result.url;
+          }
         } catch (error) {
           console.error(`Failed to upload ${key}:`, error);
         }
@@ -65,7 +72,15 @@ export const FormGigLeadService = {
     });
   },
 
+
   getLeadById: async (id: string) => {
     return prisma.formGigLead.findUnique({ where: { id } });
+  },
+
+  updateLeadStatus: async (id: string, status: LeadStatus, notes?: string) => {
+    return prisma.formGigLead.update({
+      where: { id },
+      data: { status, notes }
+    });
   }
 };
