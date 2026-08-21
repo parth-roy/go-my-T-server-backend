@@ -9,10 +9,12 @@ export class FormDriverLeadService {
   async createLead(data: any, files: { [fieldname: string]: Express.Multer.File[] }) {
     // Extract textual data
     const {
-      name, email, phone, altPhone, city, state, transportHub, vehicleType, vehicleNumber, aadharNumber, dlNumber,
+      name, email, phone, altPhone, city, transportHub, vehicleType, vehicleNumber, aadharNumber, dlNumber,
       givenAddress, givenStreet, givenDistrict, givenState, givenPincode, givenLat, givenLng,
       autoAddress, autoStreet, autoDistrict, autoState, autoPincode, autoLat, autoLng
     } = data;
+    
+    const state = data.state || givenState || autoState || 'N/A';
 
     // Haversine Distance Calculation (if both coordinates are provided)
     let locationDistance = null;

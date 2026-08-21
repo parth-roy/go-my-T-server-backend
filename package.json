@@ -53,6 +53,7 @@
     "bullmq": "^5.76.8",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
+    "csv-parser": "^3.2.1",
     "dayjs": "^1.11.20",
     "dotenv": "^17.4.2",
     "eventemitter2": "^6.4.9",
