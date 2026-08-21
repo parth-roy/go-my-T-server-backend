@@ -4,10 +4,10 @@ import { UserRole } from '@prisma/client';
 import { FormGigLeadController } from './form-gig-leads.controller';
 import { upload } from '../upload/upload.controller';
 
-export const FormGigLeadRouter = Router();
+export const formGigLeadRouter = Router();
 
 // POST /api/v1/form-gig-leads - Public route for the driver form
-FormGigLeadRouter.post(
+formGigLeadRouter.post(
   '/',
   upload.fields([
     { name: 'profilePhoto', maxCount: 1 },
@@ -22,14 +22,14 @@ FormGigLeadRouter.post(
 );
 
 // Admin routes
-FormGigLeadRouter.use(authenticate, requireRole(UserRole.ADMIN));
+formGigLeadRouter.use(authenticate, requireRole(UserRole.ADMIN));
 
 // GET /api/v1/form-gig-leads
-FormGigLeadRouter.get('/', FormGigLeadController.getAllLeads);
+formGigLeadRouter.get('/', FormGigLeadController.getAllLeads);
 
 // GET /api/v1/form-gig-leads/:id
-FormGigLeadRouter.get('/:id', FormGigLeadController.getLeadById);
+formGigLeadRouter.get('/:id', FormGigLeadController.getLeadById);
 
 // PATCH /api/v1/form-gig-leads/:id
-FormGigLeadRouter.patch('/:id', FormGigLeadController.updateLeadStatus);
+formGigLeadRouter.patch('/:id', FormGigLeadController.updateLeadStatus);
 

@@ -50,5 +50,12 @@ export const FormGigLeadService = {
 
   getLeadById: async (id: string) => {
     return prisma.formGigLead.findUnique({ where: { id } });
+  },
+
+  updateLeadStatus: async (id: string, status: any, notes?: string) => {
+    return prisma.formGigLead.update({
+      where: { id },
+      data: { status, notes }
+    });
   }
 };
