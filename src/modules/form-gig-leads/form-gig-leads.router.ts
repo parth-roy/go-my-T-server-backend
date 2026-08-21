@@ -13,6 +13,7 @@ formGigLeadRouter.post(
     { name: 'profilePhoto', maxCount: 1 },
     { name: 'aadharFront', maxCount: 1 },
     { name: 'aadharBack', maxCount: 1 },
+    { name: 'panFront', maxCount: 1 },
     { name: 'dlFront', maxCount: 1 },
     { name: 'dlBack', maxCount: 1 },
     { name: 'rcBook', maxCount: 1 },

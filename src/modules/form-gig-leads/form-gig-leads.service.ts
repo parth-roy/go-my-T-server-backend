@@ -1,26 +1,41 @@
-import { PrismaClient, VehicleType } from '@prisma/client';
+import { PrismaClient, LeadStatus } from '@prisma/client';
 import { s3Service, UploadFolder } from '../upload/upload.service';
-import { logger } from '@shared/logger';
-import { google } from 'googleapis';
 
 const prisma = new PrismaClient();
 
 export const FormGigLeadService = {
-  createLead: async (data: any, files: any = {}) => {
-    // Extract JSON data
+  createLead: async (data: any, files: { [fieldname: string]: Express.Multer.File[] } = {}) => {
     const {
-      firstName, lastName, phone, jobType, city, area, 
+      firstName, lastName, email, phone, jobType, city, area, 
       vehicleType, vehicleMake, aadharNumber, panNumber, 
       dlNumber, rcNumber, insuranceDetails,
       givenAddress, givenStreet, givenDistrict, givenState, givenPincode, givenLat, givenLng,
       autoAddress, autoStreet, autoDistrict, autoState, autoPincode, autoLat, autoLng
     } = data;
     
-    // Convert undefined to null or empty
+    // Upload files to S3 sequentially
+    const uploadedUrls: Record<string, string> = {};
+    const fileKeys = [
+      'profilePhoto', 'aadharFront', 'aadharBack', 'panFront', 'dlFront', 'dlBack', 'rcBook', 'insurance'
+    ];
+
+    for (const key of fileKeys) {
+      if (files[key] && files[key].length > 0) {
+        const file = files[key][0];
+        try {
+          const url = await s3Service.uploadFile(file, UploadFolder.PARTNER_DOCUMENTS);
+          uploadedUrls[key + 'Url'] = url;
+        } catch (error) {
+          console.error(`Failed to upload ${key}:`, error);
+        }
+      }
+    }
+
     const lead = await prisma.formGigLead.create({
       data: {
         firstName: firstName || '',
         lastName: lastName || '',
+        email: email || null,
         phone: phone || '',
         jobType: jobType || '',
         city: city || '',
@@ -35,7 +50,9 @@ export const FormGigLeadService = {
         
         givenAddress, givenStreet, givenDistrict, givenState, givenPincode, 
         givenLat: givenLat ? parseFloat(givenLat) : null, 
-        givenLng: givenLng ? parseFloat(givenLng) : null
+        givenLng: givenLng ? parseFloat(givenLng) : null,
+
+        ...uploadedUrls
       }
     });
     
@@ -50,12 +67,5 @@ export const FormGigLeadService = {
 
   getLeadById: async (id: string) => {
     return prisma.formGigLead.findUnique({ where: { id } });
-  },
-
-  updateLeadStatus: async (id: string, status: any, notes?: string) => {
-    return prisma.formGigLead.update({
-      where: { id },
-      data: { status, notes }
-    });
   }
 };

@@ -2036,6 +2036,7 @@ model FormGigLead {
   id              String      @id @default(uuid())
   firstName       String
   lastName        String
+  email           String?
   phone           String
   jobType         String
   city            String
@@ -2047,6 +2048,16 @@ model FormGigLead {
   dlNumber        String?
   rcNumber        String?
   insuranceDetails String?
+
+  // Document URLs (S3)
+  profilePhotoUrl String?
+  aadharFrontUrl  String?
+  aadharBackUrl   String?
+  panFrontUrl     String?
+  dlFrontUrl      String?
+  dlBackUrl       String?
+  rcBookUrl       String?
+  insuranceUrl    String?
 
   status          LeadStatus  @default(PENDING)
   notes           String?
@@ -2065,3 +2076,4 @@ model FormGigLead {
 
   @@map("form_gig_leads")
 }
+
