@@ -1925,6 +1925,12 @@ model GigJob {
   status        GigJobStatus @default(PENDING)
   workersNeeded Int          @default(1)
 
+  // Task-based additions
+  isTaskBased   Boolean @default(false)
+  scheduledSlot String? 
+  tipAmount     Float   @default(0)
+  tasks         GigTask[]
+
   // Payment fields
   totalFare       Float // grandTotal (customer pays)
   perWorkerRate   Float          @default(0) // worker earnings per person
@@ -2077,3 +2083,17 @@ model FormGigLead {
   @@map("form_gig_leads")
 }
 
+
+
+model GigTask {
+  id          String  @id @default(uuid())
+  gigId       String
+  gig         GigJob  @relation(fields: [gigId], references: [id], onDelete: Cascade)
+  title       String
+  category    String
+  quantity    Int     @default(1)
+  price       Float   @default(0)
+  variant     String?
+
+  @@map("gig_tasks")
+}

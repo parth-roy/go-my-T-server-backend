@@ -131,7 +131,37 @@ export async function createGig(customerId: string, data: any) {
     travelFeePerKmBeyond5: config.travelFeePerKmBeyond5,
   };
 
-  const breakdown = calculateGigFare(req);
+  
+  let breakdown = calculateGigFare(req);
+
+  if (data.isTaskBased && data.tasks) {
+    const tasksTotal = data.tasks.reduce((sum: number, t: any) => sum + (t.price * t.quantity), 0);
+    const grandTotal = tasksTotal + (data.tipAmount || 0);
+    // Rough estimate for task based platform fee (e.g., 20%)
+    const platformFee = tasksTotal * 0.20;
+    
+    breakdown = {
+      zone: classifyZone(data.locationLat || 0, data.locationLng || 0),
+      baseHourlyRate: tasksTotal,
+      skillMultiplier: 1,
+      hoursMultiplier: 1,
+      rawEarnings: tasksTotal,
+      urgencyPremium: 0,
+      demandSurge: 0,
+      travelFee: 0,
+      workerEarnings: grandTotal - platformFee,
+      platformFeeRate: 0.20,
+      platformFeePerWorker: platformFee,
+      customerPerWorker: grandTotal,
+      workersNeeded: 1,
+      grandTotal: grandTotal,
+      totalWorkerPayout: grandTotal - platformFee,
+      platformRevenue: platformFee,
+      appliedSurgeMultipliers: [],
+      distanceKm: workerDistanceKm || 0
+    } as any;
+  }
+
   const zone = classifyZone(data.locationLat, data.locationLng);
 
   logger.info(
@@ -157,7 +187,21 @@ export async function createGig(customerId: string, data: any) {
       perWorkerRate: breakdown.workerEarnings,
       platformFee:   breakdown.platformRevenue,
       fareBreakdown: breakdown as any,
+
       status:        'PENDING',
+      isTaskBased:   data.isTaskBased || false,
+      scheduledSlot: data.scheduledSlot,
+      tipAmount:     data.tipAmount || 0,
+      tasks: data.tasks && data.tasks.length > 0 ? {
+        create: data.tasks.map((t: any) => ({
+          title: t.title,
+          category: t.category,
+          quantity: t.quantity,
+          price: t.price,
+          variant: t.variant
+        }))
+      } : undefined
+
     },
   });
 
