@@ -60,3 +60,10 @@ gigRouter.get(
   requireRole(UserRole.ADMIN),
   ctrl.getAllGigsAdmin,
 );
+
+gigRouter.get(
+  '/admin/:id',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  ctrl.getGigByIdAdmin,
+);

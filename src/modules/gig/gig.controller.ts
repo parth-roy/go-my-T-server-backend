@@ -53,3 +53,12 @@ export async function getGigCatalog(_req: Request, res: Response) {
     durationOptions: [1, 2, 4, 8, 12],
   });
 }
+
+export async function getGigByIdAdmin(req: Request, res: Response) {
+  try {
+    const gig = await gigService.getGigById(req.params.id);
+    return sendSuccess(res, gig);
+  } catch (err: any) {
+    return res.status(404).json({ success: false, message: err.message });
+  }
+}

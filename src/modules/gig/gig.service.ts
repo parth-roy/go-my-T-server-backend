@@ -253,7 +253,7 @@ export async function getGigById(id: string) {
 export async function getAllGigs() {
   return prisma.gigJob.findMany({
     orderBy: { createdAt: 'desc' },
-    include: { customer: { select: { id: true, name: true, phone: true } } },
+    include: { customer: { select: { id: true, name: true, phone: true } }, tasks: true },
   });
 }
 
