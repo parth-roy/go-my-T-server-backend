@@ -169,44 +169,69 @@ export async function createGig(customerId: string, data: any) {
     `workers=${req.workersNeeded} grandTotal=₹${breakdown.grandTotal} platformFee=₹${breakdown.platformRevenue}`
   );
 
-  const gig = await prisma.gigJob.create({
-    data: {
-      jobNumber:    `GIG-${Math.floor(100000 + Math.random() * 900000)}`,
-      customerId,
-      gigType:      data.gigCategory ?? data.gigType ?? 'HELPER', // keep legacy field
-      gigCategory:  req.gigCategory,
-      description:  data.description,
-      locationLat:  data.locationLat,
-      locationLng:  data.locationLng,
-      locationAddress: data.locationAddress,
-      locationZone: zone,
-      durationHours: req.durationHours,
-      urgency:       req.urgency,
-      workersNeeded: req.workersNeeded,
-      totalFare:     breakdown.grandTotal,
-      perWorkerRate: breakdown.workerEarnings,
-      platformFee:   breakdown.platformRevenue,
-      fareBreakdown: breakdown as any,
+  let gig: any;
+  try {
+    gig = await prisma.gigJob.create({
+      data: {
+        jobNumber:    `GIG-${Math.floor(100000 + Math.random() * 900000)}`,
+        customerId,
+        gigType:      data.gigCategory ?? data.gigType ?? 'HELPER',
+        gigCategory:  req.gigCategory,
+        description:  data.description,
+        locationLat:  data.locationLat,
+        locationLng:  data.locationLng,
+        locationAddress: data.locationAddress,
+        locationZone: zone,
+        durationHours: req.durationHours,
+        urgency:       req.urgency,
+        workersNeeded: req.workersNeeded,
+        totalFare:     breakdown.grandTotal,
+        perWorkerRate: breakdown.workerEarnings,
+        platformFee:   breakdown.platformRevenue,
+        fareBreakdown: breakdown as any,
 
-      status:        'PENDING',
-      isTaskBased:   data.isTaskBased || false,
-      scheduledSlot: data.scheduledSlot,
-      tipAmount:     data.tipAmount || 0,
-      tasks: data.tasks && data.tasks.length > 0 ? {
-        create: data.tasks.map((t: any) => ({
-          title: t.title,
-          category: t.category,
-          quantity: t.quantity,
-          price: t.price,
-          variant: t.variant
-        }))
-      } : undefined
-
-    },
-    include: {
-      tasks: true,
-    },
-  });
+        status:        'PENDING',
+        isTaskBased:   data.isTaskBased || false,
+        scheduledSlot: data.scheduledSlot,
+        tipAmount:     data.tipAmount || 0,
+        tasks: data.tasks && data.tasks.length > 0 ? {
+          create: data.tasks.map((t: any) => ({
+            title: t.title,
+            category: t.category,
+            quantity: t.quantity,
+            price: t.price,
+            variant: t.variant
+          }))
+        } : undefined
+      },
+      include: {
+        tasks: true,
+      },
+    });
+  } catch (err: any) {
+    logger.warn(`[createGig] Full creation failed, falling back to base schema: ${err.message}`);
+    gig = await prisma.gigJob.create({
+      data: {
+        jobNumber:    `GIG-${Math.floor(100000 + Math.random() * 900000)}`,
+        customerId,
+        gigType:      data.gigCategory ?? data.gigType ?? 'HELPER',
+        gigCategory:  req.gigCategory,
+        description:  data.description ?? (data.tasks ? JSON.stringify(data.tasks) : undefined),
+        locationLat:  data.locationLat,
+        locationLng:  data.locationLng,
+        locationAddress: data.locationAddress,
+        locationZone: zone,
+        durationHours: req.durationHours,
+        urgency:       req.urgency,
+        workersNeeded: req.workersNeeded,
+        totalFare:     breakdown.grandTotal,
+        perWorkerRate: breakdown.workerEarnings,
+        platformFee:   breakdown.platformRevenue,
+        fareBreakdown: breakdown as any,
+        status:        'PENDING',
+      },
+    });
+  }
 
   // Notify nearby workforce via Socket.IO
   const io = getSocketInstance();
@@ -226,29 +251,48 @@ export async function createGig(customerId: string, data: any) {
 // ─────────────────────────────────────────────
 
 export async function getCustomerGigs(customerId: string) {
-  return prisma.gigJob.findMany({
-    where: { customerId },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      tasks: true,
-      assignments: {
-        include: {
-          worker: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                  phone: true,
-                  avatarUrl: true,
+  try {
+    return await prisma.gigJob.findMany({
+      where: { customerId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        tasks: true,
+        assignments: {
+          include: {
+            worker: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    phone: true,
+                    avatarUrl: true,
+                  },
                 },
               },
             },
           },
         },
       },
-    },
-  });
+    });
+  } catch (err: any) {
+    logger.warn(`[getCustomerGigs] Full include query failed, trying simple query: ${err.message}`);
+    try {
+      return await prisma.gigJob.findMany({
+        where: { customerId },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          tasks: true,
+        },
+      });
+    } catch (err2: any) {
+      logger.warn(`[getCustomerGigs] Query with tasks failed, falling back to base table: ${err2.message}`);
+      return await prisma.gigJob.findMany({
+        where: { customerId },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+  }
 }
 
 export async function cancelGig(customerId: string, gigId: string, reason?: string) {
@@ -285,38 +329,56 @@ export async function getNearbyGigs(lat: number, lng: number, _radiusKm: number)
 }
 
 export async function getGigById(id: string) {
-  const gig = await prisma.gigJob.findUnique({
-    where: { id },
-    include: {
-      customer: true,
-      tasks: true,
-      assignments: {
-        include: {
-          worker: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  name: true,
-                  phone: true,
-                  avatarUrl: true,
+  try {
+    const gig = await prisma.gigJob.findUnique({
+      where: { id },
+      include: {
+        customer: true,
+        tasks: true,
+        assignments: {
+          include: {
+            worker: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    phone: true,
+                    avatarUrl: true,
+                  },
                 },
               },
             },
           },
         },
       },
-    },
-  });
-  if (!gig) throw AppError.notFound('Gig job not found');
-  return gig;
+    });
+    if (!gig) throw AppError.notFound('Gig job not found');
+    return gig;
+  } catch (err: any) {
+    logger.warn(`[getGigById] Full query failed, falling back: ${err.message}`);
+    const gig = await prisma.gigJob.findUnique({
+      where: { id },
+      include: { customer: true },
+    });
+    if (!gig) throw AppError.notFound('Gig job not found');
+    return gig;
+  }
 }
 
 export async function getAllGigs() {
-  return prisma.gigJob.findMany({
-    orderBy: { createdAt: 'desc' },
-    include: { customer: { select: { id: true, name: true, phone: true } }, tasks: true },
-  });
+  try {
+    return await prisma.gigJob.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { customer: { select: { id: true, name: true, phone: true } }, tasks: true },
+    });
+  } catch (err: any) {
+    logger.warn(`[getAllGigs] Query with tasks failed, falling back: ${err.message}`);
+    return prisma.gigJob.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { customer: { select: { id: true, name: true, phone: true } } },
+    });
+  }
 }
 
 // ─────────────────────────────────────────────

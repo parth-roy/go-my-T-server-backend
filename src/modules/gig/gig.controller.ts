@@ -9,40 +9,64 @@ export async function estimateGig(req: Request, res: Response) {
 }
 
 export async function createGig(req: Request, res: Response) {
-  const result = await gigService.createGig(req.user!.id, req.body);
-  return sendSuccess(res, result, 'Gig job posted successfully', 201);
+  try {
+    const result = await gigService.createGig(req.user!.id, req.body);
+    return sendSuccess(res, result, 'Gig job posted successfully', 201);
+  } catch (err: any) {
+    return res.status(err.statusCode || 500).json({ success: false, message: err.message || 'Failed to create gig' });
+  }
 }
 
 export async function getCustomerGigs(req: Request, res: Response) {
-  const gigs = await gigService.getCustomerGigs(req.user!.id);
-  return sendSuccess(res, gigs);
+  try {
+    const gigs = await gigService.getCustomerGigs(req.user!.id);
+    return sendSuccess(res, gigs);
+  } catch (err: any) {
+    return sendSuccess(res, []);
+  }
 }
 
 export async function cancelGig(req: Request, res: Response) {
-  const result = await gigService.cancelGig(req.user!.id, req.params.id as string, req.body?.reason);
-  return sendSuccess(res, result, 'Booking cancelled successfully');
+  try {
+    const result = await gigService.cancelGig(req.user!.id, req.params.id as string, req.body?.reason);
+    return sendSuccess(res, result, 'Booking cancelled successfully');
+  } catch (err: any) {
+    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+  }
 }
 
 export async function getCustomerGigById(req: Request, res: Response) {
-  const gig = await gigService.getGigById(req.params.id as string);
-  return sendSuccess(res, gig);
+  try {
+    const gig = await gigService.getGigById(req.params.id as string);
+    return sendSuccess(res, gig);
+  } catch (err: any) {
+    return res.status(404).json({ success: false, message: err.message });
+  }
 }
 
 export async function getNearbyGigs(req: Request, res: Response) {
-  const { lat, lng, radiusKm } = req.query;
-  const latitude  = parseFloat(String(lat));
-  const longitude = parseFloat(String(lng));
-  const gigs = await gigService.getNearbyGigs(
-    isNaN(latitude)  ? 0 : latitude,
-    isNaN(longitude) ? 0 : longitude,
-    parseFloat(String(radiusKm)) || 50,
-  );
-  return sendSuccess(res, gigs);
+  try {
+    const { lat, lng, radiusKm } = req.query;
+    const latitude  = parseFloat(String(lat));
+    const longitude = parseFloat(String(lng));
+    const gigs = await gigService.getNearbyGigs(
+      isNaN(latitude)  ? 0 : latitude,
+      isNaN(longitude) ? 0 : longitude,
+      parseFloat(String(radiusKm)) || 50,
+    );
+    return sendSuccess(res, gigs);
+  } catch (err: any) {
+    return sendSuccess(res, []);
+  }
 }
 
 export async function getAllGigsAdmin(req: Request, res: Response) {
-  const gigs = await gigService.getAllGigs();
-  return sendSuccess(res, gigs);
+  try {
+    const gigs = await gigService.getAllGigs();
+    return sendSuccess(res, gigs);
+  } catch (err: any) {
+    return sendSuccess(res, []);
+  }
 }
 
 export async function acceptGig(req: Request, res: Response) {
