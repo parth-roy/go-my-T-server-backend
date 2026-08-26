@@ -197,6 +197,7 @@ export function createApp(): Application {
   app.use('/api/v1/driver-wallet', driverWalletRouter);
   app.use('/api/v1/fleet-wallet',  fleetWalletRouter);
   app.use('/api/v1/gig', gigRouter);
+  app.use('/api/v1/gigs', gigRouter);
 
   // Leads
   app.use('/api/v1/leads', publicLeadsRouter);

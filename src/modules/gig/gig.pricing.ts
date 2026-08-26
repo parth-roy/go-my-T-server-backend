@@ -41,6 +41,12 @@ const SKILL_MULTIPLIERS: Record<GigSkill, number> = {
   HEAVY_LOADER:     1.5,
   ELECTRICIAN:      2.0,
   RIGGER:           3.0,
+  PLUMBER:          1.8,
+  CARPENTER:        1.8,
+  AC_REPAIR:        2.2,
+  APPLIANCE_REPAIR: 2.0,
+  SECURITY_GUARD:   1.3,
+  PAINTER:          1.4,
 };
 
 /**
@@ -227,6 +233,12 @@ export function getSkillCatalog(): { code: GigSkill; label: string; multiplier: 
     { code: 'HEAVY_LOADER',    label: 'Heavy Loading',          multiplier: SKILL_MULTIPLIERS.HEAVY_LOADER },
     { code: 'ELECTRICIAN',     label: 'Electrician',            multiplier: SKILL_MULTIPLIERS.ELECTRICIAN },
     { code: 'RIGGER',          label: 'Certified Rigger',       multiplier: SKILL_MULTIPLIERS.RIGGER },
+    { code: 'PLUMBER',          label: 'Plumber',                multiplier: SKILL_MULTIPLIERS.PLUMBER },
+    { code: 'CARPENTER',        label: 'Carpenter',              multiplier: SKILL_MULTIPLIERS.CARPENTER },
+    { code: 'AC_REPAIR',        label: 'AC Repair & Service',    multiplier: SKILL_MULTIPLIERS.AC_REPAIR },
+    { code: 'APPLIANCE_REPAIR', label: 'Appliance Repair',       multiplier: SKILL_MULTIPLIERS.APPLIANCE_REPAIR },
+    { code: 'SECURITY_GUARD',   label: 'Security Guard',         multiplier: SKILL_MULTIPLIERS.SECURITY_GUARD },
+    { code: 'PAINTER',          label: 'Painter',                multiplier: SKILL_MULTIPLIERS.PAINTER },
   ];
 }
 

@@ -24,7 +24,7 @@ gigRouter.post(
 gigRouter.post(
   '/customer',
   authenticate,
-  requireRole(UserRole.CUSTOMER),
+  requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),
   validate(schema.createGigSchema),
   ctrl.createGig,
 );
@@ -32,8 +32,31 @@ gigRouter.post(
 gigRouter.get(
   '/customer',
   authenticate,
-  requireRole(UserRole.CUSTOMER),
+  requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),
   ctrl.getCustomerGigs,
+);
+
+gigRouter.get(
+  '/customer/:id',
+  authenticate,
+  requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),
+  ctrl.getCustomerGigById,
+);
+
+gigRouter.post(
+  '/customer/:id/cancel',
+  authenticate,
+  requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),
+  validate(schema.cancelGigSchema),
+  ctrl.cancelGig,
+);
+
+gigRouter.post(
+  '/:id/cancel',
+  authenticate,
+  requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),
+  validate(schema.cancelGigSchema),
+  ctrl.cancelGig,
 );
 
 // ── Workforce ─────────────────────────────────────────────────────────────────

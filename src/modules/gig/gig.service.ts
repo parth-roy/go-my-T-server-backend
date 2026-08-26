@@ -203,6 +203,9 @@ export async function createGig(customerId: string, data: any) {
       } : undefined
 
     },
+    include: {
+      tasks: true,
+    },
   });
 
   // Notify nearby workforce via Socket.IO
@@ -226,8 +229,51 @@ export async function getCustomerGigs(customerId: string) {
   return prisma.gigJob.findMany({
     where: { customerId },
     orderBy: { createdAt: 'desc' },
-    include: { assignments: true },
+    include: {
+      tasks: true,
+      assignments: {
+        include: {
+          worker: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  phone: true,
+                  avatarUrl: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   });
+}
+
+export async function cancelGig(customerId: string, gigId: string, reason?: string) {
+  const gig = await prisma.gigJob.findUnique({
+    where: { id: gigId },
+  });
+  if (!gig) throw AppError.notFound('Gig job not found');
+  if (gig.customerId !== customerId) throw AppError.forbidden('You are not authorized to cancel this booking');
+  if (gig.status === 'COMPLETED' || gig.status === 'CANCELLED') {
+    throw AppError.badRequest(`Cannot cancel a job that is already ${gig.status.toLowerCase()}`);
+  }
+
+  const updated = await prisma.gigJob.update({
+    where: { id: gigId },
+    data: {
+      status: 'CANCELLED',
+      description: reason ? `${gig.description || ''} [Cancelled: ${reason}]` : gig.description,
+    },
+    include: {
+      tasks: true,
+      assignments: true,
+    },
+  });
+
+  return updated;
 }
 
 export async function getNearbyGigs(lat: number, lng: number, _radiusKm: number) {
@@ -243,7 +289,23 @@ export async function getGigById(id: string) {
     where: { id },
     include: {
       customer: true,
-      assignments: { include: { worker: { include: { user: true } } } },
+      tasks: true,
+      assignments: {
+        include: {
+          worker: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  phone: true,
+                  avatarUrl: true,
+                },
+              },
+            },
+          },
+        },
+      },
     },
   });
   if (!gig) throw AppError.notFound('Gig job not found');

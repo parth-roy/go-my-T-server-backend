@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const GIG_SKILLS = [
   'HELPER', 'LOADER', 'FURNITURE_MOVER', 'HEAVY_LOADER',
-  'PACKER', 'CLEANER', 'ELECTRICIAN', 'RIGGER', 'PLUMBER', 'AC_REPAIR', 'APPLIANCE_REPAIR', 'SECURITY_GUARD', 'CARPENTER',
+  'PACKER', 'CLEANER', 'ELECTRICIAN', 'RIGGER', 'PLUMBER', 'AC_REPAIR', 'APPLIANCE_REPAIR', 'SECURITY_GUARD', 'CARPENTER', 'PAINTER',
 ] as const;
 
 const GIG_URGENCIES = ['IMMEDIATE', 'WITHIN_HOUR', 'SCHEDULED'] as const;
@@ -11,9 +11,10 @@ export const createGigSchema = z.object({
   gigType:        z.string().min(2).max(50).optional(), // legacy, kept for backwards compat
   gigCategory:    z.enum(GIG_SKILLS).default('HELPER'),
   description:    z.string().max(500).optional(),
-  locationLat:    z.number().min(-90).max(90),
-  locationLng:    z.number().min(-180).max(180),
-  locationAddress:z.string().min(5).max(500),
+  contactPhone:   z.string().max(20).optional(),
+  locationLat:    z.number().min(-90).max(90).optional().default(22.5726),
+  locationLng:    z.number().min(-180).max(180).optional().default(88.3639),
+  locationAddress:z.string().min(3).max(500),
   workersNeeded:  z.number().int().min(1).max(20).default(1),
   durationHours:  z.number().int().min(1).max(12).default(2),
   urgency:        z.enum(GIG_URGENCIES).default('SCHEDULED'),
@@ -32,8 +33,8 @@ export const createGigSchema = z.object({
 
 export const estimateGigSchema = z.object({
   gigCategory:    z.enum(GIG_SKILLS).default('HELPER'),
-  locationLat:    z.number().min(-90).max(90),
-  locationLng:    z.number().min(-180).max(180),
+  locationLat:    z.number().min(-90).max(90).optional().default(22.5726),
+  locationLng:    z.number().min(-180).max(180).optional().default(88.3639),
   workersNeeded:  z.number().int().min(1).max(20).default(1),
   durationHours:  z.number().int().min(1).max(12).default(2),
   urgency:        z.enum(GIG_URGENCIES).default('SCHEDULED'),
@@ -42,4 +43,8 @@ export const estimateGigSchema = z.object({
 
 export const updateGigStatusSchema = z.object({
   status: z.enum(['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']),
+});
+
+export const cancelGigSchema = z.object({
+  reason: z.string().max(200).optional(),
 });

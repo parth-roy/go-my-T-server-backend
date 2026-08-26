@@ -18,6 +18,16 @@ export async function getCustomerGigs(req: Request, res: Response) {
   return sendSuccess(res, gigs);
 }
 
+export async function cancelGig(req: Request, res: Response) {
+  const result = await gigService.cancelGig(req.user!.id, req.params.id as string, req.body?.reason);
+  return sendSuccess(res, result, 'Booking cancelled successfully');
+}
+
+export async function getCustomerGigById(req: Request, res: Response) {
+  const gig = await gigService.getGigById(req.params.id as string);
+  return sendSuccess(res, gig);
+}
+
 export async function getNearbyGigs(req: Request, res: Response) {
   const { lat, lng, radiusKm } = req.query;
   const latitude  = parseFloat(String(lat));

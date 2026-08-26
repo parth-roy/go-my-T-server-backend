@@ -17,7 +17,13 @@ export type GigSkill =
   | 'PACKER'
   | 'CLEANER'
   | 'ELECTRICIAN'
-  | 'RIGGER';
+  | 'RIGGER'
+  | 'PLUMBER'
+  | 'CARPENTER'
+  | 'AC_REPAIR'
+  | 'APPLIANCE_REPAIR'
+  | 'SECURITY_GUARD'
+  | 'PAINTER';
 
 // ── Urgency ───────────────────────────────────────────────────────────────────
 
