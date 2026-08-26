@@ -62,13 +62,18 @@ adminRouter.get('/fleet-owners',                      ctrl.listFleetOwners);
 adminRouter.get('/fleet-owners/:id',                  ctrl.getFleetOwner);
 adminRouter.patch('/fleet-owners/:id/status',         ctrl.setFleetOwnerStatus);
 
-// ── Workforce ─────────────────────────────────────────────────────────────────
+// ── Workforce & Gigs ──────────────────────────────────────────────────────────
 import * as workforceAdminCtrl from '@modules/workforce/workforce.admin.controller';
+import * as gigCtrl from '@modules/gig/gig.controller';
 adminRouter.get('/workforce',                         workforceAdminCtrl.listWorkforce);
 adminRouter.get('/workforce/:id',                     workforceAdminCtrl.getWorker);
 adminRouter.patch('/workforce/:id/bank',              workforceAdminCtrl.updateWorkerBankDetails);
 adminRouter.patch('/workforce/:id/suspend',           workforceAdminCtrl.suspendWorker);
 adminRouter.patch('/workforce/:id/revoke-verification', workforceAdminCtrl.revokeVerification);
+adminRouter.get('/workforce-bookings',                gigCtrl.getAllGigsAdmin);
+adminRouter.get('/workforce-bookings/:id',            gigCtrl.getGigByIdAdmin);
+adminRouter.get('/gigs',                              gigCtrl.getAllGigsAdmin);
+adminRouter.get('/gigs/:id',                          gigCtrl.getGigByIdAdmin);
 
 // ── Fleet Trucks ──────────────────────────────────────────────────────────────
 adminRouter.get('/fleet-trucks/expiring',             ctrl.getExpiringTrucks);  // BEFORE /:id
