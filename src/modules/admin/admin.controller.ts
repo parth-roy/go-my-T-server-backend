@@ -79,7 +79,7 @@ export const getDashboardStats = async (_req: Request, res: Response, next: Next
 
 export const getRevenueTrend = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const days = Math.min(90, Math.max(7, parseInt(p(req.query.days as any ?? '30'), 10)));
+    const days = Math.min(365, Math.max(7, parseInt(p(req.query.days as any ?? '30'), 10)));
     ok(res, await adminService.getRevenueTrend(days));
   } catch (e) { next(e); }
 };

@@ -165,28 +165,66 @@ export async function getDashboardStats() {
   today.setHours(0, 0, 0, 0);
 
   const [
-    activeBookings, driversOnline, pendingAssignment, openTickets,
-    todayRevenue, todayBookings, newUsers, driverApplications,
+    activeBookings,
+    driversOnline,
+    pendingAssignment,
+    openTickets,
+    todayRevenue,
+    todayBookings,
+    newUsers,
+    driverApplications,
+    totalBookings,
+    totalRevenueAgg,
+    totalDrivers,
+    totalCustomers,
+    totalWorkforce,
+    bookingStatusGroups,
+    activeWorkforceJobs,
+    formDriverLeadsCount,
+    formGigLeadsCount,
   ] = await Promise.all([
     prisma.booking.count({ where: { status: { in: ['CONFIRMED', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVING', 'PICKED_UP', 'IN_TRANSIT'] } } }),
     prisma.driver.count({ where: { status: { in: ['AVAILABLE', 'ON_TRIP'] } } }),
     prisma.booking.count({ where: { status: 'CONFIRMED', driverId: null } }),
     prisma.supportTicket.count({ where: { status: { in: ['OPEN', 'IN_PROGRESS'] } } }),
-    prisma.booking.aggregate({ where: { status: 'COMPLETED', updatedAt: { gte: today } }, _sum: { totalFare: true } }),
+    prisma.booking.aggregate({ where: { status: 'COMPLETED', updatedAt: { gte: today } }, _sum: { grandTotal: true, totalFare: true } }),
     prisma.booking.count({ where: { createdAt: { gte: today } } }),
     prisma.user.count({ where: { createdAt: { gte: today }, role: 'CUSTOMER' } }),
     prisma.driver.count({ where: { createdAt: { gte: today }, isDocVerified: false } }),
+    prisma.booking.count(),
+    prisma.booking.aggregate({ where: { status: 'COMPLETED' }, _sum: { grandTotal: true, totalFare: true } }),
+    prisma.driver.count(),
+    prisma.user.count({ where: { role: 'CUSTOMER' } }),
+    prisma.worker.count().catch(() => 0),
+    prisma.booking.groupBy({ by: ['status'], _count: { id: true } }),
+    prisma.gigJob.count({ where: { status: { in: ['PENDING', 'ASSIGNED', 'IN_PROGRESS'] } } }).catch(() => 0),
+    prisma.formDriverLead.count().catch(() => 0),
+    prisma.formGigLead.count().catch(() => 0),
   ]);
+
+  const statusDistribution: Record<string, number> = {};
+  for (const item of bookingStatusGroups) {
+    statusDistribution[item.status] = item._count.id;
+  }
 
   return {
     activeBookings,
     driversOnline,
     pendingAssignment,
     openTickets,
-    todayRevenue: todayRevenue._sum.totalFare ?? 0,
+    todayRevenue: todayRevenue._sum.grandTotal ?? todayRevenue._sum.totalFare ?? 0,
     todayBookings,
     newUsers,
     driverApplications,
+    totalBookings,
+    totalRevenue: totalRevenueAgg._sum.grandTotal ?? totalRevenueAgg._sum.totalFare ?? 0,
+    totalDrivers,
+    totalCustomers,
+    totalWorkforce,
+    statusDistribution,
+    activeWorkforceJobs,
+    formDriverLeadsCount,
+    formGigLeadsCount,
   };
 }
 
@@ -197,7 +235,7 @@ export async function getRevenueTrend(days = 30) {
 
   const bookings = await prisma.booking.findMany({
     where: { status: 'COMPLETED', updatedAt: { gte: from } },
-    select: { totalFare: true, updatedAt: true },
+    select: { grandTotal: true, totalFare: true, updatedAt: true },
   });
 
   // Group by day
@@ -205,7 +243,8 @@ export async function getRevenueTrend(days = 30) {
   bookings.forEach(b => {
     const day = b.updatedAt.toISOString().slice(0, 10);
     const cur = map.get(day) ?? { revenue: 0, count: 0 };
-    map.set(day, { revenue: cur.revenue + (b.totalFare ?? 0), count: cur.count + 1 });
+    const amt = b.grandTotal ?? b.totalFare ?? 0;
+    map.set(day, { revenue: cur.revenue + amt, count: cur.count + 1 });
   });
 
   const result = [];
