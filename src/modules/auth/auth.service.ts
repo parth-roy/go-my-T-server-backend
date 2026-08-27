@@ -248,11 +248,13 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     await deleteOtp(phone);
   }
 
+  const isEmail = phone.includes('@');
+  const normalizedIdentifier = isEmail ? phone.toLowerCase().trim() : phone.trim();
+
   // Fetch existing user to check if they are deactivated
-  const existingUser = await prisma.user.findUnique({ 
-    where: { phone },
-    include: { fleetOwner: true } 
-  });
+  const existingUser = await (isEmail
+    ? prisma.user.findFirst({ where: { email: normalizedIdentifier }, include: { fleetOwner: true } })
+    : prisma.user.findUnique({ where: { phone: normalizedIdentifier }, include: { fleetOwner: true } }));
   
   if (existingUser) {
     if (!existingUser.isActive) {
@@ -267,37 +269,59 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
   const updateData: any = {};
   let tokenToSave: string | null = fcmToken || null;
   if (!tokenToSave) {
-    tokenToSave = await getStoredFcmToken(phone);
+    tokenToSave = await getStoredFcmToken(normalizedIdentifier);
   }
   if (tokenToSave) {
     updateData.fcmToken = tokenToSave;
   }
 
-  // Find or create user (phone is the unique identifier in this system)
-  const demoInfo = DEMO_ACCOUNTS[phone];
-  const user = await prisma.user.upsert({
-    where: { phone },
-    update: updateData,
-    create: { 
+  // Find or create user
+  const demoInfo = DEMO_ACCOUNTS[normalizedIdentifier];
+  let user: any;
 
-      phone, 
-      role: role as any,
-      name: demoInfo?.name,           // pre-fill name for demo accounts
-      profileComplete: !!demoInfo,    // mark profile complete for demo accounts
-      ...(tokenToSave && { fcmToken: tokenToSave }) 
-    },
-    select: {
-      id: true,
-      phone: true,
-      name: true,
-      email: true,
-      profileImageUrl: true,
-      role: true,
-      usageType: true,
-      whatsappOptIn: true,
-      profileComplete: true,
-    },
-  });
+  if (existingUser) {
+    user = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: updateData,
+      select: {
+        id: true,
+        phone: true,
+        name: true,
+        email: true,
+        profileImageUrl: true,
+        role: true,
+        usageType: true,
+        whatsappOptIn: true,
+        profileComplete: true,
+      },
+    });
+  } else {
+    const synthPhone = isEmail
+      ? `em_${Date.now().toString(36)}_${randomInt(1000, 9999)}`
+      : normalizedIdentifier;
+
+    user = await prisma.user.create({
+      data: {
+        phone: synthPhone,
+        email: isEmail ? normalizedIdentifier : undefined,
+        role: role as any,
+        name: demoInfo?.name,
+        profileComplete: !!demoInfo,
+        ...(tokenToSave && { fcmToken: tokenToSave }),
+      },
+      select: {
+        id: true,
+        phone: true,
+        name: true,
+        email: true,
+        profileImageUrl: true,
+        role: true,
+        usageType: true,
+        whatsappOptIn: true,
+        profileComplete: true,
+      },
+    });
+  }
 
   // ── Auto-provision demo profiles to prevent 404s ──
   if (demoInfo) {
