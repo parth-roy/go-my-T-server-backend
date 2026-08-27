@@ -440,7 +440,6 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   if (!worker) throw AppError.notFound('Worker not found');
 
   const { page, limit, laborType, sortBy, minPayout, maxDistance } = query;
-  if (!worker.isDocVerified) throw AppError.forbidden('Worker verification is required to view jobs');
   if (worker.status !== WorkerStatus.AVAILABLE) {
     return { jobs: [], meta: { page, limit, hasMore: false, total: 0 } };
   }
