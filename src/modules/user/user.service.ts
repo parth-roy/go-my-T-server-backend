@@ -70,13 +70,8 @@ export async function getStats(userId: string) {
   } else if (currentMonthWorkers > 0) {
     growthText = '↑ 100% vs last month';
   } else {
-    // If no bookings yet for new user, provide demo-compatible default
-    growthText = '↑ 20% vs last month';
+    growthText = '0% vs last month';
   }
-
-  // Fallback for visual graph if brand new account with 0 records
-  const displayMonthlyData = monthlyData.some(v => v > 0) ? monthlyData : [6.0, 9.0, 11.0, 14.0];
-  const displayTotalWorkers = currentMonthWorkers > 0 ? currentMonthWorkers : 12;
 
   // 2. Calculate Average Response Time
   const responseAssignments = await prisma.gigAssignment.findMany({
@@ -92,9 +87,9 @@ export async function getStats(userId: string) {
     take: 20
   });
 
-  let displayAvgResponse = '28h';
-  let avgResponseProgress = 0.72;
-  let improvementText = '40% faster vs last month';
+  let displayAvgResponse = '0m';
+  let avgResponseProgress = 0.0;
+  let improvementText = 'No active jobs';
 
   if (responseAssignments.length > 0) {
     let totalMinutes = 0;
@@ -107,13 +102,13 @@ export async function getStats(userId: string) {
     const avgMin = totalMinutes / responseAssignments.length;
     if (avgMin < 60) {
       displayAvgResponse = `${Math.max(1, Math.round(avgMin))}m`;
-      avgResponseProgress = 0.88;
-      improvementText = '50% faster vs last month';
+      avgResponseProgress = Math.min(1.0, Math.max(0.1, avgMin / 60.0));
+      improvementText = 'Faster than avg';
     } else {
       const avgHours = Math.round((avgMin / 60) * 10) / 10;
       displayAvgResponse = `${avgHours}h`;
-      avgResponseProgress = Math.max(0.2, Math.min(0.95, 1.0 - (avgHours / 48.0)));
-      improvementText = '35% faster vs last month';
+      avgResponseProgress = Math.max(0.1, Math.min(1.0, 1.0 - (avgHours / 48.0)));
+      improvementText = `${avgHours}h average`;
     }
   }
 
@@ -124,8 +119,8 @@ export async function getStats(userId: string) {
     _count: { customerRating: true }
   });
 
-  const rating = ratingAgg._avg.customerRating ? Number(ratingAgg._avg.customerRating.toFixed(1)) : 4.8;
-  const totalReviews = (ratingAgg._count.customerRating && ratingAgg._count.customerRating > 0) ? ratingAgg._count.customerRating : 9;
+  const rating = ratingAgg._avg.customerRating ? Number(ratingAgg._avg.customerRating.toFixed(1)) : 0.0;
+  const totalReviews = ratingAgg._count.customerRating ?? 0;
 
   return {
     totalBookings,
@@ -133,9 +128,9 @@ export async function getStats(userId: string) {
     rating,
     totalReviews,
     workersHired: {
-      totalThisMonth: displayTotalWorkers,
+      totalThisMonth: currentMonthWorkers,
       growthText,
-      monthlyData: displayMonthlyData,
+      monthlyData: monthlyData,
       monthLabels
     },
     avgResponse: {
