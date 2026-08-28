@@ -3,6 +3,8 @@ import { AppError } from '@shared/errors/AppError';
 import { getSocketInstance } from '@shared/socket/socket.instance';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
+import { createNotification } from '@modules/notifications/inapp.notification.service';
+import { NotificationType } from '@prisma/client';
 
 export interface SendGigMessageInput {
   content: string;
@@ -366,6 +368,10 @@ export async function sendGigMessage(
       .map((a) => a.worker?.user?.fcmToken)
       .filter((token): token is string => Boolean(token));
 
+    const workerUserIds = gig.assignments
+      .map((a) => a.worker?.userId)
+      .filter((uid): uid is string => Boolean(uid));
+
     for (const token of workerTokens) {
       notificationService
         .sendToDevice(token, {
@@ -381,6 +387,16 @@ export async function sendGigMessage(
         .catch((err) =>
           logger.error('[WorkforceChat] FCM push to worker failed:', err),
         );
+    }
+
+    for (const wUserId of workerUserIds) {
+      createNotification(
+        wUserId,
+        `💬 Message from ${senderName}`,
+        pushBody,
+        NotificationType.SYSTEM,
+        gigId,
+      ).catch(() => {});
     }
   } else {
     // Worker sent message -> Notify customer
@@ -405,6 +421,14 @@ export async function sendGigMessage(
           logger.error('[WorkforceChat] FCM push to customer failed:', err),
         );
     }
+
+    createNotification(
+      gig.customerId,
+      `💬 Message from ${senderName}`,
+      pushBody,
+      NotificationType.SYSTEM,
+      gigId,
+    ).catch(() => {});
   }
 
   return {
