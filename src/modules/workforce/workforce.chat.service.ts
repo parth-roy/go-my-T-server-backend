@@ -2,6 +2,7 @@ import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
 import { getSocketInstance } from '@shared/socket/socket.instance';
 import { logger } from '@shared/logger';
+import { notificationService } from '@modules/notifications/notification.service';
 
 export interface SendGigMessageInput {
   content: string;
@@ -174,7 +175,7 @@ export async function getConversationMessages(userId: string, gigId: string) {
   }
 
   // Mark unread messages from counterparty as read
-  await prisma.gigMessage.updateMany({
+  const updatedCount = await prisma.gigMessage.updateMany({
     where: {
       gigId,
       senderUserId: { not: userId },
@@ -185,6 +186,20 @@ export async function getConversationMessages(userId: string, gigId: string) {
       readAt: new Date(),
     },
   });
+
+  if (updatedCount.count > 0) {
+    const io = getSocketInstance();
+    if (io) {
+      io.of('/workforce').to(`gig:${gigId}`).emit('gig_messages_read', {
+        gigId,
+        readByUserId: userId,
+      });
+      io.of('/tracking').to(`gig:${gigId}`).emit('gig_messages_read', {
+        gigId,
+        readByUserId: userId,
+      });
+    }
+  }
 
   const messages = await prisma.gigMessage.findMany({
     where: { gigId },
@@ -232,6 +247,7 @@ export async function getConversationMessages(userId: string, gigId: string) {
     : null;
 
   return {
+    currentUserId: userId,
     gig: {
       id: gig.id,
       jobNumber: gig.jobNumber,
@@ -318,23 +334,77 @@ export async function sendGigMessage(
     },
   });
 
+  const payload = {
+    id: message.id,
+    gigId: message.gigId,
+    senderUserId: message.senderUserId,
+    senderName: message.sender.name || 'User',
+    senderAvatar: message.sender.profileImageUrl || '',
+    content: message.content,
+    attachmentUrl: message.attachmentUrl,
+    isRead: message.isRead,
+    createdAt: message.createdAt,
+  };
+
   // Emit real-time message to socket room
   const io = getSocketInstance();
   if (io) {
-    const payload = {
-      id: message.id,
-      gigId: message.gigId,
-      senderUserId: message.senderUserId,
-      senderName: message.sender.name || 'User',
-      senderAvatar: message.sender.profileImageUrl || '',
-      content: message.content,
-      attachmentUrl: message.attachmentUrl,
-      isRead: message.isRead,
-      createdAt: message.createdAt,
-    };
-
     io.of('/workforce').to(`gig:${gigId}`).emit('gig_message', payload);
     io.of('/tracking').to(`gig:${gigId}`).emit('gig_message', payload);
+  }
+
+  // Send FCM Push Notification to recipient
+  const senderName = message.sender.name || (isCustomer ? 'Hirer' : 'Worker');
+  const pushBody =
+    message.content.length > 90
+      ? message.content.substring(0, 87) + '...'
+      : message.content;
+
+  if (isCustomer) {
+    // Customer sent message -> Notify assigned worker(s)
+    const workerTokens = gig.assignments
+      .map((a) => a.worker?.user?.fcmToken)
+      .filter((token): token is string => Boolean(token));
+
+    for (const token of workerTokens) {
+      notificationService
+        .sendToDevice(token, {
+          title: `💬 ${senderName}`,
+          body: pushBody,
+          data: {
+            type: 'GIG_CHAT_MESSAGE',
+            gigId,
+            senderUserId: userId,
+            senderName,
+          },
+        })
+        .catch((err) =>
+          logger.error('[WorkforceChat] FCM push to worker failed:', err),
+        );
+    }
+  } else {
+    // Worker sent message -> Notify customer
+    const customerUser = await prisma.user.findUnique({
+      where: { id: gig.customerId },
+      select: { fcmToken: true },
+    });
+
+    if (customerUser?.fcmToken) {
+      notificationService
+        .sendToDevice(customerUser.fcmToken, {
+          title: `💬 ${senderName}`,
+          body: pushBody,
+          data: {
+            type: 'GIG_CHAT_MESSAGE',
+            gigId,
+            senderUserId: userId,
+            senderName,
+          },
+        })
+        .catch((err) =>
+          logger.error('[WorkforceChat] FCM push to customer failed:', err),
+        );
+    }
   }
 
   return {
