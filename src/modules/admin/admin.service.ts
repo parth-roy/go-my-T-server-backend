@@ -8,7 +8,7 @@ import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { sendPasswordResetEmail } from '@shared/services/email.service';
 import { notificationService } from '@modules/notifications/notification.service';
-import { UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus } from '@prisma/client';
+import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus } from '@prisma/client';
 import type {
   LoginInput, ForgotPasswordInput, ResetPasswordInput, RefreshInput,
   BookingsQuery, UsersQuery, DriversQuery, FleetQuery, FinanceQuery,
@@ -687,7 +687,7 @@ export async function getFleetOwners(q: FleetQuery) {
         wallet: { select: { cachedBalance: true } },
         _count: { select: { trucks: true, fleetDrivers: true } },
         trucks: {
-          select: { rcVerifStatus: true, insuranceExpiry: true, pucExpiry: true, fitnessExpiry: true, permitExpiry: true }
+          select: { rcDocUrl: true, insuranceExpiry: true, pucExpiry: true, fitnessExpiry: true, permitExpiry: true }
         }
       },
     }),
@@ -702,7 +702,7 @@ export async function getFleetOwners(q: FleetQuery) {
     if (o.trucks && o.trucks.length > 0) {
       const totalTruckScore = o.trucks.reduce((acc: number, t: any) => {
         let ts = 0;
-        if (t.rcVerifStatus === 'VERIFIED') ts += 20;
+        if (t.rcDocUrl) ts += 20;
         const now = Date.now();
         if (t.insuranceExpiry && new Date(t.insuranceExpiry).getTime() > now) ts += 12.5;
         if (t.pucExpiry && new Date(t.pucExpiry).getTime() > now) ts += 12.5;
@@ -714,13 +714,21 @@ export async function getFleetOwners(q: FleetQuery) {
     }
     complianceScore += fleetScore;
     
-    // Remove trucks from output to keep payload light
+    // Remove trucks from output to keep payload light and normalize _count for frontend
     const { trucks, ...ownerWithoutTrucks } = o;
-    return { ...ownerWithoutTrucks, complianceScore: Math.round(complianceScore) };
+    return {
+      ...ownerWithoutTrucks,
+      _count: {
+        trucks: o._count?.trucks ?? 0,
+        drivers: o._count?.fleetDrivers ?? 0,
+      },
+      complianceScore: Math.round(complianceScore),
+    };
   });
 
   return { total, page: q.page, limit: q.limit, data: owners };
 }
+
 
 export async function getFleetOwnerById(id: string) {
   const owner = await prisma.fleetOwner.findUnique({
@@ -1210,6 +1218,155 @@ export async function verifyWorkerDocuments(workerId: string, input: any) {
 // ENTERPRISE MANAGEMENT — USERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+const ACTIVE_BOOKING_STATUSES: BookingStatus[] = [
+  'CONFIRMED', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVING', 'PICKED_UP', 'IN_TRANSIT',
+];
+
+async function purgeUserRelatedRecords(tx: Prisma.TransactionClient, userId: string) {
+  // 1. Find all customer bookings
+  const userBookings = await tx.booking.findMany({
+    where: { customerId: userId },
+    select: { id: true },
+  });
+  const bookingIds = userBookings.map(b => b.id);
+
+  if (bookingIds.length > 0) {
+    // Delete booking child relations
+    await tx.jobAssignment.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.driverEarning.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.fleetEarning.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.truckAssignment.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.bookingLocationHistory.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.bookingStop.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.scratchCard.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.bidAward.deleteMany({ where: { bookingId: { in: bookingIds } } });
+
+    // Marketplace bids & revisions & messages
+    const bBids = await tx.marketplaceBid.findMany({
+      where: { bookingId: { in: bookingIds } },
+      select: { id: true },
+    });
+    const bBidIds = bBids.map(b => b.id);
+    if (bBidIds.length > 0) {
+      await tx.bidMessage.deleteMany({ where: { bidId: { in: bBidIds } } });
+      await tx.bidRevision.deleteMany({ where: { bidId: { in: bBidIds } } });
+      await tx.bidAward.deleteMany({ where: { bidId: { in: bBidIds } } });
+      await tx.marketplaceBid.deleteMany({ where: { id: { in: bBidIds } } });
+    }
+
+    await tx.bid.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.bidWindow.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.pricingAuditLog.deleteMany({ where: { bookingId: { in: bookingIds } } });
+    await tx.booking.deleteMany({ where: { id: { in: bookingIds } } });
+  }
+
+  // 2. Direct Marketplace / Bid references by user
+  await tx.bidMessage.deleteMany({ where: { senderUserId: userId } });
+  await tx.bidRevision.deleteMany({ where: { authorUserId: userId } });
+  await tx.bidAward.deleteMany({ where: { customerId: userId } });
+  await tx.marketplaceBid.deleteMany({ where: { createdByUserId: userId } });
+
+  // 3. Wallets
+  const wallet = await tx.wallet.findUnique({ where: { userId } });
+  if (wallet) {
+    await tx.walletTransaction.deleteMany({ where: { walletId: wallet.id } });
+    await tx.wallet.delete({ where: { id: wallet.id } });
+  }
+
+  // 4. Coin Balance
+  const coinBal = await tx.coinBalance.findUnique({ where: { userId } });
+  if (coinBal) {
+    await tx.coinTransaction.deleteMany({ where: { coinBalanceId: coinBal.id } });
+    await tx.coinBalance.delete({ where: { id: coinBal.id } });
+  }
+
+  // 5. Support Tickets
+  const tickets = await tx.supportTicket.findMany({ where: { userId }, select: { id: true } });
+  const ticketIds = tickets.map(t => t.id);
+  if (ticketIds.length > 0) {
+    await tx.supportMessage.deleteMany({ where: { ticketId: { in: ticketIds } } });
+    await tx.supportTicket.deleteMany({ where: { id: { in: ticketIds } } });
+  }
+
+  // 6. User Notifications
+  await tx.userNotification.deleteMany({ where: { userId } });
+
+  // 7. Saved Addresses, GST Details, Refresh Tokens, ScratchCards, Recent Searches, Team Members
+  await tx.savedAddress.deleteMany({ where: { userId } });
+  await tx.recentSearch.deleteMany({ where: { userId } });
+  await tx.gstDetail.deleteMany({ where: { userId } });
+  await tx.refreshToken.deleteMany({ where: { userId } });
+  await tx.scratchCard.deleteMany({ where: { userId } });
+  await tx.teamMember.deleteMany({ where: { ownerId: userId } });
+
+  // 8. Gig Jobs created by user
+  const gigJobs = await tx.gigJob.findMany({ where: { customerId: userId }, select: { id: true } });
+  const gigJobIds = gigJobs.map(g => g.id);
+  if (gigJobIds.length > 0) {
+    await tx.gigTask.deleteMany({ where: { gigId: { in: gigJobIds } } });
+    await tx.gigAssignment.deleteMany({ where: { gigId: { in: gigJobIds } } });
+    await tx.gigJob.deleteMany({ where: { id: { in: gigJobIds } } });
+  }
+
+  // 9. Driver profile (if any)
+  const driver = await tx.driver.findUnique({ where: { userId } });
+  if (driver) {
+    await tx.driverEarning.deleteMany({ where: { driverId: driver.id } });
+    await tx.driverDocument.deleteMany({ where: { driverId: driver.id } });
+    await tx.driverSubscription.deleteMany({ where: { driverId: driver.id } });
+    const dWallet = await tx.driverWallet.findUnique({ where: { driverId: driver.id } });
+    if (dWallet) {
+      await tx.driverWalletTransaction.deleteMany({ where: { walletId: dWallet.id } });
+      await tx.driverWallet.delete({ where: { id: dWallet.id } });
+    }
+    await tx.fleetDriver.deleteMany({ where: { driverId: driver.id } });
+    await tx.verificationLog.deleteMany({ where: { OR: [{ entityId: driver.id }, { calledBy: userId }] } });
+    await tx.driver.delete({ where: { id: driver.id } });
+  }
+
+  // 10. Worker profile (if any)
+  const worker = await tx.worker.findUnique({ where: { userId } });
+  if (worker) {
+    await tx.workerDocument.deleteMany({ where: { workerId: worker.id } });
+    await tx.workerBadge.deleteMany({ where: { workerId: worker.userId } });
+    await tx.workerTrainingProgress.deleteMany({ where: { workerId: worker.id } });
+    await tx.jobAssignment.deleteMany({ where: { workerId: worker.id } });
+    await tx.gigAssignment.deleteMany({ where: { workerId: worker.id } });
+    const wWallet = await tx.workerWallet.findUnique({ where: { workerId: worker.id } });
+    if (wWallet) {
+      await tx.workerWalletTransaction.deleteMany({ where: { walletId: wWallet.id } });
+      await tx.workerWallet.delete({ where: { id: wWallet.id } });
+    }
+    await tx.worker.delete({ where: { id: worker.id } });
+  }
+
+  // 11. Fleet Owner profile (if any)
+  const fleetOwner = await tx.fleetOwner.findUnique({ where: { userId } });
+  if (fleetOwner) {
+    const trucks = await tx.fleetTruck.findMany({ where: { fleetOwnerId: fleetOwner.id }, select: { id: true } });
+    const truckIds = trucks.map(t => t.id);
+    if (truckIds.length > 0) {
+      await tx.fleetTruckDocument.deleteMany({ where: { truckId: { in: truckIds } } });
+      await tx.fleetTruckUsage.deleteMany({ where: { truckId: { in: truckIds } } });
+      await tx.truckAssignment.deleteMany({ where: { truckId: { in: truckIds } } });
+      await tx.fleetMaintenance.deleteMany({ where: { truckId: { in: truckIds } } });
+      await tx.fleetFuelLog.deleteMany({ where: { truckId: { in: truckIds } } });
+      await tx.fleetTruck.deleteMany({ where: { id: { in: truckIds } } });
+    }
+    await tx.fleetDriver.deleteMany({ where: { fleetOwnerId: fleetOwner.id } });
+    await tx.fleetEarning.deleteMany({ where: { fleetOwnerId: fleetOwner.id } });
+    const fWallet = await tx.fleetWallet.findUnique({ where: { fleetOwnerId: fleetOwner.id } });
+    if (fWallet) {
+      await tx.fleetWalletTransaction.deleteMany({ where: { walletId: fWallet.id } });
+      await tx.fleetWallet.delete({ where: { id: fWallet.id } });
+    }
+    await tx.fleetOwner.delete({ where: { id: fleetOwner.id } });
+  }
+
+  // 12. Finally delete the User
+  await tx.user.delete({ where: { id: userId } });
+}
+
 export async function softDeleteUser(userId: string, reason: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw AppError.notFound('User not found');
@@ -1228,14 +1385,16 @@ export async function hardDeleteUser(userId: string, reason: string) {
   const activeBookingCount = await prisma.booking.count({
     where: {
       customerId: userId,
-      status: { in: ['CONFIRMED', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVING', 'PICKED_UP', 'IN_TRANSIT'] as BookingStatus[] },
+      status: { in: ACTIVE_BOOKING_STATUSES },
     },
   });
   if (activeBookingCount > 0) {
     throw AppError.badRequest('Cannot delete user with active bookings');
   }
 
-  await prisma.user.delete({ where: { id: userId } });
+  await prisma.$transaction(async (tx) => {
+    await purgeUserRelatedRecords(tx, userId);
+  });
 
   logger.info(`[Admin] Hard-deleted user ${userId} — reason: ${reason}`);
   return { deleted: true, permanent: true };
@@ -1244,10 +1403,6 @@ export async function hardDeleteUser(userId: string, reason: string) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ENTERPRISE MANAGEMENT — DRIVERS
 // ─────────────────────────────────────────────────────────────────────────────
-
-const ACTIVE_BOOKING_STATUSES: BookingStatus[] = [
-  'CONFIRMED', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVING', 'PICKED_UP', 'IN_TRANSIT',
-];
 
 export async function softDeleteDriver(driverId: string, reason: string) {
   const driver = await prisma.driver.findUnique({ where: { id: driverId } });
@@ -1271,7 +1426,13 @@ export async function hardDeleteDriver(driverId: string, reason: string) {
     throw AppError.badRequest('Cannot delete driver with active bookings');
   }
 
-  await prisma.user.delete({ where: { id: driver.userId } });
+  await prisma.$transaction(async (tx) => {
+    await tx.booking.updateMany({
+      where: { driverId },
+      data: { driverId: null },
+    });
+    await purgeUserRelatedRecords(tx, driver.userId);
+  });
 
   logger.info(`[Admin] Hard-deleted driver ${driverId} — reason: ${reason}`);
   return { deleted: true, permanent: true };
@@ -1350,8 +1511,6 @@ export async function hardDeleteFleetOwner(id: string, reason: string) {
   const fleetOwner = await prisma.fleetOwner.findUnique({ where: { id } });
   if (!fleetOwner) throw AppError.notFound('Fleet owner not found');
 
-
-  // Check for active bookings awarded to this fleet owner
   const activeCount = await prisma.booking.count({
     where: { awardedFleetOwnerId: id, status: { in: ACTIVE_BOOKING_STATUSES } },
   });
@@ -1359,7 +1518,13 @@ export async function hardDeleteFleetOwner(id: string, reason: string) {
     throw AppError.badRequest('Cannot delete fleet owner with active bookings');
   }
 
-  await prisma.user.delete({ where: { id: fleetOwner.userId } });
+  await prisma.$transaction(async (tx) => {
+    await tx.booking.updateMany({
+      where: { awardedFleetOwnerId: id },
+      data: { awardedFleetOwnerId: null },
+    });
+    await purgeUserRelatedRecords(tx, fleetOwner.userId);
+  });
 
   logger.info(`[Admin] Hard-deleted fleet owner ${id} — reason: ${reason}`);
   return { deleted: true, permanent: true };
@@ -1389,16 +1554,18 @@ export async function hardDeleteWorker(workerId: string, reason: string) {
 
   const activeGigCount = await prisma.gigJob.count({
     where: {
-      workerId,
-      status: { notIn: ['COMPLETED', 'CANCELLED'] },
+      assignments: { some: { workerId, status: { notIn: ['COMPLETED', 'DECLINED', 'CANCELLED'] } } },
     },
   });
   if (activeGigCount > 0) {
     throw AppError.badRequest('Cannot delete worker with active gig jobs');
   }
 
-  await prisma.user.delete({ where: { id: worker.userId } });
+  await prisma.$transaction(async (tx) => {
+    await purgeUserRelatedRecords(tx, worker.userId);
+  });
 
   logger.info(`[Admin] Hard-deleted worker ${workerId} — reason: ${reason}`);
   return { deleted: true, permanent: true };
 }
+

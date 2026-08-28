@@ -8,10 +8,12 @@ import { deleteEntitySchema } from '@modules/admin/admin.schema';
 
 const workforceQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).max(100).default(50),
+  limit: z.coerce.number().min(1).max(100).default(25),
   search: z.string().optional(),
   status: z.enum(['OFFLINE', 'AVAILABLE', 'ON_JOB']).optional(),
   isDocVerified: z.coerce.boolean().optional(),
+  bankVerified: z.coerce.boolean().optional(),
+  isActive: z.coerce.boolean().optional(),
 });
 
 export const listWorkforce = async (req: Request, res: Response, next: NextFunction) => {
@@ -20,6 +22,8 @@ export const listWorkforce = async (req: Request, res: Response, next: NextFunct
     const where: any = {};
     if (q.status) where.status = q.status;
     if (q.isDocVerified !== undefined) where.isDocVerified = q.isDocVerified;
+    if (q.bankVerified !== undefined) where.bankVerified = q.bankVerified;
+    if (q.isActive !== undefined) where.isActive = q.isActive;
     if (q.search) {
       where.OR = [
         { user: { name: { contains: q.search, mode: 'insensitive' } } },
@@ -34,7 +38,8 @@ export const listWorkforce = async (req: Request, res: Response, next: NextFunct
         skip: (q.page - 1) * q.limit,
         take: q.limit,
         include: {
-          user: { select: { name: true, phone: true, email: true, profileImageUrl: true } },
+          user: { select: { id: true, name: true, phone: true, email: true, profileImageUrl: true, isActive: true } },
+          workerWallet: { select: { cachedBalance: true } },
           documents: { select: { status: true, type: true } }
         },
         orderBy: { createdAt: 'desc' },
@@ -50,6 +55,7 @@ export const listWorkforce = async (req: Request, res: Response, next: NextFunct
     });
   } catch (err) { next(err); }
 };
+
 
 export const getWorker = async (req: Request, res: Response, next: NextFunction) => {
   try {
