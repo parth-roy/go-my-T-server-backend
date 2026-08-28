@@ -3,6 +3,7 @@ import { authenticate, requireRole } from '@shared/middleware/auth.middleware';
 import { validate } from '@shared/middleware/validate';
 import * as ctrl from './gig.controller';
 import * as schema from './gig.schema';
+import * as chatCtrl from '../workforce/workforce.chat.controller';
 import { UserRole } from '@prisma/client';
 
 export const gigRouter = Router();
@@ -89,4 +90,24 @@ gigRouter.get(
   authenticate,
   requireRole(UserRole.ADMIN),
   ctrl.getGigByIdAdmin,
+);
+
+// ── Chats (Hirer & Assigned Worker) ──────────────────────────────────────────
+
+gigRouter.get(
+  '/chats',
+  authenticate,
+  chatCtrl.getHirerConversations,
+);
+
+gigRouter.get(
+  '/chats/:gigId/messages',
+  authenticate,
+  chatCtrl.getConversationMessages,
+);
+
+gigRouter.post(
+  '/chats/:gigId/messages',
+  authenticate,
+  chatCtrl.sendGigMessage,
 );
