@@ -97,7 +97,7 @@ gigRouter.get(
 gigRouter.get(
   '/chats',
   authenticate,
-  chatCtrl.getHirerConversations,
+  chatCtrl.getUserConversations,
 );
 
 gigRouter.get(

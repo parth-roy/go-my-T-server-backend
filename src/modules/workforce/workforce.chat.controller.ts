@@ -2,14 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import { sendSuccess } from '@shared/utils/response';
 import * as chatService from './workforce.chat.service';
 
-export async function getHirerConversations(
+export async function getUserConversations(
   req: Request,
   res: Response,
   next: NextFunction,
 ) {
   try {
     const userId = req.user!.id;
-    const conversations = await chatService.getHirerConversations(userId);
+    const conversations = await chatService.getUserConversations(userId);
     sendSuccess(res, conversations);
   } catch (err) {
     next(err);

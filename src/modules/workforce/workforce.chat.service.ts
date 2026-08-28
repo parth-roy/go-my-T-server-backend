@@ -9,17 +9,28 @@ export interface SendGigMessageInput {
   attachmentUrl?: string;
 }
 
-export async function getHirerConversations(userId: string) {
+export async function getUserConversations(userId: string) {
   try {
     const gigs = await prisma.gigJob.findMany({
       where: {
-        customerId: userId,
+        OR: [
+          { customerId: userId },
+          { assignments: { some: { worker: { userId: userId } } } },
+        ],
         assignments: {
-          some: {}, // Has at least one assignment (past or present)
+          some: {}, // Has at least one assignment
         },
       },
       orderBy: { updatedAt: 'desc' },
       include: {
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            profileImageUrl: true,
+          },
+        },
         assignments: {
           include: {
             worker: {
@@ -45,6 +56,8 @@ export async function getHirerConversations(userId: string) {
 
     const conversations = await Promise.all(
       gigs.map(async (gig) => {
+        const isHirer = gig.customerId === userId;
+
         const activeAssignment =
           gig.assignments.find((a) =>
             ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(a.status),
@@ -53,6 +66,7 @@ export async function getHirerConversations(userId: string) {
           gig.assignments[0];
 
         const workerUser = activeAssignment?.worker?.user;
+        const customerUser = gig.customer;
 
         const unreadCount = await prisma.gigMessage.count({
           where: {
@@ -64,6 +78,31 @@ export async function getHirerConversations(userId: string) {
 
         const lastMsg = gig.messages[0] || null;
 
+        const workerData = workerUser
+          ? {
+              id: activeAssignment.workerId,
+              userId: workerUser.id,
+              name: workerUser.name || 'Worker Partner',
+              phone: workerUser.phone || '',
+              avatarUrl: workerUser.profileImageUrl || '',
+              assignmentStatus: activeAssignment.status,
+              rating: 4.9,
+            }
+          : null;
+
+        const hirerData = customerUser
+          ? {
+              id: customerUser.id,
+              userId: customerUser.id,
+              name: customerUser.name || 'Hirer Partner',
+              phone: customerUser.phone || '',
+              avatarUrl: customerUser.profileImageUrl || '',
+              rating: 5.0,
+            }
+          : null;
+
+        const counterparty = isHirer ? workerData : hirerData;
+
         return {
           gigId: gig.id,
           jobNumber: gig.jobNumber,
@@ -74,17 +113,10 @@ export async function getHirerConversations(userId: string) {
           scheduledSlot: gig.scheduledSlot,
           createdAt: gig.createdAt,
           updatedAt: gig.updatedAt,
-          worker: workerUser
-            ? {
-                id: activeAssignment.workerId,
-                userId: workerUser.id,
-                name: workerUser.name || 'Worker Partner',
-                phone: workerUser.phone || '',
-                avatarUrl: workerUser.profileImageUrl || '',
-                assignmentStatus: activeAssignment.status,
-                rating: 4.9, // Default aggregate rating for worker display
-              }
-            : null,
+          isHirer,
+          worker: workerData,
+          hirer: hirerData,
+          counterparty,
           lastMessage: lastMsg
             ? {
                 id: lastMsg.id,
@@ -102,7 +134,7 @@ export async function getHirerConversations(userId: string) {
 
     return conversations;
   } catch (error: any) {
-    logger.error(`[getHirerConversations] Error: ${error.message}`, { error });
+    logger.error(`[getUserConversations] Error: ${error.message}`, { error });
     throw error;
   }
 }
@@ -111,6 +143,9 @@ export async function getConversationMessages(userId: string, gigId: string) {
   const gig = await prisma.gigJob.findUnique({
     where: { id: gigId },
     include: {
+      customer: {
+        select: { id: true, name: true, phone: true, profileImageUrl: true },
+      },
       assignments: {
         include: {
           worker: {
@@ -135,7 +170,7 @@ export async function getConversationMessages(userId: string, gigId: string) {
   );
 
   if (!isCustomer && !isAssignedWorker) {
-    throw AppError.forbidden('You can only message workers assigned to your bookings');
+    throw AppError.forbidden('You can only message counterparties assigned to your bookings');
   }
 
   // Mark unread messages from counterparty as read
@@ -173,6 +208,28 @@ export async function getConversationMessages(userId: string, gigId: string) {
     gig.assignments[0];
 
   const workerUser = activeAssignment?.worker?.user;
+  const customerUser = gig.customer;
+
+  const workerData = workerUser
+    ? {
+        id: activeAssignment.workerId,
+        userId: workerUser.id,
+        name: workerUser.name || 'Worker Partner',
+        phone: workerUser.phone || '',
+        avatarUrl: workerUser.profileImageUrl || '',
+        assignmentStatus: activeAssignment.status,
+      }
+    : null;
+
+  const hirerData = customerUser
+    ? {
+        id: customerUser.id,
+        userId: customerUser.id,
+        name: customerUser.name || 'Hirer Partner',
+        phone: customerUser.phone || '',
+        avatarUrl: customerUser.profileImageUrl || '',
+      }
+    : null;
 
   return {
     gig: {
@@ -183,16 +240,10 @@ export async function getConversationMessages(userId: string, gigId: string) {
       completionOtp: gig.completionOtp,
       locationAddress: gig.locationAddress,
       scheduledSlot: gig.scheduledSlot,
-      worker: workerUser
-        ? {
-            id: activeAssignment.workerId,
-            userId: workerUser.id,
-            name: workerUser.name || 'Worker Partner',
-            phone: workerUser.phone || '',
-            avatarUrl: workerUser.profileImageUrl || '',
-            assignmentStatus: activeAssignment.status,
-          }
-        : null,
+      isHirer: isCustomer,
+      worker: workerData,
+      hirer: hirerData,
+      counterparty: isCustomer ? workerData : hirerData,
     },
     messages: messages.map((m) => ({
       id: m.id,
@@ -243,7 +294,7 @@ export async function sendGigMessage(
   );
 
   if (!isCustomer && !isAssignedWorker) {
-    throw AppError.forbidden('You can only message workers assigned to your bookings');
+    throw AppError.forbidden('You can only message counterparties assigned to your bookings');
   }
 
   // Save message in PostgreSQL
