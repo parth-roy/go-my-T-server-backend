@@ -43,6 +43,15 @@ adminRouter.post('/bookings/:id/assign-driver',       ctrl.assignDriver);
 adminRouter.post('/bookings/:id/cancel',              ctrl.cancelBooking);
 adminRouter.post('/bookings/:id/refund',              ctrl.refundBooking);
 
+// ── Manual / Offline Bookings ─────────────────────────────────────────────────
+import * as manualBookingCtrl from '@modules/manual-booking/manual-booking.controller';
+adminRouter.get('/manual-bookings/export',            manualBookingCtrl.exportManualBookingsCsv);  // BEFORE /:id
+adminRouter.get('/manual-bookings',                   manualBookingCtrl.listManualBookings);
+adminRouter.post('/manual-bookings',                  manualBookingCtrl.createManualBooking);
+adminRouter.get('/manual-bookings/:id',               manualBookingCtrl.getManualBookingById);
+adminRouter.patch('/manual-bookings/:id',             manualBookingCtrl.updateManualBooking);
+adminRouter.delete('/manual-bookings/:id',            manualBookingCtrl.deleteManualBooking);
+
 // ── Users ─────────────────────────────────────────────────────────────────────
 adminRouter.get('/users',                             ctrl.listUsers);
 adminRouter.get('/users/:id',                         ctrl.getUser);

@@ -2133,3 +2133,96 @@ model GigTask {
 
   @@map("gig_tasks")
 }
+
+model ManualBooking {
+  id                    String    @id @default(uuid())
+  bookingNumber         String    @unique
+  source                String?   @default("ADMIN_MANUAL")
+
+  // Customer Details
+  customerName          String?
+  customerPhone         String?
+  customerEmail         String?
+  customerCompany       String?
+  customerGstin         String?
+
+  // Receiver Details
+  receiverName          String?
+  receiverPhone         String?
+
+  // Pickup Details
+  pickupAddress         String?
+  pickupCity            String?
+  pickupDistrict        String?
+  pickupState           String?
+  pickupPincode         String?
+  pickupLandmark        String?
+  pickupDateTime        DateTime?
+  pickupLat             Float?
+  pickupLng             Float?
+
+  // Dropoff Details
+  dropoffAddress        String?
+  dropoffCity           String?
+  dropoffDistrict       String?
+  dropoffState          String?
+  dropoffPincode        String?
+  dropoffLandmark       String?
+  dropoffDateTime       DateTime?
+  dropoffLat            Float?
+  dropoffLng            Float?
+
+  // Distance / Route
+  estimatedDistanceKm   Float?
+  routeDescription      String?
+
+  // Vehicle / Truck Requirements
+  vehicleType           String?
+  vehicleNumber         String?
+  truckCount            Int?      @default(1)
+  bodyType              String?
+
+  // Driver / Transporter Assigned
+  driverName            String?
+  driverPhone           String?
+  driverDlNumber        String?
+  transporterName       String?
+  transporterPhone      String?
+
+  // Goods / Material Details
+  goodsType             String?
+  goodsDescription      String?
+  goodsWeightKg         Float?
+  goodsWeightTons       Float?
+  goodsQuantity         Int?
+  goodsDeclaredValue    Float?
+  handlingInstructions  String?
+
+  // Commercials & Financials
+  quotedAmount          Float?
+  driverPayoutAmount    Float?
+  advanceReceived       Float?    @default(0)
+  balanceAmount         Float?
+  paymentStatus         String?   @default("PENDING")
+  paymentMode           String?
+  invoiceNumber         String?
+
+  // Operational Status
+  status                String?   @default("INQUIRY")
+
+  // Internal Notes & Admin Metadata
+  notes                 String?
+  createdByAdminId      String?
+  createdByAdminName    String?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([pickupCity, dropoffCity])
+  @@index([vehicleType])
+  @@index([createdAt])
+  @@map("manual_bookings")
+}
+
