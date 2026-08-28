@@ -308,6 +308,7 @@ model User {
   teamMembers TeamMember[]  @relation("EnterpriseTeamMembers")
   ScratchCard ScratchCard[]
   GigJob      GigJob[]
+  sentGigMessages GigMessage[] @relation("GigMessageSender")
 
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -1946,6 +1947,7 @@ model GigJob {
   updatedAt DateTime @updatedAt
 
   assignments GigAssignment[]
+  messages    GigMessage[]
 
   @@index([status])
   @@index([locationZone, status])
@@ -1970,6 +1972,24 @@ model GigAssignment {
   updatedAt DateTime @updatedAt
 
   @@unique([gigId, workerId])
+}
+
+model GigMessage {
+  id              String    @id @default(uuid())
+  gigId           String
+  gig             GigJob    @relation(fields: [gigId], references: [id], onDelete: Cascade)
+  senderUserId    String
+  sender          User      @relation("GigMessageSender", fields: [senderUserId], references: [id], onDelete: Restrict)
+  clientMessageId String?
+  content         String
+  attachmentUrl   String?
+  isRead          Boolean   @default(false)
+  readAt          DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([gigId, createdAt])
+  @@index([senderUserId])
+  @@map("gig_messages")
 }
 
 // ── Gig Pricing Config (separate from truck pricing) ─────────────────────────
