@@ -9,7 +9,9 @@ import {
   pricingUpdateSchema, announcementSchema, broadcastNotificationSchema,
   subscriptionUpdateSchema, ulipLogsQuerySchema, userStatusSchema,
   fleetStatusSchema, ticketStatusSchema, ticketReplySchema,
+  deleteEntitySchema, driverStatusOverrideSchema,
 } from './admin.schema';
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER — standardized success response
@@ -183,6 +185,20 @@ export const creditWorkerWallet = async (req: Request, res: Response, next: Next
   } catch (e) { next(e); }
 };
 
+export const softDeleteUser = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    ok(res, await adminService.softDeleteUser(p(req.params.id), reason));
+  } catch (e) { next(e); }
+};
+
+export const hardDeleteUser = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    ok(res, await adminService.hardDeleteUser(p(req.params.id), reason));
+  } catch (e) { next(e); }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DRIVERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -216,6 +232,34 @@ export const getDriverVerifLogs = async (req: Request, res: Response, next: Next
   try { ok(res, await adminService.getDriverVerificationLogs(p(req.params.id))); } catch (e) { next(e); }
 };
 
+export const softDeleteDriver = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    ok(res, await adminService.softDeleteDriver(p(req.params.id), reason));
+  } catch (e) { next(e); }
+};
+
+export const hardDeleteDriver = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    ok(res, await adminService.hardDeleteDriver(p(req.params.id), reason));
+  } catch (e) { next(e); }
+};
+
+export const overrideDriverStatus = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { status } = driverStatusOverrideSchema.parse(req.body);
+    ok(res, await adminService.overrideDriverStatus(p(req.params.id), status));
+  } catch (e) { next(e); }
+};
+
+export const blockDriver = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { isActive } = req.body;
+    ok(res, await adminService.blockDriver(p(req.params.id), Boolean(isActive)));
+  } catch (e) { next(e); }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // FLEET OWNERS & TRUCKS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,6 +279,27 @@ export const setFleetOwnerStatus = async (req: Request, res: Response, next: Nex
   try {
     const data = fleetStatusSchema.parse(req.body);
     ok(res, await adminService.toggleFleetOwnerStatus(p(req.params.id), data));
+  } catch (e) { next(e); }
+};
+
+export const creditFleetOwnerWallet = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = walletCreditSchema.parse(req.body);
+    ok(res, await adminService.creditFleetOwnerWallet(p(req.params.id), input));
+  } catch (e) { next(e); }
+};
+
+export const softDeleteFleetOwner = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    ok(res, await adminService.softDeleteFleetOwner(p(req.params.id), reason));
+  } catch (e) { next(e); }
+};
+
+export const hardDeleteFleetOwner = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    ok(res, await adminService.hardDeleteFleetOwner(p(req.params.id), reason));
   } catch (e) { next(e); }
 };
 

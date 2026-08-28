@@ -1205,3 +1205,200 @@ export async function verifyWorkerDocuments(workerId: string, input: any) {
 
   return { success: true };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTERPRISE MANAGEMENT — USERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function softDeleteUser(userId: string, reason: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw AppError.notFound('User not found');
+
+  await prisma.user.update({ where: { id: userId }, data: { isActive: false } });
+  await prisma.refreshToken.deleteMany({ where: { userId } });
+
+  logger.info(`[Admin] Soft-deleted user ${userId} — reason: ${reason}`);
+  return { deleted: true, userId, reason };
+}
+
+export async function hardDeleteUser(userId: string, reason: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw AppError.notFound('User not found');
+
+  const activeBookingCount = await prisma.booking.count({
+    where: {
+      customerId: userId,
+      status: { in: ['CONFIRMED', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVING', 'PICKED_UP', 'IN_TRANSIT'] as BookingStatus[] },
+    },
+  });
+  if (activeBookingCount > 0) {
+    throw AppError.badRequest('Cannot delete user with active bookings');
+  }
+
+  await prisma.user.delete({ where: { id: userId } });
+
+  logger.info(`[Admin] Hard-deleted user ${userId} — reason: ${reason}`);
+  return { deleted: true, permanent: true };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTERPRISE MANAGEMENT — DRIVERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ACTIVE_BOOKING_STATUSES: BookingStatus[] = [
+  'CONFIRMED', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVING', 'PICKED_UP', 'IN_TRANSIT',
+];
+
+export async function softDeleteDriver(driverId: string, reason: string) {
+  const driver = await prisma.driver.findUnique({ where: { id: driverId } });
+  if (!driver) throw AppError.notFound('Driver not found');
+
+  await prisma.user.update({ where: { id: driver.userId }, data: { isActive: false } });
+  await prisma.refreshToken.deleteMany({ where: { userId: driver.userId } });
+
+  logger.info(`[Admin] Soft-deleted driver ${driverId} — reason: ${reason}`);
+  return { deleted: true, driverId, reason };
+}
+
+export async function hardDeleteDriver(driverId: string, reason: string) {
+  const driver = await prisma.driver.findUnique({ where: { id: driverId } });
+  if (!driver) throw AppError.notFound('Driver not found');
+
+  const activeCount = await prisma.booking.count({
+    where: { driverId, status: { in: ACTIVE_BOOKING_STATUSES } },
+  });
+  if (activeCount > 0) {
+    throw AppError.badRequest('Cannot delete driver with active bookings');
+  }
+
+  await prisma.user.delete({ where: { id: driver.userId } });
+
+  logger.info(`[Admin] Hard-deleted driver ${driverId} — reason: ${reason}`);
+  return { deleted: true, permanent: true };
+}
+
+export async function overrideDriverStatus(driverId: string, status: 'OFFLINE' | 'AVAILABLE' | 'BREAK') {
+  const driver = await prisma.driver.findUnique({ where: { id: driverId } });
+  if (!driver) throw AppError.notFound('Driver not found');
+
+  const updated = await prisma.driver.update({ where: { id: driverId }, data: { status } });
+  logger.info(`[Admin] Overrode driver ${driverId} status → ${status}`);
+  return updated;
+}
+
+export async function blockDriver(driverId: string, isActive: boolean) {
+  const driver = await prisma.driver.findUnique({ where: { id: driverId } });
+  if (!driver) throw AppError.notFound('Driver not found');
+
+  await prisma.user.update({ where: { id: driver.userId }, data: { isActive } });
+
+  if (!isActive) {
+    await forceLogoutAllSessions(driver.userId);
+  }
+
+  logger.info(`[Admin] Driver ${driverId} ${isActive ? 'unblocked' : 'blocked'}`);
+  return { blocked: !isActive, driverId };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTERPRISE MANAGEMENT — FLEET OWNERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function creditFleetOwnerWallet(fleetOwnerId: string, input: { amount: number; note: string }) {
+  const fleetOwner = await prisma.fleetOwner.findUnique({ where: { id: fleetOwnerId } });
+  if (!fleetOwner) throw AppError.notFound('Fleet owner not found');
+
+  let wallet = await prisma.fleetWallet.findUnique({ where: { fleetOwnerId } });
+  if (!wallet) {
+    wallet = await prisma.fleetWallet.create({ data: { fleetOwnerId, cachedBalance: 0 } });
+  }
+
+  const newBalance = wallet.cachedBalance + input.amount;
+
+  await prisma.$transaction([
+    prisma.fleetWalletTransaction.create({
+      data: {
+        walletId:     wallet.id,
+        type:         WalletTransactionType.CREDIT,
+        amount:       input.amount,
+        balanceAfter: newBalance,
+        note:         input.note,
+      },
+    }),
+    prisma.fleetWallet.update({ where: { id: wallet.id }, data: { cachedBalance: newBalance } }),
+  ]);
+
+  logger.info(`[Admin] Credited fleet owner ${fleetOwnerId} wallet ₹${input.amount}`);
+  return { success: true, credited: input.amount, newBalance };
+}
+
+export async function softDeleteFleetOwner(id: string, reason: string) {
+  const fleetOwner = await prisma.fleetOwner.findUnique({ where: { id } });
+  if (!fleetOwner) throw AppError.notFound('Fleet owner not found');
+
+  await prisma.$transaction([
+    prisma.fleetOwner.update({ where: { id }, data: { isActive: false } }),
+    prisma.user.update({ where: { id: fleetOwner.userId }, data: { isActive: false } }),
+  ]);
+  await prisma.refreshToken.deleteMany({ where: { userId: fleetOwner.userId } });
+
+  logger.info(`[Admin] Soft-deleted fleet owner ${id} — reason: ${reason}`);
+  return { deleted: true };
+}
+
+export async function hardDeleteFleetOwner(id: string, reason: string) {
+  const fleetOwner = await prisma.fleetOwner.findUnique({ where: { id } });
+  if (!fleetOwner) throw AppError.notFound('Fleet owner not found');
+
+
+  // Check for active bookings awarded to this fleet owner
+  const activeCount = await prisma.booking.count({
+    where: { awardedFleetOwnerId: id, status: { in: ACTIVE_BOOKING_STATUSES } },
+  });
+  if (activeCount > 0) {
+    throw AppError.badRequest('Cannot delete fleet owner with active bookings');
+  }
+
+  await prisma.user.delete({ where: { id: fleetOwner.userId } });
+
+  logger.info(`[Admin] Hard-deleted fleet owner ${id} — reason: ${reason}`);
+  return { deleted: true, permanent: true };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENTERPRISE MANAGEMENT — WORKFORCE (WORKERS)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function softDeleteWorker(workerId: string, reason: string) {
+  const worker = await prisma.worker.findUnique({ where: { id: workerId } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  await prisma.$transaction([
+    prisma.worker.update({ where: { id: workerId }, data: { isActive: false } }),
+    prisma.user.update({ where: { id: worker.userId }, data: { isActive: false } }),
+  ]);
+  await prisma.refreshToken.deleteMany({ where: { userId: worker.userId } });
+
+  logger.info(`[Admin] Soft-deleted worker ${workerId} — reason: ${reason}`);
+  return { deleted: true };
+}
+
+export async function hardDeleteWorker(workerId: string, reason: string) {
+  const worker = await prisma.worker.findUnique({ where: { id: workerId } });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const activeGigCount = await prisma.gigJob.count({
+    where: {
+      workerId,
+      status: { notIn: ['COMPLETED', 'CANCELLED'] },
+    },
+  });
+  if (activeGigCount > 0) {
+    throw AppError.badRequest('Cannot delete worker with active gig jobs');
+  }
+
+  await prisma.user.delete({ where: { id: worker.userId } });
+
+  logger.info(`[Admin] Hard-deleted worker ${workerId} — reason: ${reason}`);
+  return { deleted: true, permanent: true };
+}

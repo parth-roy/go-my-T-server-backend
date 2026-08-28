@@ -3,6 +3,8 @@ import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
 import { sendSuccess } from '@shared/utils/response';
 import { z } from 'zod';
+import * as adminService from '@modules/admin/admin.service';
+import { deleteEntitySchema } from '@modules/admin/admin.schema';
 
 const workforceQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
@@ -128,5 +130,19 @@ export const revokeVerification = async (req: Request, res: Response, next: Next
     });
 
     sendSuccess(res, updated);
+  } catch (err) { next(err); }
+};
+
+export const softDeleteWorker = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    sendSuccess(res, await adminService.softDeleteWorker(req.params.id as string, reason));
+  } catch (err) { next(err); }
+};
+
+export const hardDeleteWorker = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    sendSuccess(res, await adminService.hardDeleteWorker(req.params.id as string, reason));
   } catch (err) { next(err); }
 };

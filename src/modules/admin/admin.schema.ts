@@ -193,6 +193,22 @@ export type BroadcastInput        = z.infer<typeof broadcastNotificationSchema>;
 export type SubscriptionUpdate    = z.infer<typeof subscriptionUpdateSchema>;
 export type UlipLogsQuery         = z.infer<typeof ulipLogsQuerySchema>;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Enterprise Management Schemas
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const deleteEntitySchema = z.object({
+  reason:    z.string().min(3, 'Reason is required'),
+  permanent: z.boolean().default(false),
+});
+
+export const driverStatusOverrideSchema = z.object({
+  status: z.enum(['OFFLINE', 'AVAILABLE', 'BREAK']),
+});
+
+export type DeleteEntityInput         = z.infer<typeof deleteEntitySchema>;
+export type DriverStatusOverrideInput = z.infer<typeof driverStatusOverrideSchema>;
+
 export const VerifyWorkerDocumentSchema = z.object({
   approve: z.boolean(),
   aadhaarNumber: z.string().optional(),

@@ -49,6 +49,8 @@ adminRouter.get('/users/:id',                         ctrl.getUser);
 adminRouter.patch('/users/:id/status',                ctrl.setUserStatus);
 adminRouter.delete('/users/:id/sessions',             ctrl.forceLogoutUser);
 adminRouter.post('/users/:id/wallet-credit',          ctrl.creditWallet);
+adminRouter.delete('/users/:id/soft',                 ctrl.softDeleteUser);
+adminRouter.delete('/users/:id/hard',                 ctrl.hardDeleteUser);
 
 // ── Drivers ───────────────────────────────────────────────────────────────────
 adminRouter.get('/drivers',                                          ctrl.listDrivers);
@@ -56,11 +58,18 @@ adminRouter.get('/drivers/:id',                                      ctrl.getDri
 adminRouter.patch('/drivers/:id/documents/:docId/status',            ctrl.updateDocStatus);
 adminRouter.patch('/drivers/:id/doc-verified',                       ctrl.setDocVerified);
 adminRouter.get('/drivers/:id/verification-logs',                    ctrl.getDriverVerifLogs);
+adminRouter.patch('/drivers/:id/block',                              ctrl.blockDriver);
+adminRouter.patch('/drivers/:id/status-override',                    ctrl.overrideDriverStatus);
+adminRouter.delete('/drivers/:id/soft',                              ctrl.softDeleteDriver);
+adminRouter.delete('/drivers/:id/hard',                              ctrl.hardDeleteDriver);
 
 // ── Fleet Owners ──────────────────────────────────────────────────────────────
 adminRouter.get('/fleet-owners',                      ctrl.listFleetOwners);
 adminRouter.get('/fleet-owners/:id',                  ctrl.getFleetOwner);
 adminRouter.patch('/fleet-owners/:id/status',         ctrl.setFleetOwnerStatus);
+adminRouter.post('/fleet-owners/:id/wallet-credit',   ctrl.creditFleetOwnerWallet);
+adminRouter.delete('/fleet-owners/:id/soft',          ctrl.softDeleteFleetOwner);
+adminRouter.delete('/fleet-owners/:id/hard',          ctrl.hardDeleteFleetOwner);
 
 // ── Workforce & Gigs ──────────────────────────────────────────────────────────
 import * as workforceAdminCtrl from '@modules/workforce/workforce.admin.controller';
@@ -70,6 +79,8 @@ adminRouter.get('/workforce/:id',                     workforceAdminCtrl.getWork
 adminRouter.patch('/workforce/:id/bank',              workforceAdminCtrl.updateWorkerBankDetails);
 adminRouter.patch('/workforce/:id/suspend',           workforceAdminCtrl.suspendWorker);
 adminRouter.patch('/workforce/:id/revoke-verification', workforceAdminCtrl.revokeVerification);
+adminRouter.delete('/workforce/:id/soft',             workforceAdminCtrl.softDeleteWorker);
+adminRouter.delete('/workforce/:id/hard',             workforceAdminCtrl.hardDeleteWorker);
 adminRouter.get('/workforce-bookings',                gigCtrl.getAllGigsAdmin);
 adminRouter.get('/workforce-bookings/:id',            gigCtrl.getGigByIdAdmin);
 adminRouter.get('/gigs',                              gigCtrl.getAllGigsAdmin);
