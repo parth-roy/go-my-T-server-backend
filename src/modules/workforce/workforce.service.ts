@@ -116,8 +116,8 @@ export async function sendOtp(input: SendOtpInput): Promise<{ message: string }>
     if (token) {
       try {
         await notificationService.sendToDevice(token, {
-          title: 'Your OTP',
-          body: `Your GoMyTruck Workforce OTP is ${otp}. Valid for 5 minutes.`,
+          title: '🔐 Your MetroMitra OTP',
+          body: `Your MetroMitra verification code is: ${otp}. Valid for 5 minutes. Do not share with anyone.`,
           data: { type: 'WORKFORCE_OTP', otp },
         });
       } catch (err) {
