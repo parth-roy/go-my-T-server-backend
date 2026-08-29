@@ -5,9 +5,11 @@
 
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
-import { GigJobStatus, WorkerJobStatus } from '@prisma/client';
+import { GigJobStatus, WorkerJobStatus, NotificationType } from '@prisma/client';
 import { getSocketInstance } from '@shared/socket/socket.instance';
 import { logger } from '@shared/logger';
+import { notificationService } from '@modules/notifications/notification.service';
+import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { calculateGigFare, classifyZone } from './gig.pricing';
 import type { GigFareRequest, GigSkill, GigUrgency } from './gig.pricing.types';
 
@@ -243,6 +245,61 @@ export async function createGig(customerId: string, data: any) {
     });
   }
 
+  // 1. Notify the Hirer / Customer (In-App & Push)
+  const customer = await prisma.user.findUnique({
+    where: { id: customerId },
+    select: { id: true, fcmToken: true },
+  });
+
+  const categoryName = req.gigCategory || 'Service';
+  createNotification(
+    customerId,
+    '📋 Booking Placed!',
+    `Your booking #${gig.jobNumber} for ${categoryName} has been created. We are matching top service partners nearby.`,
+    NotificationType.BOOKING_STATUS,
+    gig.id,
+  ).catch((err) => logger.error('[Gig] In-app notification to customer failed:', err));
+
+  if (customer?.fcmToken) {
+    notificationService.sendToDevice(customer.fcmToken, {
+      title: '📋 Booking Placed!',
+      body: `Your #${gig.jobNumber} booking for ${categoryName} is active.`,
+      data: { type: 'BOOKING_UPDATE', gigId: gig.id },
+    }).catch((err) => logger.error('[Gig] FCM to customer failed:', err));
+  }
+
+  // 2. Notify available workers (In-App & Push)
+  prisma.worker.findMany({
+    where: {
+      status: 'AVAILABLE',
+      isDocVerified: true,
+      user: { isActive: true },
+    },
+    include: {
+      user: { select: { id: true, fcmToken: true } },
+    },
+    take: 15,
+  }).then((workers) => {
+    for (const w of workers) {
+      if (!w.user) continue;
+      createNotification(
+        w.user.id,
+        '🔔 New Job Available!',
+        `New ${categoryName} job nearby (${data.locationAddress ? data.locationAddress.substring(0, 40) : 'Active zone'}). Earn ₹${breakdown.workerEarnings}.`,
+        NotificationType.BOOKING_STATUS,
+        gig.id,
+      ).catch(() => {});
+
+      if (w.user.fcmToken) {
+        notificationService.sendToDevice(w.user.fcmToken, {
+          title: '🔔 New Job Available!',
+          body: `New ${categoryName} job nearby. Earn ₹${breakdown.workerEarnings}.`,
+          data: { type: 'NEW_JOB', gigId: gig.id },
+        }).catch(() => {});
+      }
+    }
+  }).catch((err) => logger.error('[Gig] Worker notification batch failed:', err));
+
   return { gig, fareBreakdown: breakdown };
 }
 
@@ -298,6 +355,19 @@ export async function getCustomerGigs(customerId: string) {
 export async function cancelGig(customerId: string, gigId: string, reason?: string) {
   const gig = await prisma.gigJob.findUnique({
     where: { id: gigId },
+    include: {
+      assignments: {
+        include: {
+          worker: {
+            include: {
+              user: {
+                select: { id: true, fcmToken: true },
+              },
+            },
+          },
+        },
+      },
+    },
   });
   if (!gig) throw AppError.notFound('Gig job not found');
   if (gig.customerId !== customerId) throw AppError.forbidden('You are not authorized to cancel this booking');
@@ -316,6 +386,56 @@ export async function cancelGig(customerId: string, gigId: string, reason?: stri
       assignments: true,
     },
   });
+
+  // 1. In-app notification to the Hirer
+  createNotification(
+    customerId,
+    '❌ Booking Cancelled',
+    `Your booking #${gig.jobNumber} has been cancelled.${reason ? ` Reason: ${reason}` : ''}`,
+    NotificationType.BOOKING_STATUS,
+    gigId,
+  ).catch((err) => logger.error('[Gig] Customer cancel in-app notification failed:', err));
+
+  // 2. Notify and release any assigned workers
+  for (const a of gig.assignments) {
+    if (['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(a.status)) {
+      prisma.gigAssignment.update({
+        where: { id: a.id },
+        data: { status: WorkerJobStatus.CANCELLED },
+      }).catch(() => {});
+
+      prisma.worker.update({
+        where: { id: a.workerId },
+        data: { status: 'AVAILABLE' },
+      }).catch(() => {});
+
+      if (a.worker?.user) {
+        createNotification(
+          a.worker.user.id,
+          '❌ Job Cancelled',
+          `Booking #${gig.jobNumber} has been cancelled by the hirer.${reason ? ` Reason: ${reason}` : ''}`,
+          NotificationType.BOOKING_STATUS,
+          gigId,
+        ).catch(() => {});
+
+        if (a.worker.user.fcmToken) {
+          notificationService.sendToDevice(a.worker.user.fcmToken, {
+            title: '❌ Job Cancelled',
+            body: `Job #${gig.jobNumber} was cancelled by the hirer.`,
+            data: { type: 'JOB_CANCELLED', gigId },
+          }).catch(() => {});
+        }
+      }
+    }
+  }
+
+  const io = getSocketInstance();
+  if (io) {
+    io.of('/workforce').to(`gig:${gigId}`).emit('gig_cancelled', {
+      gigId,
+      reason,
+    });
+  }
 
   return updated;
 }

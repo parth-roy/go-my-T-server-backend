@@ -779,13 +779,57 @@ export async function acceptJob(userId: string, bookingId: string) {
     });
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } });
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true, name: true } });
   if (user?.fcmToken) {
     notificationService.sendToDevice(user.fcmToken, {
       title: '✅ Job Confirmed!',
-      body: `You have accepted the job. Head to the pickup location. Payout: ₹${assignment.payoutAmount}`,
+      body: `You have accepted the job. Head to the location. Payout: ₹${assignment.payoutAmount}`,
       data: { type: 'JOB_ACCEPTED', assignmentId: assignment.id },
     }).catch((err: any) => logger.error('[Workforce] FCM accept notification failed:', err));
+  }
+  await createNotification(
+    userId,
+    '✅ Job Confirmed!',
+    `You accepted job #${bookingId.substring(0, 8)}. Payout: ₹${assignment.payoutAmount}. Please reach the location on time.`,
+    NotificationType.BOOKING_STATUS,
+    bookingId,
+  );
+
+  // Notify Hirer (Push & In-App)
+  try {
+    let customerId: string | undefined;
+    let jobNumber = 'Job';
+    if (isGig) {
+      const gig = await prisma.gigJob.findUnique({ where: { id: bookingId }, select: { customerId: true, jobNumber: true } });
+      customerId = gig?.customerId;
+      jobNumber = gig?.jobNumber ?? 'Job';
+    } else {
+      const booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { customerId: true, bookingNumber: true } });
+      customerId = booking?.customerId;
+      jobNumber = booking?.bookingNumber ?? 'Job';
+    }
+
+    if (customerId) {
+      const partnerName = user?.name || 'A service partner';
+      createNotification(
+        customerId,
+        '👷 Partner Assigned!',
+        `${partnerName} has accepted your booking #${jobNumber}.`,
+        NotificationType.BOOKING_STATUS,
+        bookingId,
+      ).catch(() => {});
+
+      const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { fcmToken: true } });
+      if (customer?.fcmToken) {
+        notificationService.sendToDevice(customer.fcmToken, {
+          title: '👷 Partner Assigned!',
+          body: `${partnerName} has accepted your booking #${jobNumber}.`,
+          data: { type: 'BOOKING_UPDATE', bookingId },
+        }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    logger.error('[Workforce] Failed to notify hirer on accept:', err);
   }
 
   return { accepted: true, assignment, allSlotsFilled: newAcceptedCount >= totalSlots };
@@ -870,12 +914,59 @@ export async function markArrived(userId: string, assignmentId: string) {
   }
 
   let updated;
+  const targetId = isGig ? assignment.gigId : assignment.bookingId;
   if (isGig) {
     updated = await prisma.gigAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.ARRIVED, arrivedAt: new Date() } });
     emitToBookingRoom(assignment.gigId, 'worker_arrived', { assignmentId: assignment.id, workerId: worker.id });
   } else {
     updated = await prisma.jobAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.ARRIVED, arrivedAt: new Date() } });
     emitToBookingRoom(assignment.bookingId, 'worker_arrived', { assignmentId: assignment.id, workerId: worker.id });
+  }
+
+  // Notify Worker
+  createNotification(
+    userId,
+    '📍 Arrival Recorded',
+    'You marked arrival. Meet the customer to start the service.',
+    NotificationType.BOOKING_STATUS,
+    targetId,
+  ).catch(() => {});
+
+  // Notify Hirer
+  try {
+    let customerId: string | undefined;
+    let jobNumber = 'Job';
+    if (isGig) {
+      const gig = await prisma.gigJob.findUnique({ where: { id: targetId }, select: { customerId: true, jobNumber: true } });
+      customerId = gig?.customerId;
+      jobNumber = gig?.jobNumber ?? 'Job';
+    } else {
+      const booking = await prisma.booking.findUnique({ where: { id: targetId }, select: { customerId: true, bookingNumber: true } });
+      customerId = booking?.customerId;
+      jobNumber = booking?.bookingNumber ?? 'Job';
+    }
+    if (customerId) {
+      const workerUser = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+      const partnerName = workerUser?.name || 'Your service partner';
+      createNotification(
+        customerId,
+        '📍 Partner Arrived!',
+        `${partnerName} has arrived at your location for #${jobNumber}.`,
+        NotificationType.BOOKING_STATUS,
+        targetId,
+      ).catch(() => {});
+
+      const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { fcmToken: true } });
+      if (customer?.fcmToken) {
+        notificationService.sendToDevice(customer.fcmToken, {
+          title: '📍 Partner Arrived!',
+          body: `${partnerName} has arrived at your location for #${jobNumber}.`,
+          data: { type: 'BOOKING_UPDATE', bookingId: targetId },
+        }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    logger.error('[Workforce] Failed to notify hirer on arrival:', err);
   }
 
   return updated;
@@ -915,12 +1006,59 @@ export async function startJob(userId: string, assignmentId: string) {
   }
 
   let updated;
+  const targetId = isGig ? assignment.gigId : assignment.bookingId;
   if (isGig) {
     updated = await prisma.gigAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.IN_PROGRESS, startedAt: new Date() } });
     emitToBookingRoom(assignment.gigId, 'worker_started', { assignmentId: assignment.id, workerId: worker.id });
   } else {
     updated = await prisma.jobAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.IN_PROGRESS, startedAt: new Date() } });
     emitToBookingRoom(assignment.bookingId, 'worker_started', { assignmentId: assignment.id, workerId: worker.id });
+  }
+
+  // Notify Worker
+  createNotification(
+    userId,
+    '⚡ Job In Progress',
+    'Work has started. Complete tasks and request OTP when done.',
+    NotificationType.BOOKING_STATUS,
+    targetId,
+  ).catch(() => {});
+
+  // Notify Hirer
+  try {
+    let customerId: string | undefined;
+    let jobNumber = 'Job';
+    if (isGig) {
+      const gig = await prisma.gigJob.findUnique({ where: { id: targetId }, select: { customerId: true, jobNumber: true } });
+      customerId = gig?.customerId;
+      jobNumber = gig?.jobNumber ?? 'Job';
+    } else {
+      const booking = await prisma.booking.findUnique({ where: { id: targetId }, select: { customerId: true, bookingNumber: true } });
+      customerId = booking?.customerId;
+      jobNumber = booking?.bookingNumber ?? 'Job';
+    }
+    if (customerId) {
+      const workerUser = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+      const partnerName = workerUser?.name || 'Your service partner';
+      createNotification(
+        customerId,
+        '⚡ Service Started',
+        `${partnerName} has started work on #${jobNumber}.`,
+        NotificationType.BOOKING_STATUS,
+        targetId,
+      ).catch(() => {});
+
+      const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { fcmToken: true } });
+      if (customer?.fcmToken) {
+        notificationService.sendToDevice(customer.fcmToken, {
+          title: '⚡ Service Started',
+          body: `${partnerName} has started work on #${jobNumber}.`,
+          data: { type: 'BOOKING_UPDATE', bookingId: targetId },
+        }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    logger.error('[Workforce] Failed to notify hirer on start:', err);
   }
 
   return updated;
@@ -1103,6 +1241,41 @@ export async function completeJob(userId: string, assignmentId: string, input: C
   if (pendingWorkers === 0) {
     emitToBookingRoom(assignment.bookingId, 'all_workers_completed', { bookingId: assignment.bookingId });
     logger.info(`[Workforce] All workers completed for booking ${assignment.bookingId}`);
+
+    // Notify Hirer
+    try {
+      let customerId: string | undefined;
+      let jobNumber = 'Job';
+      if (isGig) {
+        const gig = await prisma.gigJob.findUnique({ where: { id: assignment.bookingId }, select: { customerId: true, jobNumber: true } });
+        customerId = gig?.customerId;
+        jobNumber = gig?.jobNumber ?? 'Job';
+      } else {
+        const booking = await prisma.booking.findUnique({ where: { id: assignment.bookingId }, select: { customerId: true, bookingNumber: true } });
+        customerId = booking?.customerId;
+        jobNumber = booking?.bookingNumber ?? 'Job';
+      }
+      if (customerId) {
+        createNotification(
+          customerId,
+          '🎉 Job Completed!',
+          `Service for #${jobNumber} has been completed successfully. Thank you for choosing MetroMitra!`,
+          NotificationType.BOOKING_STATUS,
+          assignment.bookingId,
+        ).catch(() => {});
+
+        const customer = await prisma.user.findUnique({ where: { id: customerId }, select: { fcmToken: true } });
+        if (customer?.fcmToken) {
+          notificationService.sendToDevice(customer.fcmToken, {
+            title: '🎉 Job Completed!',
+            body: `Service for #${jobNumber} has been completed successfully.`,
+            data: { type: 'BOOKING_UPDATE', bookingId: assignment.bookingId },
+          }).catch(() => {});
+        }
+      }
+    } catch (err) {
+      logger.error('[Workforce] Failed to notify hirer on job completion:', err);
+    }
   }
 
   logger.info(`[Workforce] Worker ${worker.id} completed job ${assignmentId}. Payout: ₹${workerNet} (Commission: ₹${commission})`);

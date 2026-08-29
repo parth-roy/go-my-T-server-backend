@@ -14,4 +14,6 @@ notificationRouter.post('/subscribe', notificationController.subscribe);
 notificationRouter.use(authenticate);
 notificationRouter.get('/me', InAppController.listNotifications);
 notificationRouter.patch('/read-all', InAppController.markAllRead);
+notificationRouter.delete('/clear-all', InAppController.clearAll);
 notificationRouter.patch('/:id/read', InAppController.markOneRead);
+notificationRouter.delete('/:id', InAppController.deleteOne);

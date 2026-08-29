@@ -38,3 +38,24 @@ export async function markAllRead(req: Request, res: Response, next: NextFunctio
         next(err);
     }
 }
+
+export async function deleteOne(req: Request, res: Response, next: NextFunction) {
+    try {
+        const id = req.params['id'] as string;
+        if (!id) throw AppError.badRequest('Notification ID is required');
+
+        const result = await InAppService.deleteOne(id, req.user!.id);
+        sendSuccess(res, result, 'Notification deleted');
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function clearAll(req: Request, res: Response, next: NextFunction) {
+    try {
+        const result = await InAppService.clearAll(req.user!.id);
+        sendSuccess(res, result, 'All notifications cleared');
+    } catch (err) {
+        next(err);
+    }
+}

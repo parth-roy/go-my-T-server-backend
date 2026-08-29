@@ -85,3 +85,34 @@ export async function markAllRead(userId: string) {
 
     return { updatedCount: result.count };
 }
+
+// ─────────────────────────────────────────────
+// DELETE ONE NOTIFICATION
+// ─────────────────────────────────────────────
+
+export async function deleteOne(notificationId: string, userId: string) {
+    const notification = await prisma.userNotification.findUnique({
+        where: { id: notificationId },
+    });
+
+    if (!notification) throw AppError.notFound('Notification not found');
+    if (notification.userId !== userId) throw AppError.forbidden('Access denied');
+
+    await prisma.userNotification.delete({
+        where: { id: notificationId },
+    });
+
+    return { deleted: true, id: notificationId };
+}
+
+// ─────────────────────────────────────────────
+// CLEAR ALL NOTIFICATIONS
+// ─────────────────────────────────────────────
+
+export async function clearAll(userId: string) {
+    const result = await prisma.userNotification.deleteMany({
+        where: { userId },
+    });
+
+    return { deletedCount: result.count };
+}
