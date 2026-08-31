@@ -22,6 +22,8 @@ userRouter.use(authenticate);
 userRouter.get('/me', UserController.getProfile);
 userRouter.get('/me/stats', UserController.getStats);
 userRouter.patch('/me', validate(updateProfileSchema), UserController.updateProfile);
+userRouter.put('/me', validate(updateProfileSchema), UserController.updateProfile);
+userRouter.patch('/me/fcm-token', validate(updateFcmTokenSchema), UserController.updateFcmToken);
 userRouter.put('/me/fcm-token', validate(updateFcmTokenSchema), UserController.updateFcmToken);
 
 // POST /api/v1/users/me/avatar — upload profile picture (max 3 MB JPEG/PNG/WEBP)
