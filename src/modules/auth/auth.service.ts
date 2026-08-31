@@ -562,14 +562,33 @@ export async function socialLogin(input: SocialLoginInput) {
     const updateData: any = {};
     if (!user.firebaseUid) updateData.firebaseUid = uid;
     if (!user.profileImageUrl && picture) updateData.profileImageUrl = picture;
-    if (input.fcmToken && user.fcmToken !== input.fcmToken) updateData.fcmToken = input.fcmToken;
-
     if (Object.keys(updateData).length > 0) {
       user = await prisma.user.update({
         where: { id: user.id },
         data: updateData,
       });
     }
+  }
+
+  if (user.role === 'WORKER') {
+    await prisma.worker.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        isActive: true,
+        status: 'OFFLINE',
+      },
+    });
+
+    await prisma.wallet.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        balance: 0,
+      },
+    });
   }
 
   const tokens = await issueTokenPair(user.id, user.phone, user.role);
