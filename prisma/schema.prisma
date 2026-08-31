@@ -263,11 +263,13 @@ enum LaborType {
 
 model User {
   id                   String   @id @default(uuid())
-  phone                String   @unique
+  phone                String?  @unique
   name                 String?
   email                String?  @unique
   profileImageUrl      String?
   role                 UserRole @default(CUSTOMER)
+  authProvider         String?  @default("PHONE")
+  firebaseUid          String?  @unique
   isActive             Boolean  @default(true)
   language             String   @default("en")
   notificationsEnabled Boolean  @default(true)

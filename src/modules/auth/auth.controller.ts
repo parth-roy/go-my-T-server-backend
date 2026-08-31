@@ -38,6 +38,15 @@ export async function logout(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+export async function socialLogin(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await AuthService.socialLogin(req.body);
+    sendSuccess(res, result, 'Authenticated successfully with social provider');
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getMe(req: Request, res: Response, next: NextFunction) {
   try {
     // req.user is set by the auth middleware

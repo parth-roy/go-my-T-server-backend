@@ -2,12 +2,12 @@ import { prisma } from '@shared/db/prisma';
 import jwt from 'jsonwebtoken';
 import { randomInt } from 'crypto';
 import { getRedis } from '@config/redis';
-import { getMessaging } from '@config/firebase';
+import { getMessaging, getFirebase } from '@config/firebase';
 import { env } from '@config/env';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { eventBus } from '@shared/eventbus';
-import type { SendOtpInput, VerifyOtpInput, RefreshInput } from './auth.schema';
+import type { SendOtpInput, VerifyOtpInput, RefreshInput, SocialLoginInput } from './auth.schema';
 
 const redis = getRedis();
 
@@ -434,9 +434,9 @@ export async function logout(refreshToken: string) {
 // ─────────────────────────────────────────────
 // INTERNAL: Issue access + refresh token pair
 // ─────────────────────────────────────────────
-async function issueTokenPair(userId: string, phone: string, role: string) {
+async function issueTokenPair(userId: string, phone: string | null | undefined, role: string) {
   const accessToken = jwt.sign(
-    { userId, phone, role },
+    { userId, phone: phone || '', role },
     env.JWT_ACCESS_SECRET,
     { expiresIn: env.JWT_ACCESS_EXPIRES as any }  // '15m'
   );
@@ -507,4 +507,85 @@ export async function getMe(userId: string) {
   }
 
   return user;
+}
+
+// ─────────────────────────────────────────────
+// SOCIAL LOGIN (Firebase Token Verification)
+// ─────────────────────────────────────────────
+export async function socialLogin(input: SocialLoginInput) {
+  let decodedToken;
+  try {
+    decodedToken = await getFirebase().auth().verifyIdToken(input.idToken);
+  } catch (error: any) {
+    logger.error(`[Social Auth] Failed to verify Firebase token: ${error.message}`);
+    throw AppError.unauthorized('Invalid or expired social authentication token');
+  }
+
+  const { email, name, picture, uid, phone_number } = decodedToken;
+  const normalizedEmail = email?.trim().toLowerCase();
+
+  if (!normalizedEmail && !uid) {
+    throw AppError.badRequest('Unable to extract user identity from social token');
+  }
+
+  // Find user by email or firebaseUid or phone
+  let user = await prisma.user.findFirst({
+    where: {
+      OR: [
+        ...(normalizedEmail ? [{ email: normalizedEmail }] : []),
+        { firebaseUid: uid },
+        ...(phone_number ? [{ phone: phone_number }] : []),
+      ],
+    },
+  });
+
+  let isNewUser = false;
+  if (!user) {
+    isNewUser = true;
+    user = await prisma.user.create({
+      data: {
+        email: normalizedEmail || null,
+        name: name || 'MetroMitra User',
+        profileImageUrl: picture || null,
+        phone: phone_number || null,
+        firebaseUid: uid,
+        authProvider: input.provider,
+        role: input.role as any,
+        fcmToken: input.fcmToken || null,
+        isActive: true,
+        profileComplete: false,
+      },
+    });
+    logger.info(`[Social Auth] Created new user: ${user.id} (${normalizedEmail || uid}) with role ${input.role}`);
+  } else {
+    // Update existing user's details if needed
+    const updateData: any = {};
+    if (!user.firebaseUid) updateData.firebaseUid = uid;
+    if (!user.profileImageUrl && picture) updateData.profileImageUrl = picture;
+    if (input.fcmToken && user.fcmToken !== input.fcmToken) updateData.fcmToken = input.fcmToken;
+
+    if (Object.keys(updateData).length > 0) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: updateData,
+      });
+    }
+  }
+
+  const tokens = await issueTokenPair(user.id, user.phone, user.role);
+
+  return {
+    ...tokens,
+    user: {
+      id: user.id,
+      phone: user.phone,
+      name: user.name,
+      email: user.email,
+      profileImageUrl: user.profileImageUrl,
+      role: user.role,
+      profileComplete: user.profileComplete,
+    },
+    isNewUser,
+    isProfileComplete: user.profileComplete,
+  };
 }

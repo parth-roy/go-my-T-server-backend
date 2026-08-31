@@ -7,6 +7,7 @@ import {
   verifyOtpSchema,
   refreshSchema,
   logoutSchema,
+  socialLoginSchema,
 } from './auth.schema';
 
 export const authRouter = Router();
@@ -16,6 +17,13 @@ authRouter.get(
   '/me',
   authenticate,
   AuthController.getMe
+);
+
+// POST /api/v1/auth/social-login
+authRouter.post(
+  '/social-login',
+  validate(socialLoginSchema),
+  AuthController.socialLogin
 );
 
 // POST /api/v1/auth/send-otp

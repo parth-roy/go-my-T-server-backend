@@ -32,7 +32,15 @@ export const logoutSchema = z.object({
   refreshToken: z.string().min(1, 'Refresh token is required'),
 });
 
+export const socialLoginSchema = z.object({
+  idToken: z.string().min(10, 'Firebase ID token is required'),
+  provider: z.enum(['GOOGLE', 'FACEBOOK', 'LINKEDIN']).default('GOOGLE'),
+  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']).optional().default('WORKER'),
+  fcmToken: z.string().optional(),
+});
+
 export type SendOtpInput = z.infer<typeof sendOtpSchema>;
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type LogoutInput = z.infer<typeof logoutSchema>;
+export type SocialLoginInput = z.infer<typeof socialLoginSchema>;

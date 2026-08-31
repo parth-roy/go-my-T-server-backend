@@ -315,7 +315,7 @@ export async function digilockerVerifyOtp(req: Request, res: Response, next: Nex
 
     // ── Step 02: Verify OTP ──
     const step02 = await verifyDigilockerOtp({
-      mobile: worker.user.phone,
+      mobile: worker.user.phone || '',
       otp,
       codeChallenge: worker.digiCodeChallenge,
       codeVerifier: worker.digiCodeVerifier,
