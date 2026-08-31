@@ -275,6 +275,10 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     updateData.fcmToken = tokenToSave;
   }
 
+  if (role && existingUser && existingUser.role === 'CUSTOMER' && role !== 'CUSTOMER') {
+    updateData.role = role as any;
+  }
+
   // Find or create user
   const demoInfo = DEMO_ACCOUNTS[normalizedIdentifier];
   let user: any;
@@ -319,6 +323,28 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
         usageType: true,
         whatsappOptIn: true,
         profileComplete: true,
+      },
+    });
+  }
+
+  // Auto-provision Worker and Wallet if logging into Workforce app
+  if (user.role === 'WORKER') {
+    await prisma.worker.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        isActive: true,
+        status: 'OFFLINE',
+      },
+    });
+
+    await prisma.wallet.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        balance: 0,
       },
     });
   }
@@ -562,6 +588,10 @@ export async function socialLogin(input: SocialLoginInput) {
     const updateData: any = {};
     if (!user.firebaseUid) updateData.firebaseUid = uid;
     if (!user.profileImageUrl && picture) updateData.profileImageUrl = picture;
+    if (input.fcmToken && user.fcmToken !== input.fcmToken) updateData.fcmToken = input.fcmToken;
+    if (input.role && user.role !== input.role && (user.role === 'CUSTOMER' || !user.role)) {
+      updateData.role = input.role as any;
+    }
     if (Object.keys(updateData).length > 0) {
       user = await prisma.user.update({
         where: { id: user.id },
