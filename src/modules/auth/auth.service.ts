@@ -344,7 +344,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
       update: {},
       create: {
         userId: user.id,
-        balance: 0,
+        cachedBalance: 0,
       },
     });
   }
@@ -616,7 +616,7 @@ export async function socialLogin(input: SocialLoginInput) {
       update: {},
       create: {
         userId: user.id,
-        balance: 0,
+        cachedBalance: 0,
       },
     });
   }
