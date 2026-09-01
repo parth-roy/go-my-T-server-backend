@@ -9,6 +9,7 @@ export const updateProfileSchema = z.object({
   usageType: z.enum(['Business Usage', 'Personal Usage', 'House Shifting Usage']).optional(),
   whatsappOptIn: z.boolean().optional(),
   profileComplete: z.boolean().optional(),
+  consentToLinkEmail: z.boolean().optional(),
 });
 
 export const addAddressSchema = z.object({

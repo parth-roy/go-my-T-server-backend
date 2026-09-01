@@ -30,6 +30,7 @@ export function globalErrorHandler(
       success: false,
       message: err.message,
       code: err.code,
+      data: err.data,
     });
     return;
   }

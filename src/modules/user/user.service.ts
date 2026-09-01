@@ -204,9 +204,54 @@ export async function updateProfile(userId: string, data: UpdateProfileInput) {
     return getProfile(userId);
   }
 
+  const { consentToLinkEmail, ...updateData } = data;
+
+  // If updating email, check for cross-role or duplicate existence
+  if (updateData.email) {
+    const normalizedEmail = updateData.email.trim().toLowerCase();
+    updateData.email = normalizedEmail;
+
+    const existingUserWithEmail = await prisma.user.findFirst({
+      where: {
+        email: normalizedEmail,
+        id: { not: userId },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+      },
+    });
+
+    if (existingUserWithEmail) {
+      if (consentToLinkEmail !== true) {
+        throw new AppError(
+          `The email ${normalizedEmail} is already associated with a ${existingUserWithEmail.role} account.`,
+          409,
+          'EMAIL_EXISTS_CROSS_ROLE',
+          true,
+          {
+            email: normalizedEmail,
+            existingRole: existingUserWithEmail.role,
+            existingName: existingUserWithEmail.name,
+            message: `This email is already registered with a ${existingUserWithEmail.role} account on MetroMitra. Do you declare and consent to link this email to your account?`,
+          }
+        );
+      }
+
+      // User gave explicit declaration and consent to link/reassign this email
+      await prisma.user.update({
+        where: { id: existingUserWithEmail.id },
+        data: { email: null },
+      });
+    }
+  }
+
   const updated = await prisma.user.update({
     where: { id: userId },
-    data,
+    data: updateData,
     select: {
       id: true,
       phone: true,
