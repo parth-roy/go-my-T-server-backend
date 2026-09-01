@@ -7,7 +7,7 @@ export const sendOtpSchema = z.object({
       message: 'Enter a valid 10-digit mobile number or email address',
     }),
   fcmToken: z.string().optional(), // FCM device token — OTP is delivered via push notification
-  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER']).optional().default('CUSTOMER'),
+  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']).optional().default('CUSTOMER'),
 });
 
 export const verifyOtpSchema = z.object({
@@ -21,7 +21,7 @@ export const verifyOtpSchema = z.object({
     .length(6, 'OTP must be 6 digits')
     .regex(/^\d+$/, 'OTP must be numeric'),
   fcmToken: z.string().optional(), // Firebase Cloud Messaging token
-  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER']).optional().default('CUSTOMER'),
+  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']).optional().default('CUSTOMER'),
 });
 
 export const refreshSchema = z.object({
@@ -39,8 +39,13 @@ export const socialLoginSchema = z.object({
   fcmToken: z.string().optional(),
 });
 
+export const switchRoleSchema = z.object({
+  targetRole: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']),
+});
+
 export type SendOtpInput = z.infer<typeof sendOtpSchema>;
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type LogoutInput = z.infer<typeof logoutSchema>;
 export type SocialLoginInput = z.infer<typeof socialLoginSchema>;
+export type SwitchRoleInput = z.infer<typeof switchRoleSchema>;

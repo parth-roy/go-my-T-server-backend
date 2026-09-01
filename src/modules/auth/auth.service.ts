@@ -1,4 +1,5 @@
 import { prisma } from '@shared/db/prisma';
+import { UserRole } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import { randomInt } from 'crypto';
 import { getRedis } from '@config/redis';
@@ -511,6 +512,14 @@ export async function getMe(userId: string) {
       usageType: true,
       whatsappOptIn: true,
       profileComplete: true,
+      worker: {
+        select: {
+          id: true,
+          isActive: true,
+          status: true,
+          isDocVerified: true,
+        },
+      },
       // If the role is DRIVER, also fetch the driver profile info for onboarding resume
       driver: {
         select: {
@@ -525,6 +534,13 @@ export async function getMe(userId: string) {
           },
         },
       },
+      fleetOwner: {
+        select: {
+          id: true,
+          companyName: true,
+          isVerified: true,
+        },
+      },
     },
   });
 
@@ -532,7 +548,95 @@ export async function getMe(userId: string) {
     throw AppError.notFound('User not found');
   }
 
-  return user;
+  const availableRoles: string[] = ['CUSTOMER'];
+  if (user.worker) availableRoles.push('WORKER');
+  if (user.driver) availableRoles.push('DRIVER');
+  if (user.fleetOwner) availableRoles.push('FLEET_OWNER');
+
+  return {
+    ...user,
+    hasWorkerProfile: !!user.worker,
+    hasDriverProfile: !!user.driver,
+    hasFleetOwnerProfile: !!user.fleetOwner,
+    availableRoles,
+  };
+}
+
+// ─────────────────────────────────────────────
+// SWITCH ROLE (Multi-Persona Context Switcher)
+// ─────────────────────────────────────────────
+export async function switchRole(userId: string, targetRole: UserRole) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      worker: true,
+      driver: true,
+      fleetOwner: true,
+    },
+  });
+
+  if (!user) {
+    throw AppError.notFound('User not found');
+  }
+
+  // If switching to WORKER, ensure baseline worker profile and wallet exist
+  if (targetRole === 'WORKER') {
+    await prisma.worker.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        isActive: true,
+        status: 'OFFLINE',
+      },
+    });
+
+    await prisma.wallet.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        cachedBalance: 0,
+      },
+    });
+  }
+
+  // Update user's active role in DB
+  const updatedUser = await prisma.user.update({
+    where: { id: user.id },
+    data: { role: targetRole },
+    select: {
+      id: true,
+      phone: true,
+      name: true,
+      email: true,
+      profileImageUrl: true,
+      role: true,
+      usageType: true,
+      whatsappOptIn: true,
+      profileComplete: true,
+    },
+  });
+
+  // Issue fresh tokens with the targetRole in the JWT payload
+  const tokens = await issueTokenPair(updatedUser.id, updatedUser.phone, targetRole);
+
+  const availableRoles: string[] = ['CUSTOMER'];
+  if (user.worker || targetRole === 'WORKER') availableRoles.push('WORKER');
+  if (user.driver) availableRoles.push('DRIVER');
+  if (user.fleetOwner) availableRoles.push('FLEET_OWNER');
+
+  return {
+    ...tokens,
+    user: {
+      ...updatedUser,
+      hasWorkerProfile: !!user.worker || targetRole === 'WORKER',
+      hasDriverProfile: !!user.driver,
+      hasFleetOwnerProfile: !!user.fleetOwner,
+      availableRoles,
+    },
+    activeRole: targetRole,
+  };
 }
 
 // ─────────────────────────────────────────────

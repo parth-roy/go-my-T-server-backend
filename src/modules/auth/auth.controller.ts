@@ -56,3 +56,13 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
     next(err);
   }
 }
+
+export async function switchRole(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { targetRole } = req.body;
+    const result = await AuthService.switchRole(req.user!.id, targetRole);
+    sendSuccess(res, result, `Switched to ${targetRole} mode successfully`);
+  } catch (err) {
+    next(err);
+  }
+}

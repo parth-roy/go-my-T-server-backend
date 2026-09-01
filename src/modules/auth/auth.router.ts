@@ -8,6 +8,7 @@ import {
   refreshSchema,
   logoutSchema,
   socialLoginSchema,
+  switchRoleSchema,
 } from './auth.schema';
 
 export const authRouter = Router();
@@ -17,6 +18,14 @@ authRouter.get(
   '/me',
   authenticate,
   AuthController.getMe
+);
+
+// POST /api/v1/auth/switch-role
+authRouter.post(
+  '/switch-role',
+  authenticate,
+  validate(switchRoleSchema),
+  AuthController.switchRole
 );
 
 // POST /api/v1/auth/social-login
