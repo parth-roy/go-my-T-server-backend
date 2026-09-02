@@ -61,3 +61,12 @@ export async function exportManualBookingsCsv(req: Request, res: Response, next:
     next(err);
   }
 }
+
+export async function getMatchedDrivers(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await service.getMatchedDriversForBooking(req.params.id as string, req.query);
+    return ok(res, result);
+  } catch (err) {
+    next(err);
+  }
+}

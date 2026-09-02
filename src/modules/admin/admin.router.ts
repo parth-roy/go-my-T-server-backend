@@ -49,6 +49,7 @@ adminRouter.get('/manual-bookings/export',            manualBookingCtrl.exportMa
 adminRouter.get('/manual-bookings',                   manualBookingCtrl.listManualBookings);
 adminRouter.post('/manual-bookings',                  manualBookingCtrl.createManualBooking);
 adminRouter.get('/manual-bookings/:id',               manualBookingCtrl.getManualBookingById);
+adminRouter.get('/manual-bookings/:id/matched-drivers', manualBookingCtrl.getMatchedDrivers);
 adminRouter.patch('/manual-bookings/:id',             manualBookingCtrl.updateManualBooking);
 adminRouter.delete('/manual-bookings/:id',            manualBookingCtrl.deleteManualBooking);
 
