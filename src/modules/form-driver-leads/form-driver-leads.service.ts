@@ -228,39 +228,129 @@ export class FormDriverLeadService {
     };
   }
 
+  /** Returns distinct states, districts, and cities for cascading search comboboxes */
+  async getFilterOptions() {
+    const leads = await prisma.formDriverLead.findMany({
+      select: {
+        state: true,
+        givenState: true,
+        givenDistrict: true,
+        city: true,
+      },
+    });
+
+    const statesSet = new Set<string>();
+    const districtsList: { state: string; district: string }[] = [];
+    const citiesList: { state: string; district: string; city: string }[] = [];
+
+    const districtKeys = new Set<string>();
+    const cityKeys = new Set<string>();
+
+    for (const lead of leads) {
+      const state = (lead.givenState || lead.state || '').trim();
+      const district = (lead.givenDistrict || '').trim();
+      const city = (lead.city || '').trim();
+
+      if (state) statesSet.add(state);
+
+      if (district) {
+        const key = `${state}::${district}`;
+        if (!districtKeys.has(key)) {
+          districtKeys.add(key);
+          districtsList.push({ state, district });
+        }
+      }
+
+      if (city) {
+        const key = `${state}::${district}::${city}`;
+        if (!cityKeys.has(key)) {
+          cityKeys.add(key);
+          citiesList.push({ state, district, city });
+        }
+      }
+    }
+
+    return {
+      states: Array.from(statesSet).sort(),
+      districts: districtsList.sort((a, b) => a.district.localeCompare(b.district)),
+      cities: citiesList.sort((a, b) => a.city.localeCompare(b.city)),
+    };
+  }
+
   /**
-   * Lightweight map-pins endpoint — viewport bounding-box filtered.
+   * Lightweight map-pins endpoint — viewport bounding-box and filter aware.
    * Returns only the fields needed to render a cluster map (id, lat, lng, vehicleType, status, name, city).
-   * Capped at 3000 pins — more than enough for clustering to work at any zoom level.
+   * Capped at 3000 pins.
    */
   async getMapPins(params: {
     swLat?: number;
     swLng?: number;
     neLat?: number;
     neLng?: number;
+    search?: string;
+    state?: string;
+    city?: string;
+    district?: string;
     vehicleType?: string;
     status?: string;
   }) {
-    const where: any = {
-      givenLat: { not: null },
-      givenLng: { not: null },
-    };
+    const andClauses: any[] = [
+      { givenLat: { not: null } },
+      { givenLng: { not: null } },
+    ];
 
     // Viewport bounding-box spatial filter
     if (
       params.swLat != null && params.swLng != null &&
       params.neLat != null && params.neLng != null
     ) {
-      where.givenLat = { gte: params.swLat, lte: params.neLat };
-      where.givenLng = { gte: params.swLng, lte: params.neLng };
+      andClauses.push({
+        givenLat: { gte: params.swLat, lte: params.neLat },
+        givenLng: { gte: params.swLng, lte: params.neLng },
+      });
+    }
+
+    if (params.search?.trim()) {
+      const q = params.search.trim();
+      andClauses.push({
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { phone: { contains: q, mode: 'insensitive' } },
+          { city: { contains: q, mode: 'insensitive' } },
+          { transportHub: { contains: q, mode: 'insensitive' } },
+          { vehicleNumber: { contains: q, mode: 'insensitive' } },
+          { givenDistrict: { contains: q, mode: 'insensitive' } },
+          { givenState: { contains: q, mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    if (params.state?.trim()) {
+      andClauses.push({
+        OR: [
+          { state: { contains: params.state.trim(), mode: 'insensitive' } },
+          { givenState: { contains: params.state.trim(), mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    if (params.city?.trim()) {
+      andClauses.push({ city: { contains: params.city.trim(), mode: 'insensitive' } });
+    }
+
+    if (params.district?.trim()) {
+      andClauses.push({ givenDistrict: { contains: params.district.trim(), mode: 'insensitive' } });
     }
 
     if (params.vehicleType?.trim() && params.vehicleType !== 'ALL') {
-      where.vehicleType = params.vehicleType as any;
+      andClauses.push({ vehicleType: params.vehicleType as any });
     }
+
     if (params.status?.trim() && params.status !== 'ALL') {
-      where.status = params.status as any;
+      andClauses.push({ status: params.status as any });
     }
+
+    const where = { AND: andClauses };
 
     const pins = await prisma.formDriverLead.findMany({
       where,

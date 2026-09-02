@@ -32,6 +32,9 @@ formGigLeadRouter.get('/', FormGigLeadController.listLeads);
 // IMPORTANT: must be registered BEFORE /:id to avoid route collision
 formGigLeadRouter.get('/map-pins', FormGigLeadController.getMapPins);
 
+// GET /api/v1/form-gig-leads/filter-options
+formGigLeadRouter.get('/filter-options', FormGigLeadController.getFilterOptions);
+
 // GET /api/v1/form-gig-leads/:id
 formGigLeadRouter.get('/:id', FormGigLeadController.getLeadById);
 

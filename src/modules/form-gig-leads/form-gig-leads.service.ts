@@ -148,6 +148,54 @@ export const FormGigLeadService = {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   },
 
+  /** Returns distinct states, districts, and cities for cascading search comboboxes */
+  getFilterOptions: async () => {
+    const leads = await prisma.formGigLead.findMany({
+      select: {
+        givenState: true,
+        givenDistrict: true,
+        city: true,
+      },
+    });
+
+    const statesSet = new Set<string>();
+    const districtsList: { state: string; district: string }[] = [];
+    const citiesList: { state: string; district: string; city: string }[] = [];
+
+    const districtKeys = new Set<string>();
+    const cityKeys = new Set<string>();
+
+    for (const lead of leads) {
+      const state = (lead.givenState || '').trim();
+      const district = (lead.givenDistrict || '').trim();
+      const city = (lead.city || '').trim();
+
+      if (state) statesSet.add(state);
+
+      if (district) {
+        const key = `${state}::${district}`;
+        if (!districtKeys.has(key)) {
+          districtKeys.add(key);
+          districtsList.push({ state, district });
+        }
+      }
+
+      if (city) {
+        const key = `${state}::${district}::${city}`;
+        if (!cityKeys.has(key)) {
+          cityKeys.add(key);
+          citiesList.push({ state, district, city });
+        }
+      }
+    }
+
+    return {
+      states: Array.from(statesSet).sort(),
+      districts: districtsList.sort((a, b) => a.district.localeCompare(b.district)),
+      cities: citiesList.sort((a, b) => a.city.localeCompare(b.city)),
+    };
+  },
+
   /**
    * Lightweight viewport-bounded map pins for gig leads.
    * Returns only id, lat, lng, jobType, status, firstName, city.
@@ -157,27 +205,67 @@ export const FormGigLeadService = {
     swLng?: number;
     neLat?: number;
     neLng?: number;
+    search?: string;
+    state?: string;
+    city?: string;
+    district?: string;
     jobType?: string;
     status?: string;
   }) => {
-    const where: any = {
-      givenLat: { not: null },
-      givenLng: { not: null },
-    };
+    const andClauses: any[] = [
+      { givenLat: { not: null } },
+      { givenLng: { not: null } },
+    ];
 
     if (
       params.swLat != null && params.swLng != null &&
       params.neLat != null && params.neLng != null
     ) {
-      where.givenLat = { gte: params.swLat, lte: params.neLat };
-      where.givenLng = { gte: params.swLng, lte: params.neLng };
+      andClauses.push({
+        givenLat: { gte: params.swLat, lte: params.neLat },
+        givenLng: { gte: params.swLng, lte: params.neLng },
+      });
     }
+
+    if (params.search?.trim()) {
+      const q = params.search.trim();
+      andClauses.push({
+        OR: [
+          { firstName: { contains: q, mode: 'insensitive' } },
+          { lastName: { contains: q, mode: 'insensitive' } },
+          { phone: { contains: q, mode: 'insensitive' } },
+          { city: { contains: q, mode: 'insensitive' } },
+          { area: { contains: q, mode: 'insensitive' } },
+          { givenDistrict: { contains: q, mode: 'insensitive' } },
+          { givenState: { contains: q, mode: 'insensitive' } },
+          { jobType: { contains: q, mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    if (params.state?.trim()) {
+      andClauses.push({
+        givenState: { contains: params.state.trim(), mode: 'insensitive' },
+      });
+    }
+
+    if (params.city?.trim()) {
+      andClauses.push({ city: { contains: params.city.trim(), mode: 'insensitive' } });
+    }
+
+    if (params.district?.trim()) {
+      andClauses.push({ givenDistrict: { contains: params.district.trim(), mode: 'insensitive' } });
+    }
+
     if (params.jobType?.trim() && params.jobType !== 'ALL') {
-      where.jobType = { contains: params.jobType.trim(), mode: 'insensitive' };
+      andClauses.push({ jobType: { contains: params.jobType.trim(), mode: 'insensitive' } });
     }
+
     if (params.status?.trim() && params.status !== 'ALL') {
-      where.status = params.status as any;
+      andClauses.push({ status: params.status as any });
     }
+
+    const where = { AND: andClauses };
 
     const pins = await prisma.formGigLead.findMany({
       where,

@@ -31,6 +31,9 @@ formDriverLeadRouter.get('/', formDriverLeadController.listLeads);
 // IMPORTANT: must be registered BEFORE /:id to avoid route collision
 formDriverLeadRouter.get('/map-pins', formDriverLeadController.getMapPins);
 
+// GET /api/v1/form-driver-leads/filter-options
+formDriverLeadRouter.get('/filter-options', formDriverLeadController.getFilterOptions);
+
 // GET /api/v1/form-driver-leads/:id
 formDriverLeadRouter.get('/:id', formDriverLeadController.getLeadById);
 
