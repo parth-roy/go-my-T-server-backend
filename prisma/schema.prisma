@@ -311,6 +311,7 @@ model User {
   ScratchCard ScratchCard[]
   GigJob      GigJob[]
   sentGigMessages GigMessage[] @relation("GigMessageSender")
+  leadUnlockTransactions LeadUnlockTransaction[]
 
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -513,6 +514,7 @@ model Worker {
   workerBadges     WorkerBadge[]
   trainingProgress WorkerTrainingProgress[]
   GigAssignment    GigAssignment[]
+  unlockedByCustomers UnlockedWorker[]
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
@@ -1862,6 +1864,7 @@ enum LeadStatus {
   CONVERTED
   REJECTED
   SUITABLE
+  APPROVED
 }
 
 model Lead {
@@ -2226,5 +2229,49 @@ model ManualBooking {
   @@index([vehicleType])
   @@index([createdAt])
   @@map("manual_bookings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMART LEAD UNLOCK (1% / Micro-fee Contact Reveal)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum LeadUnlockStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model LeadUnlockTransaction {
+  id                String           @id @default(uuid())
+  userId            String
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount            Float            @default(49.0)
+  status            LeadUnlockStatus @default(PENDING)
+  razorpayOrderId   String?          @unique
+  razorpayPaymentId String?          @unique
+  serviceCategory   String?          // e.g. "PLUMBER", "ELECTRICIAN"
+  latitude          Float
+  longitude         Float
+  searchAddress     String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  unlockedWorkers   UnlockedWorker[]
+
+  @@index([userId])
+  @@index([razorpayOrderId])
+  @@map("lead_unlock_transactions")
+}
+
+model UnlockedWorker {
+  id              String                @id @default(uuid())
+  transactionId   String
+  transaction     LeadUnlockTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  workerId        String
+  worker          Worker                @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  unlockedAt      DateTime              @default(now())
+
+  @@unique([transactionId, workerId])
+  @@map("unlocked_workers")
 }
 

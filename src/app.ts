@@ -37,19 +37,15 @@ import { publicContactRouter, adminContactRouter } from '@modules/contact/contac
 import { formDriverLeadRouter } from '@modules/form-driver-leads/form-driver-leads.router';
 import { formGigLeadRouter } from '@modules/form-gig-leads/form-gig-leads.router';
 import { gigRouter } from '@modules/gig/gig.router';
+import { leadUnlockRouter } from '@modules/lead-unlock/lead-unlock.router';
 import { sentryErrorHandler } from '@config/sentry';
 import { razorpayWebhook } from '@modules/payment/payment.controller';
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
 
 export function createApp(): Application {
   const app = express();
-  app.set('trust proxy', 1); // Trust first proxy (prevents rate-limiter ERR_ERL_UNEXPECTED_X_FORWARDED_FOR)
-  const apiRouter = express.Router();
+  app.set('trust proxy', 1);
 
-  // FIX S6: Redirect HTTP → HTTPS in production
-  // Uses req.protocol (not raw header) so multi-hop proxy chains work correctly:
-  // Cloudflare → DigitalOcean → AWS all set X-Forwarded-Proto=https,
-  // but AWS Nginx rewrites $scheme=http. req.protocol respects trust proxy setting.
   if (env.NODE_ENV === 'production') {
     app.use((req, res, next) => {
       const proto = req.headers['x-forwarded-proto'];
@@ -65,9 +61,6 @@ export function createApp(): Application {
 
   app.use(helmet());
 
-  // ── CORS ──────────────────────────────────────────────────────────────────
-  // Production: only allow origins listed in ALLOWED_ORIGINS env var.
-  // Development: open to all (*) for local + emulator testing.
   const allowedOrigins = env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   app.use(cors({
     origin: env.NODE_ENV === 'production' ? allowedOrigins : '*',
@@ -76,66 +69,58 @@ export function createApp(): Application {
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   }));
 
-  // ── CRITICAL: Razorpay webhook MUST receive raw bytes for HMAC to match.
-  // Register BEFORE express.json() so the body is NOT pre-parsed.
   app.post(
     '/api/v1/payments/webhook',
     express.raw({ type: 'application/json' }),
     razorpayWebhook,
   );
 
-  // ── RazorpayX Payout webhook — also needs raw body ───────────────────────
   app.post(
     '/api/v1/webhooks/razorpayx',
     express.raw({ type: 'application/json' }),
     handleRazorpayXWebhook,
   );
 
-  // All other routes use parsed JSON body
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   app.use(compression());
 
-  app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev', {
-    stream: { write: (msg) => logger.http(msg.trim()) },
-  }));
+  if (env.NODE_ENV !== 'test') {
+    app.use(morgan('combined', {
+      stream: { write: (msg: string) => logger.info(msg.trim()) },
+    }));
+  }
 
-  // ── Global rate limiter: 100 requests per 15 minutes per IP ──────────────
   const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100,
+    windowMs: 15 * 60 * 1000,
+    max: 1000,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { success: false, message: 'Too many requests. Please wait a moment and try again.', code: 'RATE_LIMITED' },
-    skip: (req) => req.path === '/health', // Never rate-limit health checks
+    message: { success: false, message: 'Too many requests, please try again later.', code: 'RATE_LIMITED' },
   });
   app.use('/api', globalLimiter);
 
-  // ── Stricter auth rate limiter: 10 requests per 15 minutes (prevent OTP brute-force) ──
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 20,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { success: false, message: 'Too many login attempts. Please wait 15 minutes and try again.', code: 'RATE_LIMITED' },
+    message: { success: false, message: 'Too many login attempts. Please wait 15 minutes.', code: 'RATE_LIMITED' },
   });
-  app.use('/api/v1/auth', authLimiter);
+  app.use('/api/v1/auth/verify-otp', authLimiter);
 
-  // ── Admin auth limiter: 5 requests per 15 minutes (prevent brute-force on admin login) ──
   const adminAuthLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 10,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Too many admin login attempts. Please wait 15 minutes.', code: 'RATE_LIMITED' },
   });
   app.use('/api/v1/admin/auth', adminAuthLimiter);
 
-  // FIX S3: Strict limiter on POD OTP verification endpoint.
-  // 4-digit OTP = 10,000 combinations; without this a driver could brute-force in minutes.
   const podOtpLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000,  // 5 minutes
-    max: 5,                     // 5 attempts per IP per 5 min
+    windowMs: 5 * 60 * 1000,
+    max: 5,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Too many delivery verification attempts. Please wait 5 minutes.', code: 'RATE_LIMITED' },
@@ -147,10 +132,8 @@ export function createApp(): Application {
     next();
   });
 
-
   app.get('/health', async (_req, res) => {
     try {
-      // Deep health check for UptimeRobot
       await prisma.$queryRaw`SELECT 1`;
       await getRedis().ping();
       
@@ -198,6 +181,7 @@ export function createApp(): Application {
   app.use('/api/v1/fleet-wallet',  fleetWalletRouter);
   app.use('/api/v1/gig', gigRouter);
   app.use('/api/v1/gigs', gigRouter);
+  app.use('/api/v1/lead-unlock', leadUnlockRouter);
 
   // Leads
   app.use('/api/v1/leads', publicLeadsRouter);
@@ -213,4 +197,3 @@ export function createApp(): Application {
 
   return app;
 }
-
