@@ -28,6 +28,40 @@ export const formDriverLeadController = {
     }
   },
 
+  listLeads: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await formDriverLeadService.listLeads({
+        page: req.query.page as any,
+        limit: req.query.limit as any,
+        search: req.query.search as string,
+        state: req.query.state as string,
+        city: req.query.city as string,
+        district: req.query.district as string,
+        vehicleType: req.query.vehicleType as string,
+        status: req.query.status as string,
+      });
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getMapPins: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const pins = await formDriverLeadService.getMapPins({
+        swLat: req.query.swLat ? parseFloat(req.query.swLat as string) : undefined,
+        swLng: req.query.swLng ? parseFloat(req.query.swLng as string) : undefined,
+        neLat: req.query.neLat ? parseFloat(req.query.neLat as string) : undefined,
+        neLng: req.query.neLng ? parseFloat(req.query.neLng as string) : undefined,
+        vehicleType: req.query.vehicleType as string,
+        status: req.query.status as string,
+      });
+      return res.status(200).json({ success: true, data: pins, total: pins.length });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   getLeadById: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const lead = await formDriverLeadService.getLeadById(req.params.id as string);

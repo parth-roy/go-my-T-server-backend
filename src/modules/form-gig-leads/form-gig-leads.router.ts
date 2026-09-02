@@ -25,12 +25,15 @@ formGigLeadRouter.post(
 // Admin routes
 formGigLeadRouter.use(authenticate, requireRole(UserRole.ADMIN));
 
-// GET /api/v1/form-gig-leads
-formGigLeadRouter.get('/', FormGigLeadController.getAllLeads);
+// GET /api/v1/form-gig-leads?page=1&limit=100&search=&state=&city=&jobType=&status=
+formGigLeadRouter.get('/', FormGigLeadController.listLeads);
+
+// GET /api/v1/form-gig-leads/map-pins?swLat=&swLng=&neLat=&neLng=&jobType=&status=
+// IMPORTANT: must be registered BEFORE /:id to avoid route collision
+formGigLeadRouter.get('/map-pins', FormGigLeadController.getMapPins);
 
 // GET /api/v1/form-gig-leads/:id
 formGigLeadRouter.get('/:id', FormGigLeadController.getLeadById);
 
 // PATCH /api/v1/form-gig-leads/:id
 formGigLeadRouter.patch('/:id', FormGigLeadController.updateLeadStatus);
-

@@ -24,8 +24,12 @@ formDriverLeadRouter.post(
 // Admin routes
 formDriverLeadRouter.use(authenticate, requireRole(UserRole.ADMIN));
 
-// GET /api/v1/form-driver-leads
-formDriverLeadRouter.get('/', formDriverLeadController.getAllLeads);
+// GET /api/v1/form-driver-leads?page=1&limit=100&search=&state=&city=&vehicleType=&status=
+formDriverLeadRouter.get('/', formDriverLeadController.listLeads);
+
+// GET /api/v1/form-driver-leads/map-pins?swLat=&swLng=&neLat=&neLng=&vehicleType=&status=
+// IMPORTANT: must be registered BEFORE /:id to avoid route collision
+formDriverLeadRouter.get('/map-pins', formDriverLeadController.getMapPins);
 
 // GET /api/v1/form-driver-leads/:id
 formDriverLeadRouter.get('/:id', formDriverLeadController.getLeadById);

@@ -553,8 +553,18 @@ export async function getMatchedDriversForBooking(bookingId: string, options: an
     }
   }
 
-  const requestedVehicle = options.vehicleType || booking.vehicleType || "";
-  const maxRadiusKm = options.radiusKm ? Number(options.radiusKm) : null;
+  const requestedVehicle = (options.vehicleType && options.vehicleType !== "ALL") ? options.vehicleType : (options.filterByBookingVehicle === "false" ? "" : (booking.vehicleType || ""));
+  
+  // Default radius to 60 km (Local + Regional cluster) unless explicitly requested otherwise or ALL
+  let maxRadiusKm: number | null = 60;
+  if (options.radiusKm !== undefined && options.radiusKm !== null && options.radiusKm !== "") {
+    if (options.radiusKm === "ALL" || options.radiusKm === "all") {
+      maxRadiusKm = null;
+    } else {
+      maxRadiusKm = Number(options.radiusKm);
+    }
+  }
+
   const searchFilter = (options.search || "").toLowerCase().trim();
 
   // 2. Query Driver Leads
@@ -584,7 +594,7 @@ export async function getMatchedDriversForBooking(bookingId: string, options: an
     const distanceKm = calculateHaversineKm(pickupLat, pickupLng, dLat, dLng);
 
     // Filter by maxRadius if provided
-    if (maxRadiusKm && distanceKm > maxRadiusKm) {
+    if (maxRadiusKm !== null && distanceKm > maxRadiusKm) {
       continue;
     }
 
@@ -609,9 +619,22 @@ export async function getMatchedDriversForBooking(bookingId: string, options: an
     }
 
     // Vehicle Match Check
-    const isExactVehicleMatch = requestedVehicle
-      ? driver.vehicleType.toUpperCase() === requestedVehicle.toUpperCase()
-      : true;
+    const driverVeh = driver.vehicleType.toUpperCase();
+    const reqVeh = requestedVehicle.toUpperCase();
+    
+    let isExactVehicleMatch = true;
+    if (reqVeh) {
+      isExactVehicleMatch = (
+        driverVeh === reqVeh ||
+        (reqVeh === "MINI_TRUCK" && driverVeh === "TATA_ACE") ||
+        (reqVeh === "TATA_ACE" && driverVeh === "MINI_TRUCK")
+      );
+      
+      // If user filtered by a specific vehicle, skip non-matching
+      if (options.vehicleType && options.vehicleType !== "ALL" && !isExactVehicleMatch) {
+        continue;
+      }
+    }
 
     // Calculate smart Match Score (0 - 100)
     let matchScore = 100;

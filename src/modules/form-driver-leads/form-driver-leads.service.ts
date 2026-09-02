@@ -122,6 +122,164 @@ export class FormDriverLeadService {
     });
   }
 
+  /** Paginated, server-filtered list for the admin table view */
+  async listLeads(params: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    state?: string;
+    city?: string;
+    district?: string;
+    vehicleType?: string;
+    status?: string;
+  }) {
+    const page = Math.max(1, Number(params.page) || 1);
+    const limit = Math.min(200, Math.max(1, Number(params.limit) || 100));
+    const skip = (page - 1) * limit;
+
+    const where: any = {};
+
+    if (params.search?.trim()) {
+      const q = params.search.trim();
+      where.OR = [
+        { name: { contains: q, mode: 'insensitive' } },
+        { phone: { contains: q, mode: 'insensitive' } },
+        { city: { contains: q, mode: 'insensitive' } },
+        { transportHub: { contains: q, mode: 'insensitive' } },
+        { vehicleNumber: { contains: q, mode: 'insensitive' } },
+        { givenDistrict: { contains: q, mode: 'insensitive' } },
+        { givenState: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+    if (params.state?.trim()) {
+      where.OR = undefined; // clear OR to allow AND combination
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { state: { contains: params.state.trim(), mode: 'insensitive' } },
+            { givenState: { contains: params.state.trim(), mode: 'insensitive' } },
+          ],
+        },
+      ];
+    }
+    if (params.city?.trim()) {
+      where.AND = [
+        ...(where.AND || []),
+        { city: { contains: params.city.trim(), mode: 'insensitive' } },
+      ];
+    }
+    if (params.district?.trim()) {
+      where.AND = [
+        ...(where.AND || []),
+        { givenDistrict: { contains: params.district.trim(), mode: 'insensitive' } },
+      ];
+    }
+    if (params.vehicleType?.trim() && params.vehicleType !== 'ALL') {
+      where.vehicleType = params.vehicleType as any;
+    }
+    if (params.status?.trim() && params.status !== 'ALL') {
+      where.status = params.status as any;
+    }
+
+    // Re-wire search OR with AND filters if both present
+    if (params.search?.trim() && params.state?.trim()) {
+      const searchOr = {
+        OR: [
+          { name: { contains: params.search.trim(), mode: 'insensitive' } },
+          { phone: { contains: params.search.trim(), mode: 'insensitive' } },
+          { city: { contains: params.search.trim(), mode: 'insensitive' } },
+          { transportHub: { contains: params.search.trim(), mode: 'insensitive' } },
+          { vehicleNumber: { contains: params.search.trim(), mode: 'insensitive' } },
+          { givenDistrict: { contains: params.search.trim(), mode: 'insensitive' } },
+          { givenState: { contains: params.search.trim(), mode: 'insensitive' } },
+        ],
+      };
+      where.OR = undefined;
+      where.AND = [searchOr, ...(where.AND || [])];
+    }
+
+    const [data, total] = await Promise.all([
+      prisma.formDriverLead.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true, name: true, phone: true, alternatePhone: true,
+          city: true, state: true, transportHub: true,
+          vehicleType: true, vehicleNumber: true,
+          givenDistrict: true, givenState: true, givenPincode: true,
+          givenLat: true, givenLng: true,
+          status: true, notes: true, isLocationVerified: true,
+          locationDistance: true, createdAt: true,
+          profilePhotoUrl: true,
+        },
+      }),
+      prisma.formDriverLead.count({ where }),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /**
+   * Lightweight map-pins endpoint — viewport bounding-box filtered.
+   * Returns only the fields needed to render a cluster map (id, lat, lng, vehicleType, status, name, city).
+   * Capped at 3000 pins — more than enough for clustering to work at any zoom level.
+   */
+  async getMapPins(params: {
+    swLat?: number;
+    swLng?: number;
+    neLat?: number;
+    neLng?: number;
+    vehicleType?: string;
+    status?: string;
+  }) {
+    const where: any = {
+      givenLat: { not: null },
+      givenLng: { not: null },
+    };
+
+    // Viewport bounding-box spatial filter
+    if (
+      params.swLat != null && params.swLng != null &&
+      params.neLat != null && params.neLng != null
+    ) {
+      where.givenLat = { gte: params.swLat, lte: params.neLat };
+      where.givenLng = { gte: params.swLng, lte: params.neLng };
+    }
+
+    if (params.vehicleType?.trim() && params.vehicleType !== 'ALL') {
+      where.vehicleType = params.vehicleType as any;
+    }
+    if (params.status?.trim() && params.status !== 'ALL') {
+      where.status = params.status as any;
+    }
+
+    const pins = await prisma.formDriverLead.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 3000,
+      select: {
+        id: true,
+        name: true,
+        city: true,
+        vehicleType: true,
+        status: true,
+        givenLat: true,
+        givenLng: true,
+      },
+    });
+
+    return pins;
+  }
+
   async getLeadById(id: string) {
     return prisma.formDriverLead.findUnique({
       where: { id }
