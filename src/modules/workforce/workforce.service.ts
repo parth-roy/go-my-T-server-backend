@@ -92,7 +92,7 @@ const isDemoAccount = (phone: string) => phone in DEMO_ACCOUNTS;
 // ─────────────────────────────────────────────
 // AUTH — SEND OTP
 // ─────────────────────────────────────────────
-export async function sendOtp(input: SendOtpInput): Promise<{ message: string }> {
+export async function sendOtp(input: SendOtpInput): Promise<{ message: string; otp?: string; _devOtp?: string }> {
   // Demo account: skip real OTP delivery
   if (isDemoAccount(input.phone)) {
     logger.info(`[Workforce OTP] Demo account ${input.phone} — static OTP accepted, skipping delivery`);
