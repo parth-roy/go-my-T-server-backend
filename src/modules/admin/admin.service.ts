@@ -1188,20 +1188,25 @@ export async function verifyWorkerDocuments(workerId: string, input: any) {
   if (!worker) throw AppError.notFound('Worker not found');
 
   if (input.approve) {
+    const now = new Date();
     // Update worker status and insert extracted data
     await prisma.worker.update({
       where: { id: workerId },
       data: {
         isDocVerified: true,
         aadhaarNumber: input.aadhaarNumber,
+        aadhaarVerifStatus: 'VERIFIED',
+        aadhaarVerifiedAt: now,
         panNumber: input.panNumber,
+        panVerifStatus: 'VERIFIED',
+        panVerifiedAt: now,
       },
     });
 
     // Mark documents as verified
     await prisma.workerDocument.updateMany({
       where: { workerId },
-      data: { status: 'VERIFIED', verifiedAt: new Date() },
+      data: { status: 'VERIFIED', verifiedAt: now },
     });
   } else {
     // Reject documents
