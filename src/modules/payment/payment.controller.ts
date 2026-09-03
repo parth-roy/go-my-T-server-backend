@@ -583,6 +583,257 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
 }
 
 // ─────────────────────────────────────────────
+// DIRECT CONTACT: SUBMIT PAYMENT PROOF WITH SCREENSHOT (PUBLIC)
+// ─────────────────────────────────────────────
+export async function submitDirectContactRequest(req: Request, res: Response, next: NextFunction) {
+    try {
+        const {
+            customerPhone,
+            utr,
+            screenshotUrl,
+            serviceCategory,
+            city,
+            workerIds,
+        } = req.body;
+
+        const cleanPhone = String(customerPhone || '').replace(/\D/g, '');
+        if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+            throw AppError.badRequest('A valid 10-digit Indian mobile number is required.', 'INVALID_PHONE');
+        }
+
+        const rawUtr = String(utr || '').trim();
+        if (/[^\d]/.test(rawUtr)) {
+            throw AppError.badRequest('Invalid UPI Transaction ID. UTR must contain only numbers (0-9). Letters or special characters are not allowed.', 'INVALID_UTR_CHARS');
+        }
+
+        const cleanUtr = rawUtr.replace(/\D/g, '');
+        if (cleanUtr.length !== 12) {
+            throw AppError.badRequest('Invalid UPI Transaction ID. UTR must be exactly 12 numeric digits (e.g. 424901823941).', 'INVALID_UTR_LENGTH');
+        }
+
+        if (/^(\d)\1{11}$/.test(cleanUtr) || cleanUtr === '123456789012' || cleanUtr === '012345678901' || cleanUtr === '987654321098') {
+            throw AppError.badRequest('Invalid UPI Transaction ID. Test or dummy numbers are not accepted.', 'INVALID_UTR_PATTERN');
+        }
+
+        if (!screenshotUrl || typeof screenshotUrl !== 'string' || screenshotUrl.length < 20) {
+            throw AppError.badRequest('A screenshot image of your UPI payment receipt is required.', 'SCREENSHOT_REQUIRED');
+        }
+
+        // Check if UTR already submitted
+        const existing = await prisma.directContactRequest.findUnique({
+            where: { utr: cleanUtr },
+        });
+
+        if (existing) {
+            if (existing.status === 'VERIFIED') {
+                return sendSuccess(res, {
+                    id: existing.id,
+                    status: 'VERIFIED',
+                    isVerified: true,
+                    customerPhone: existing.customerPhone,
+                    utr: existing.utr,
+                    message: 'This payment has already been verified and unlocked.',
+                }, 'Payment already verified');
+            }
+            return sendSuccess(res, {
+                id: existing.id,
+                status: existing.status,
+                isVerified: false,
+                customerPhone: existing.customerPhone,
+                utr: existing.utr,
+                message: 'Your payment proof has already been submitted and is pending admin verification.',
+            }, 'Payment proof already submitted');
+        }
+
+        const created = await prisma.directContactRequest.create({
+            data: {
+                id: crypto.randomUUID(),
+                customerPhone: cleanPhone,
+                utr: cleanUtr,
+                screenshotUrl,
+                serviceCategory: String(serviceCategory || 'General Helper'),
+                city: String(city || 'Metro Hub'),
+                amount: 49.0,
+                status: 'PENDING',
+                workerIds: Array.isArray(workerIds) ? workerIds : [],
+            },
+        });
+
+        logger.info(`[DIRECT_CONTACT] New payment proof submitted: phone=${cleanPhone}, UTR=${cleanUtr}, service=${serviceCategory}`);
+
+        sendSuccess(res, {
+            id: created.id,
+            status: created.status,
+            isVerified: false,
+            customerPhone: cleanPhone,
+            utr: cleanUtr,
+            message: 'Payment proof submitted successfully. Admin will verify and unlock your contacts.',
+        }, 'Submission received');
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
+// DIRECT CONTACT: CHECK UNLOCK STATUS FOR PHONE
+// ─────────────────────────────────────────────
+export async function checkDirectContactStatus(req: Request, res: Response, next: NextFunction) {
+    try {
+        const phone = String(req.query.phone || '').replace(/\D/g, '');
+        const service = req.query.service ? String(req.query.service).trim() : undefined;
+        const city = req.query.city ? String(req.query.city).trim() : undefined;
+
+        if (phone.length < 10) {
+            throw AppError.badRequest('10-digit customer mobile number is required.');
+        }
+
+        // Find verified request for this phone
+        const verifiedRequest = await prisma.directContactRequest.findFirst({
+            where: {
+                customerPhone: phone,
+                status: 'VERIFIED',
+                ...(service ? { serviceCategory: { contains: service, mode: 'insensitive' } } : {}),
+                ...(city ? { city: { contains: city, mode: 'insensitive' } } : {}),
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        if (!verifiedRequest) {
+            // Check if there is a pending request
+            const pendingRequest = await prisma.directContactRequest.findFirst({
+                where: { customerPhone: phone, status: 'PENDING' },
+                orderBy: { createdAt: 'desc' },
+            });
+
+            return sendSuccess(res, {
+                isVerified: false,
+                status: pendingRequest ? 'PENDING' : 'NONE',
+                utr: pendingRequest?.utr || null,
+                message: pendingRequest
+                    ? 'Your payment proof is currently under review by our admin team.'
+                    : 'No verified payment found for this number.',
+            }, 'Status checked');
+        }
+
+        // Return unmasked workers for the verified request
+        let unlockedWorkers: any[] = [];
+        if (verifiedRequest.workerIds && verifiedRequest.workerIds.length > 0) {
+            const leads = await prisma.formGigLead.findMany({
+                where: { id: { in: verifiedRequest.workerIds } },
+                select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    phone: true,
+                    jobType: true,
+                    city: true,
+                    area: true,
+                },
+            });
+            unlockedWorkers = leads.map((l) => ({
+                id: l.id,
+                name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
+                phone: l.phone,
+                jobType: l.jobType,
+                city: l.city,
+                area: l.area,
+            }));
+        }
+
+        sendSuccess(res, {
+            isVerified: true,
+            status: 'VERIFIED',
+            id: verifiedRequest.id,
+            customerPhone: verifiedRequest.customerPhone,
+            utr: verifiedRequest.utr,
+            serviceCategory: verifiedRequest.serviceCategory,
+            city: verifiedRequest.city,
+            unlockedWorkers,
+            verifiedAt: verifiedRequest.verifiedAt,
+        }, 'Direct Contact verified');
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
+// ADMIN: LIST DIRECT CONTACT REQUESTS
+// ─────────────────────────────────────────────
+export async function getAdminDirectContactRequests(req: Request, res: Response, next: NextFunction) {
+    try {
+        const page = parseInt(req.query.page as string, 10) || 1;
+        const limit = parseInt(req.query.limit as string, 10) || 50;
+        const status = req.query.status as string;
+        const search = req.query.search ? String(req.query.search).trim() : undefined;
+
+        const where: any = {};
+        if (status && status !== 'ALL') {
+            where.status = status;
+        }
+        if (search) {
+            where.OR = [
+                { customerPhone: { contains: search, mode: 'insensitive' } },
+                { utr: { contains: search, mode: 'insensitive' } },
+                { city: { contains: search, mode: 'insensitive' } },
+                { serviceCategory: { contains: search, mode: 'insensitive' } },
+            ];
+        }
+
+        const [requests, total] = await Promise.all([
+            prisma.directContactRequest.findMany({
+                where,
+                skip: (page - 1) * limit,
+                take: limit,
+                orderBy: { createdAt: 'desc' },
+            }),
+            prisma.directContactRequest.count({ where }),
+        ]);
+
+        sendSuccess(res, {
+            requests,
+            pagination: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        }, 'Direct contact requests retrieved');
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
+// ADMIN: VERIFY / REJECT DIRECT CONTACT REQUEST
+// ─────────────────────────────────────────────
+export async function adminVerifyDirectContactRequest(req: Request, res: Response, next: NextFunction) {
+    try {
+        const { id, status, rejectionReason } = req.body;
+        if (!id) {
+            throw AppError.badRequest('Request ID is required');
+        }
+        if (!['VERIFIED', 'REJECTED'].includes(status)) {
+            throw AppError.badRequest('Status must be VERIFIED or REJECTED');
+        }
+
+        const updated = await prisma.directContactRequest.update({
+            where: { id },
+            data: {
+                status,
+                verifiedAt: new Date(),
+                verifiedBy: (req as any).user?.email || 'admin',
+                rejectionReason: status === 'REJECTED' ? rejectionReason : null,
+            },
+        });
+
+        logger.info(`[ADMIN_DIRECT_CONTACT] Request ${id} marked as ${status}`);
+        sendSuccess(res, updated, `Request marked as ${status}`);
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
 // ADMIN: APPROVE RECEIVED UPI UTR
 // ─────────────────────────────────────────────
 export async function adminApproveUtr(req: Request, res: Response, next: NextFunction) {

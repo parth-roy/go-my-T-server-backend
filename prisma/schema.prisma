@@ -2275,3 +2275,25 @@ model UnlockedWorker {
   @@map("unlocked_workers")
 }
 
+model DirectContactRequest {
+  id              String    @id @default(uuid())
+  customerPhone   String    @map("customer_phone")
+  utr             String    @unique
+  screenshotUrl   String?   @map("screenshot_url")
+  serviceCategory String    @map("service_category")
+  city            String
+  amount          Float     @default(49.0)
+  status          String    @default("PENDING") // PENDING, VERIFIED, REJECTED
+  workerIds       String[]  @default([]) @map("worker_ids")
+  verifiedAt      DateTime? @map("verified_at")
+  verifiedBy      String?   @map("verified_by")
+  rejectionReason String?   @map("rejection_reason")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([customerPhone])
+  @@index([status])
+  @@map("direct_contact_requests")
+}
+
+
