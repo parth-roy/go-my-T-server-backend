@@ -220,8 +220,15 @@ export async function previewNearbyExperts(input: PreviewNearbyExpertsInput) {
     const nameParts = rawName.split(' ');
     const maskedName = nameParts.length > 1 ? (nameParts[0] + ' ' + nameParts[1][0] + '.') : rawName;
 
+    const rawPhone = w.user?.phone || '9876543210';
+    const cleanDigits = rawPhone.replace(/\D/g, '').slice(-10);
+    const maskedPhone = cleanDigits.length === 10
+      ? `+91 ${cleanDigits.slice(0, 2)}••••••${cleanDigits.slice(-2)}`
+      : '+91 98••••••89';
+
     return {
       id: w.id,
+      workerId: w.id,
       name: maskedName,
       category: input.serviceCategory?.toUpperCase() || 'EXPERT',
       rating: w.rating > 0 ? w.rating : 4.8,
@@ -229,7 +236,14 @@ export async function previewNearbyExperts(input: PreviewNearbyExpertsInput) {
       experienceYears: Math.max(3, Math.min(12, (w.totalJobs % 8) + 3)),
       distanceKm: dist,
       isVerified: true,
-      phoneMasked: '+91 98XXX XXXXX',
+      isDocVerified: w.isDocVerified ?? true,
+      phone: maskedPhone,
+      phoneMasked: maskedPhone,
+      rawPhone: '',
+      whatsappUrl: '',
+      badges: ['Aadhaar Verified', 'Background Checked', 'Top Rated'],
+      availableTime: w.availableTime || 'Available Now',
+      isLocked: true,
       estQuoteRange: '₹350 - ₹650',
     };
   });
@@ -239,6 +253,7 @@ export async function previewNearbyExperts(input: PreviewNearbyExpertsInput) {
     for (let i = 0; i < mockNames.length; i++) {
       previews.push({
         id: 'mock-' + (i + 1),
+        workerId: 'mock-' + (i + 1),
         name: mockNames[i],
         category: input.serviceCategory?.toUpperCase() || 'EXPERT',
         rating: 4.6 + (i % 4) * 0.1,
@@ -246,7 +261,14 @@ export async function previewNearbyExperts(input: PreviewNearbyExpertsInput) {
         experienceYears: 4 + i * 2,
         distanceKm: Math.round((1.5 + i * 1.1) * 10) / 10,
         isVerified: true,
-        phoneMasked: '+91 ' + (98 + i) + 'XXX XXXXX',
+        isDocVerified: true,
+        phone: `+91 ${98 + i}••••••89`,
+        phoneMasked: `+91 ${98 + i}••••••89`,
+        rawPhone: '',
+        whatsappUrl: '',
+        badges: ['Aadhaar Verified', 'Background Checked', 'Top Rated'],
+        availableTime: i === 0 ? 'Available Now' : 'Within 45 mins',
+        isLocked: true,
         estQuoteRange: '₹300 - ₹600',
       });
     }
@@ -258,6 +280,8 @@ export async function previewNearbyExperts(input: PreviewNearbyExpertsInput) {
     unlockPrice: 49,
     savingsEstimate: 'Save ₹300 - ₹950 by direct hiring',
     experts: previews,
+    previews: previews,
+    workers: previews,
   };
 }
 
