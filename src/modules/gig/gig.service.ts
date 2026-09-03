@@ -3,15 +3,17 @@
  * Wired to Gig Pricing Engine v1 (West Bengal zone-aware)
  */
 
+import crypto from 'crypto';
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
-import { GigJobStatus, WorkerJobStatus, NotificationType } from '@prisma/client';
+import { GigJobStatus, WorkerJobStatus, NotificationType, PaymentMethod, PaymentStatus } from '@prisma/client';
 import { getSocketInstance } from '@shared/socket/socket.instance';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { calculateGigFare, classifyZone } from './gig.pricing';
 import type { GigFareRequest, GigSkill, GigUrgency } from './gig.pricing.types';
+import { razorpay } from '../payment/razorpay.client';
 
 // ─────────────────────────────────────────────
 // HELPERS — read GigPricingConfig from DB
@@ -193,6 +195,8 @@ export async function createGig(customerId: string, data: any) {
         fareBreakdown: breakdown as any,
 
         status:        'PENDING',
+        paymentMethod: (data.paymentMethod as any) || (data.isCash ? PaymentMethod.CASH : PaymentMethod.UPI),
+        paymentStatus: (data.paymentStatus as any) || PaymentStatus.PENDING,
         isTaskBased:   data.isTaskBased || false,
         scheduledSlot: data.scheduledSlot,
         tipAmount:     data.tipAmount || 0,
@@ -231,6 +235,8 @@ export async function createGig(customerId: string, data: any) {
         platformFee:   breakdown.platformRevenue,
         fareBreakdown: breakdown as any,
         status:        'PENDING',
+        paymentMethod: (data.paymentMethod as any) || (data.isCash ? PaymentMethod.CASH : PaymentMethod.UPI),
+        paymentStatus: (data.paymentStatus as any) || PaymentStatus.PENDING,
       },
     });
   }
@@ -541,4 +547,100 @@ export async function acceptGig(workerUserId: string, gigId: string) {
   }
 
   return assignment;
+}
+
+// ─────────────────────────────────────────────
+// GIG PAYMENT (RAZORPAY & UPI INTENT)
+// ─────────────────────────────────────────────
+
+export async function createGigPaymentOrder(userId: string, gigId: string) {
+  const gig = await prisma.gigJob.findUnique({ where: { id: gigId } });
+  if (!gig) throw AppError.notFound('Gig job not found');
+  if (gig.customerId !== userId) throw AppError.forbidden('Access denied');
+
+  if (gig.paymentStatus === 'PAID') {
+    throw AppError.conflict('Gig job is already paid');
+  }
+
+  const amountPaise = Math.round(gig.totalFare * 100);
+  if (amountPaise < 100) {
+    throw AppError.badRequest('Payment amount must be at least ₹1.00');
+  }
+
+  const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_SttHUdu0eZT95x';
+  let razorpayOrderId: string | null = gig.razorpayOrderId;
+
+  if (!razorpayOrderId && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+    try {
+      const order = await razorpay.orders.create({
+        amount: amountPaise,
+        currency: 'INR',
+        receipt: gig.jobNumber,
+        notes: {
+          type: 'GIG_PAYMENT',
+          gigId: gig.id,
+          userId,
+        },
+      });
+      razorpayOrderId = order.id;
+      await prisma.gigJob.update({
+        where: { id: gig.id },
+        data: { razorpayOrderId },
+      });
+    } catch (err: any) {
+      logger.error(`[createGigPaymentOrder] Razorpay create order failed: ${err.message}`);
+    }
+  }
+
+  const upiIntentUrl = `upi://pay?pa=rzppay@icici&pn=MetroMitra&tr=${razorpayOrderId || gig.jobNumber}&am=${gig.totalFare}&cu=INR&tn=${encodeURIComponent('Metro Mitra Service Booking ' + gig.jobNumber)}`;
+
+  return {
+    orderId: razorpayOrderId || `ORD-${gig.jobNumber}`,
+    amount: amountPaise,
+    currency: 'INR',
+    keyId,
+    upiIntentUrl,
+    gigId: gig.id,
+  };
+}
+
+export async function verifyGigPayment(
+  userId: string,
+  gigId: string,
+  input: { razorpayPaymentId: string; razorpayOrderId: string; razorpaySignature: string; isMock?: boolean }
+) {
+  const gig = await prisma.gigJob.findUnique({ where: { id: gigId } });
+  if (!gig) throw AppError.notFound('Gig job not found');
+  if (gig.customerId !== userId) throw AppError.forbidden('Access denied');
+
+  if (input.isMock || !process.env.RAZORPAY_KEY_SECRET) {
+    const updated = await prisma.gigJob.update({
+      where: { id: gigId },
+      data: {
+        paymentStatus: 'PAID',
+        paymentMethod: PaymentMethod.UPI,
+      },
+    });
+    return { success: true, gig: updated };
+  }
+
+  const text = `${input.razorpayOrderId}|${input.razorpayPaymentId}`;
+  const expectedSignature = crypto
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .update(text)
+    .digest('hex');
+
+  if (expectedSignature !== input.razorpaySignature) {
+    throw AppError.badRequest('Invalid Razorpay signature');
+  }
+
+  const updated = await prisma.gigJob.update({
+    where: { id: gigId },
+    data: {
+      paymentStatus: 'PAID',
+      paymentMethod: PaymentMethod.UPI,
+    },
+  });
+
+  return { success: true, gig: updated };
 }

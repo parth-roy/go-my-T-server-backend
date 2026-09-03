@@ -45,6 +45,21 @@ gigRouter.get(
 );
 
 gigRouter.post(
+  '/customer/:id/create-payment-order',
+  authenticate,
+  requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),
+  ctrl.createGigPaymentOrder,
+);
+
+gigRouter.post(
+  '/customer/:id/verify-payment',
+  authenticate,
+  requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),
+  validate(schema.verifyGigPaymentSchema),
+  ctrl.verifyGigPayment,
+);
+
+gigRouter.post(
   '/customer/:id/cancel',
   authenticate,
   requireRole(UserRole.CUSTOMER, UserRole.WORKER, UserRole.ADMIN),

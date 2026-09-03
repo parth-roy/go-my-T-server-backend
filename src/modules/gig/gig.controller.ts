@@ -96,3 +96,21 @@ export async function getGigByIdAdmin(req: Request, res: Response) {
     return res.status(404).json({ success: false, message: err.message });
   }
 }
+
+export async function createGigPaymentOrder(req: Request, res: Response) {
+  try {
+    const result = await gigService.createGigPaymentOrder(req.user!.id, req.params.id as string);
+    return sendSuccess(res, result, 'Payment order created');
+  } catch (err: any) {
+    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+  }
+}
+
+export async function verifyGigPayment(req: Request, res: Response) {
+  try {
+    const result = await gigService.verifyGigPayment(req.user!.id, req.params.id as string, req.body);
+    return sendSuccess(res, result, 'Payment verified successfully');
+  } catch (err: any) {
+    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+  }
+}
