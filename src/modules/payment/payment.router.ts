@@ -11,6 +11,7 @@ paymentRouter.post('/webhook', PaymentController.razorpayWebhook);
 // Direct Contact: Rs.49 Worker Number Unlock (Public flow)
 paymentRouter.post('/create-direct-contact-order', PaymentController.createDirectContactOrder);
 paymentRouter.post('/verify-direct-contact', PaymentController.verifyDirectContactPayment);
+paymentRouter.post('/admin-approve-utr', PaymentController.adminApproveUtr);
 
 paymentRouter.use(authenticate);
 

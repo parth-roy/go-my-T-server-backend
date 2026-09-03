@@ -457,6 +457,11 @@ export async function createDirectContactOrder(req: Request, res: Response, next
 }
 
 // ─────────────────────────────────────────────
+// In-memory sets for verified bank UTRs and one-time-use redeemed UTRs
+export const verifiedUpiUtrs = new Set<string>();
+export const redeemedUpiUtrs = new Set<string>();
+
+// ─────────────────────────────────────────────
 // DIRECT CONTACT: VERIFY RAZORPAY PAYMENT & UNMASK
 // ─────────────────────────────────────────────
 export async function verifyDirectContactPayment(req: Request, res: Response, next: NextFunction) {
@@ -469,6 +474,7 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
             paymentMethod,
             utr,
             customerPhone,
+            verificationCode,
             serviceCategory,
             city,
         } = req.body;
@@ -477,13 +483,53 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
 
         if (paymentMethod === 'UPI_QR') {
             const cleanPhone = String(customerPhone || '').replace(/\D/g, '');
-            if (cleanPhone.length < 10) {
-                throw AppError.badRequest('A valid 10-digit customer mobile number is required to unlock contacts.', 'INVALID_PHONE');
+            if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+                throw AppError.badRequest('A valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9) is required.', 'INVALID_PHONE');
             }
-            const cleanUtr = String(utr || '').trim();
-            if (cleanUtr.length < 6) {
-                throw AppError.badRequest('A valid UPI Transaction ID / UTR is required to verify payment.', 'INVALID_UTR');
+
+            const rawUtr = String(utr || '').trim();
+            if (/[^\d]/.test(rawUtr)) {
+                throw AppError.badRequest('Invalid UPI Transaction ID. UTR must contain only numbers (0-9). Letters or special characters are not allowed.', 'INVALID_UTR_CHARS');
             }
+
+            const cleanUtr = rawUtr.replace(/\D/g, '');
+            if (cleanUtr.length !== 12) {
+                throw AppError.badRequest('Invalid UPI Transaction ID. UTR must be exactly 12 numeric digits (e.g. 424901823941) from your GPay, PhonePe, or Paytm receipt.', 'INVALID_UTR_LENGTH');
+            }
+
+            // Anti-dummy checks: reject identical repeated numbers (e.g., 000000000000, 111111111111)
+            if (/^(\d)\1{11}$/.test(cleanUtr)) {
+                throw AppError.badRequest('Invalid UPI Transaction ID. All 12 digits cannot be identical. Please enter the genuine 12-digit UTR from your payment receipt.', 'INVALID_UTR_PATTERN');
+            }
+
+            // Anti-dummy checks: reject common sequential test numbers
+            if (cleanUtr === '123456789012' || cleanUtr === '012345678901' || cleanUtr === '987654321098' || cleanUtr === '234567890123') {
+                throw AppError.badRequest('Invalid UPI Transaction ID. Sequential test numbers are not accepted. Please enter the genuine 12-digit UTR from your payment receipt.', 'INVALID_UTR_PATTERN');
+            }
+
+            // One-Time-Use Enforcement: check if already redeemed
+            if (redeemedUpiUtrs.has(cleanUtr)) {
+                throw AppError.badRequest('This UPI Transaction ID (UTR) has already been redeemed. Each payment receipt can only unlock worker contacts once.', 'UTR_ALREADY_USED');
+            }
+
+            // Payment Verification Engine:
+            // Checks against pre-verified bank ledger, admin master PIN (e.g. 4949), or AUTO_APPROVE_UPI_UTR in local development
+            const adminPin = process.env.DIRECT_CONTACT_ADMIN_PIN || '4949';
+            const userPin = String(verificationCode || '').trim();
+            const autoApprove = process.env.AUTO_APPROVE_UPI_UTR === 'true' || process.env.NODE_ENV === 'development';
+
+            const isVerified = verifiedUpiUtrs.has(cleanUtr) || (userPin && userPin === adminPin) || autoApprove;
+
+            if (!isVerified) {
+                logger.warn(`[UPI_QR_DIRECT_CONTACT] Unverified UTR attempt: phone=${cleanPhone}, UTR=${cleanUtr}`);
+                throw AppError.badRequest(
+                    `Payment with UTR ${cleanUtr} could not be verified against bank records yet. If you have paid ₹49, please send your payment screenshot to WhatsApp (+91 9331488999) to receive your instant 4-digit Unlock PIN.`,
+                    'PAYMENT_NOT_CONFIRMED'
+                );
+            }
+
+            // Mark as redeemed so it can NEVER be reused
+            redeemedUpiUtrs.add(cleanUtr);
             isAuthentic = true;
             logger.info(`[UPI_QR_DIRECT_CONTACT] Verified unlock for phone: ${cleanPhone}, UTR: ${cleanUtr}, service: ${serviceCategory}, city: ${city}`);
         } else if (process.env.RAZORPAY_KEY_SECRET && razorpay_signature && razorpay_order_id && razorpay_payment_id) {
@@ -531,6 +577,26 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
             paymentId: razorpay_payment_id,
             unlockedWorkers,
         }, 'Payment verified and worker contacts unlocked');
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
+// ADMIN: APPROVE RECEIVED UPI UTR
+// ─────────────────────────────────────────────
+export async function adminApproveUtr(req: Request, res: Response, next: NextFunction) {
+    try {
+        const { utr, adminKey } = req.body;
+        const clean = String(utr || '').replace(/\D/g, '');
+        if (clean.length !== 12) {
+            throw AppError.badRequest('12-digit numeric UTR is required');
+        }
+        if (adminKey !== (process.env.ADMIN_API_KEY || 'parther4949')) {
+            throw AppError.unauthorized('Invalid admin key');
+        }
+        verifiedUpiUtrs.add(clean);
+        sendSuccess(res, { utr: clean }, `UTR ${clean} added to verified bank ledger`);
     } catch (err) {
         next(err);
     }
