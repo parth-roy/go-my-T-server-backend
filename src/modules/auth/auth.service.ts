@@ -216,7 +216,7 @@ export async function sendOtp({ phone, fcmToken }: SendOtpInput & { fcmToken?: s
 
   return {
     message: 'OTP sent successfully',
-    // Temporarily returning static OTP for all numbers until SMS gateway is ready
+    otp,
     _devOtp: "123456"
   };
 }
