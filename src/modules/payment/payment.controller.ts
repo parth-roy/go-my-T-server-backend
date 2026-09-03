@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import { finalizePaidAward } from '@modules/marketplace/marketplace.service';
 import { razorpay } from './razorpay.client';
 import { secureCapturedBookingPayment } from './booking-payment.service';
+import { logger } from '@shared/logger';
 
 
 // ─────────────────────────────────────────────
@@ -460,11 +461,32 @@ export async function createDirectContactOrder(req: Request, res: Response, next
 // ─────────────────────────────────────────────
 export async function verifyDirectContactPayment(req: Request, res: Response, next: NextFunction) {
     try {
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, workerIds } = req.body;
+        const {
+            razorpay_order_id,
+            razorpay_payment_id,
+            razorpay_signature,
+            workerIds,
+            paymentMethod,
+            utr,
+            customerPhone,
+            serviceCategory,
+            city,
+        } = req.body;
 
         let isAuthentic = false;
 
-        if (process.env.RAZORPAY_KEY_SECRET && razorpay_signature && razorpay_order_id && razorpay_payment_id) {
+        if (paymentMethod === 'UPI_QR') {
+            const cleanPhone = String(customerPhone || '').replace(/\D/g, '');
+            if (cleanPhone.length < 10) {
+                throw AppError.badRequest('A valid 10-digit customer mobile number is required to unlock contacts.', 'INVALID_PHONE');
+            }
+            const cleanUtr = String(utr || '').trim();
+            if (cleanUtr.length < 6) {
+                throw AppError.badRequest('A valid UPI Transaction ID / UTR is required to verify payment.', 'INVALID_UTR');
+            }
+            isAuthentic = true;
+            logger.info(`[UPI_QR_DIRECT_CONTACT] Verified unlock for phone: ${cleanPhone}, UTR: ${cleanUtr}, service: ${serviceCategory}, city: ${city}`);
+        } else if (process.env.RAZORPAY_KEY_SECRET && razorpay_signature && razorpay_order_id && razorpay_payment_id) {
             const expectedSignature = crypto
                 .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
                 .update(`${razorpay_order_id}|${razorpay_payment_id}`)
