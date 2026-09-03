@@ -8,6 +8,10 @@ export const paymentRouter = Router();
 // Typically handled in main app.ts, but assuming express.json is applied globally
 paymentRouter.post('/webhook', PaymentController.razorpayWebhook);
 
+// Direct Contact: Rs.49 Worker Number Unlock (Public flow)
+paymentRouter.post('/create-direct-contact-order', PaymentController.createDirectContactOrder);
+paymentRouter.post('/verify-direct-contact', PaymentController.verifyDirectContactPayment);
+
 paymentRouter.use(authenticate);
 
 paymentRouter.post('/create-order', PaymentController.createOrder);

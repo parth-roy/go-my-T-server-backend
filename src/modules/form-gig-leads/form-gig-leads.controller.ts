@@ -99,6 +99,21 @@ export const FormGigLeadController = {
     } catch (error) {
       next(error);
     }
+  },
+
+  getDirectWorkersPreview: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const service = req.query.service as string;
+      const city = req.query.city as string;
+      const workers = await FormGigLeadService.getDirectWorkersPreview(service, city);
+      return res.status(200).json({
+        success: true,
+        count: workers.length,
+        data: workers,
+      });
+    } catch (error) {
+      next(error);
+    }
   }
 };
 

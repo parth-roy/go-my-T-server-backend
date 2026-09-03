@@ -22,6 +22,9 @@ formGigLeadRouter.post(
   FormGigLeadController.createLead
 );
 
+// GET /api/v1/form-gig-leads/direct-preview?service=&city= - Public preview for Direct Contact
+formGigLeadRouter.get('/direct-preview', FormGigLeadController.getDirectWorkersPreview);
+
 // Admin routes
 formGigLeadRouter.use(authenticate, requireRole(UserRole.ADMIN));
 

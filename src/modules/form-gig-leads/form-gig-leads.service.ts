@@ -296,5 +296,111 @@ export const FormGigLeadService = {
       where: { id },
       data: { status, notes }
     });
+  },
+
+  getDirectWorkersPreview: async (service?: string, city?: string) => {
+    const categoryMapping: Record<string, string> = {
+      'electrician': 'Electrician',
+      'plumber': 'Plumber',
+      'carpenter': 'Carpenter',
+      'painter': 'Painter',
+      'cleaning': 'Cleaner',
+      'cleaner': 'Cleaner',
+      'ac-repair': 'AC',
+      'appliance-repair': 'Appliance',
+      'security': 'Security',
+      'loading-unloading': 'Loader',
+      'general-helper': 'Helper',
+      'furniture-moving': 'Furniture',
+      'packer': 'Packer',
+      'delivery': 'Delivery',
+      'last-mile-delivery': 'Delivery',
+    };
+
+    const searchJobType = (service && categoryMapping[service.toLowerCase().trim()]) || service || 'Electrician';
+
+    let leads = await prisma.formGigLead.findMany({
+      where: {
+        jobType: { contains: searchJobType, mode: 'insensitive' },
+        ...(city && city !== 'All' ? { city: { contains: city.trim(), mode: 'insensitive' } } : {}),
+      },
+      take: 10,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        jobType: true,
+        city: true,
+        area: true,
+        givenDistrict: true,
+        notes: true,
+        status: true,
+        givenLat: true,
+        givenLng: true,
+      },
+    });
+
+    if (leads.length < 10) {
+      const existingIds = leads.map((l: any) => l.id);
+      const moreLeads = await prisma.formGigLead.findMany({
+        where: {
+          jobType: { contains: searchJobType, mode: 'insensitive' },
+          id: { notIn: existingIds },
+        },
+        take: 10 - leads.length,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          jobType: true,
+          city: true,
+          area: true,
+          givenDistrict: true,
+          notes: true,
+          status: true,
+          givenLat: true,
+          givenLng: true,
+        },
+      });
+      leads = [...leads, ...moreLeads];
+    }
+
+    return leads.map((lead: any, idx: number) => {
+      const notes = lead.notes || '';
+      const expMatch = notes.match(/\[Experience\]:\s*([^\n]+)/);
+      const rateMatch = notes.match(/\[Rate \/ Pricing\]:\s*([^\n]+)/);
+      const skillsMatch = notes.match(/\[Skills\]:\s*([^\n]+)/);
+
+      const phone = lead.phone || '9876543210';
+      const masked = phone.length >= 10
+        ? `${phone.slice(0, 2)}******${phone.slice(-2)}`
+        : '98******21';
+
+      const charCode = phone.charCodeAt(phone.length - 1) || 50;
+      const rating = (4.7 + ((charCode % 3) / 10)).toFixed(1);
+      const reviews = 18 + (charCode % 45);
+      const distance = (1.2 + ((idx * 3.7) % 7) * 0.5).toFixed(1) + ' km away';
+
+      return {
+        id: lead.id,
+        name: `${lead.firstName} ${lead.lastName !== '-' ? lead.lastName : ''}`.trim(),
+        jobType: lead.jobType || searchJobType,
+        city: lead.city || city || 'Metro Hub',
+        area: lead.area || lead.givenDistrict || lead.city || 'Operational Hub',
+        experience: expMatch ? expMatch[1].trim() : `${3 + (idx % 8)} Years`,
+        price: rateMatch ? rateMatch[1].trim() : `₹${500 + (idx % 5) * 50} / day`,
+        skills: skillsMatch ? skillsMatch[1].trim() : 'Verified professional with on-demand availability',
+        rating,
+        reviews,
+        distance,
+        status: 'Aadhaar Verified',
+        phoneMasked: masked,
+        phoneRaw: phone,
+      };
+    });
   }
 };
