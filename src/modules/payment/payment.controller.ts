@@ -1,6 +1,16 @@
 import { prisma } from '@shared/db/prisma';
 import { Request, Response, NextFunction } from 'express';
-import { PrismaClient, PaymentStatus, BookingStatus, BookingMode, BidAwardStatus, PaymentMethod } from '@prisma/client';
+import {
+    PrismaClient,
+    PaymentStatus,
+    BookingStatus,
+    BookingMode,
+    BidAwardStatus,
+    PaymentMethod,
+    PlatformSource,
+    PaymentType,
+    TransactionPaymentStatus,
+} from '@prisma/client';
 import { sendSuccess } from '@shared/utils/response';
 import { AppError } from '@shared/errors/AppError';
 import { completeBooking } from '@modules/booking/booking.service';
@@ -16,7 +26,7 @@ import { logger } from '@shared/logger';
 // ─────────────────────────────────────────────
 export async function createOrder(req: Request, res: Response, next: NextFunction) {
     try {
-        const { bookingId } = req.body;
+        const { bookingId, platform } = req.body;
 
         if (!bookingId || typeof bookingId !== 'string') {
             throw AppError.badRequest('bookingId is required');
@@ -63,6 +73,7 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
                         orderId: existingOrder.id,
                         amount: existingOrder.amount,
                         currency: existingOrder.currency,
+                        keyId: process.env.RAZORPAY_KEY_ID,
                     }, 'Existing order returned (idempotent)');
                     return;
                 }
@@ -71,7 +82,8 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
             }
         }
 
-        const amountInPaise = Math.round((booking.grandTotal ?? booking.totalFare ?? 0) * 100);
+        const fareAmount = (booking.grandTotal ?? booking.totalFare ?? 0);
+        const amountInPaise = Math.round(fareAmount * 100);
 
         if (amountInPaise <= 0) {
             throw AppError.badRequest('Booking has no valid fare amount. Please ensure the booking is confirmed with a calculated fare before payment.');
@@ -81,11 +93,48 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
             throw AppError.badRequest('Payment amount must be at least ₹1.00');
         }
 
+        // Standardized platform source
+        const validPlatform = (platform && Object.values(PlatformSource).includes(platform as PlatformSource))
+            ? (platform as PlatformSource)
+            : PlatformSource.CUSTOMER_APP;
+
         const order = await razorpay.orders.create({
             amount: amountInPaise,
             currency: 'INR',
-            receipt: bookingId,
+            receipt: bookingId.slice(0, 40),
+            notes: {
+                platform: validPlatform,
+                paymentType: PaymentType.LOGISTICS_BOOKING,
+                bookingId: booking.id,
+                bookingNumber: booking.bookingNumber,
+                customerId: booking.customerId,
+            },
         });
+
+        // Record multi-platform payment transaction
+        try {
+            await prisma.paymentTransaction.upsert({
+                where: { razorpayOrderId: order.id },
+                create: {
+                    platform: validPlatform,
+                    paymentType: PaymentType.LOGISTICS_BOOKING,
+                    amount: fareAmount,
+                    currency: 'INR',
+                    status: TransactionPaymentStatus.PENDING,
+                    razorpayOrderId: order.id,
+                    entityId: bookingId,
+                    userId: booking.customerId,
+                    notes: order.notes as any,
+                },
+                update: {
+                    status: TransactionPaymentStatus.PENDING,
+                    amount: fareAmount,
+                    platform: validPlatform,
+                },
+            });
+        } catch (txErr: any) {
+            logger.warn(`[PaymentTransaction] Failed to record pending transaction: ${txErr?.message}`);
+        }
 
         // FIX CRITICAL-13: Persist the Razorpay order ID on the booking so we can
         // cross-verify it in verifyPayment and block cross-booking replay attacks.
@@ -119,6 +168,7 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
             orderId: order.id,
             amount: order.amount,
             currency: order.currency,
+            keyId: process.env.RAZORPAY_KEY_ID,
         }, 'Razorpay order created');
     } catch (err) {
         next(err);
@@ -206,6 +256,20 @@ export async function verifyPayment(req: Request, res: Response, next: NextFunct
             }
         }
 
+        // Update multi-platform PaymentTransaction record to SUCCESS
+        try {
+            await prisma.paymentTransaction.updateMany({
+                where: { razorpayOrderId: razorpay_order_id },
+                data: {
+                    status: TransactionPaymentStatus.SUCCESS,
+                    razorpayPaymentId: razorpay_payment_id,
+                    razorpaySignature: razorpay_signature,
+                },
+            });
+        } catch (txErr: any) {
+            logger.warn(`[PaymentTransaction] Failed to update transaction on verify: ${txErr?.message}`);
+        }
+
         sendSuccess(res, updatedBooking, 'Payment verified successfully');
     } catch (err) {
         next(err);
@@ -249,113 +313,220 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
         const body = JSON.parse(rawBody.toString('utf8'));
         const event = body.event as string;
         const payload = body.payload;
+        const eventId = (req.headers['x-razorpay-event-id'] as string) || `${event}_${Date.now()}`;
 
-        console.log(`WEBHOOK: Received event [${event}]`);
+        console.log(`WEBHOOK: Received event [${event}] (eventId: ${eventId})`);
 
-        if (event === 'payment.captured') {
+        // 1. Webhook Idempotency Check — drop duplicate webhook delivery
+        try {
+            await prisma.processedWebhook.create({
+                data: { eventId, eventType: event },
+            });
+        } catch (dupErr: any) {
+            if (dupErr.code === 'P2002') {
+                console.log(`WEBHOOK: Duplicate event [${eventId}] ignored (already processed)`);
+                res.status(200).json({ status: 'ok', message: 'Duplicate event already processed' });
+                return;
+            }
+        }
+
+        if (event === 'payment.captured' || event === 'order.paid') {
             const payment = payload?.payment?.entity;
-            if (!payment?.order_id) {
-                console.warn('WEBHOOK: payment.captured missing order_id');
+            const orderId = payment?.order_id || payload?.order?.entity?.id;
+
+            if (!orderId) {
+                console.warn('WEBHOOK: Missing order_id in event payload');
                 res.status(200).json({ status: 'ok' });
                 return;
             }
 
-            const order = await razorpay.orders.fetch(payment.order_id);
-            const actualBookingId = order.receipt;
+            // Fetch order notes to identify platform source & payment type
+            let orderNotes: Record<string, any> = payment?.notes || payload?.order?.entity?.notes || {};
+            let orderReceipt: string | undefined = payload?.order?.entity?.receipt;
 
-            if (!actualBookingId) {
-                console.warn(`WEBHOOK: No receipt/bookingId on order ${payment.order_id}`);
-                res.status(200).json({ status: 'ok' });
-                return;
+            if (!orderNotes.paymentType) {
+                try {
+                    const fetchedOrder = await razorpay.orders.fetch(orderId);
+                    orderNotes = { ...fetchedOrder.notes, ...orderNotes };
+                    orderReceipt = fetchedOrder.receipt || orderReceipt;
+                } catch (fetchErr: any) {
+                    logger.warn(`WEBHOOK: Order fetch error for ${orderId}: ${fetchErr?.message}`);
+                }
             }
 
-            const booking = await prisma.booking.findUnique({ where: { id: actualBookingId } });
-            if (!booking) {
-                console.warn(`WEBHOOK: Booking ${actualBookingId} not found`);
-                res.status(200).json({ status: 'ok' });
-                return;
+            const paymentType = orderNotes.paymentType || (orderReceipt?.startsWith('dc_') ? PaymentType.DIRECT_CONTACT_UNLOCK : PaymentType.LOGISTICS_BOOKING);
+            const platform = orderNotes.platform || PlatformSource.CUSTOMER_APP;
+
+            // Update central PaymentTransaction record
+            try {
+                await prisma.paymentTransaction.updateMany({
+                    where: { razorpayOrderId: orderId },
+                    data: {
+                        status: TransactionPaymentStatus.SUCCESS,
+                        razorpayPaymentId: payment?.id,
+                        notes: orderNotes as any,
+                    },
+                });
+            } catch (pTxErr: any) {
+                logger.warn(`WEBHOOK: Failed updating PaymentTransaction for order ${orderId}: ${pTxErr?.message}`);
             }
 
-            if (booking.paymentStatus !== PaymentStatus.PAID) {
-                const updatedBooking = await secureCapturedBookingPayment({
-                    bookingId: actualBookingId,
-                    orderId: payment.order_id,
-                    paymentId: payment.id,
-                    amountPaise: Number(payment.amount),
-                    currency: payment.currency,
+            // ── ROUTE A: DIRECT WORKER CONTACT UNLOCK (MetroMitra ₹49) ──
+            if (paymentType === PaymentType.DIRECT_CONTACT_UNLOCK || orderReceipt?.startsWith('dc_')) {
+                const cleanPhone = String(orderNotes.customerPhone || '').replace(/\D/g, '');
+                const directReq = await prisma.directContactRequest.findFirst({
+                    where: {
+                        OR: [
+                            { razorpayOrderId: orderId },
+                            ...(cleanPhone ? [{ customerPhone: cleanPhone }] : []),
+                        ],
+                    },
+                    orderBy: { createdAt: 'desc' },
                 });
 
-                await finalizePaidAward(updatedBooking.id);
+                if (directReq) {
+                    await prisma.directContactRequest.update({
+                        where: { id: directReq.id },
+                        data: {
+                            status: 'VERIFIED',
+                            verifiedAt: new Date(),
+                            verifiedBy: 'RAZORPAY_WEBHOOK',
+                            razorpayOrderId: orderId,
+                            razorpayPaymentId: payment?.id,
+                            paymentMethod: 'RAZORPAY',
+                            customerName: orderNotes.customerName || directReq.customerName,
+                            customerEmail: orderNotes.customerEmail || directReq.customerEmail,
+                        },
+                    });
+                    logger.info(`WEBHOOK: Direct Contact Request ${directReq.id} marked VERIFIED via webhook for phone ${directReq.customerPhone}`);
+                } else if (cleanPhone) {
+                    await prisma.directContactRequest.create({
+                        data: {
+                            customerPhone: cleanPhone,
+                            customerName: orderNotes.customerName || null,
+                            customerEmail: orderNotes.customerEmail || null,
+                            paymentMethod: 'RAZORPAY',
+                            razorpayOrderId: orderId,
+                            razorpayPaymentId: payment?.id,
+                            serviceCategory: String(orderNotes.serviceCategory || 'All Services'),
+                            city: String(orderNotes.city || 'Kolkata'),
+                            amount: 49.0,
+                            status: 'VERIFIED',
+                            verifiedAt: new Date(),
+                            verifiedBy: 'RAZORPAY_WEBHOOK',
+                        },
+                    });
+                    logger.info(`WEBHOOK: Created new VERIFIED Direct Contact Request via webhook for phone ${cleanPhone}`);
+                }
+            }
 
-                if (updatedBooking.status === BookingStatus.DELIVERED && updatedBooking.driverId) {
-                    const driver = await prisma.driver.findUnique({ where: { id: updatedBooking.driverId } });
-                    if (driver) {
-                        await completeBooking(updatedBooking.id, driver.userId);
+            // ── ROUTE B: LOGISTICS BOOKING (GoMyTruck) ──
+            else if (paymentType === PaymentType.LOGISTICS_BOOKING) {
+                const actualBookingId = orderNotes.bookingId || orderReceipt;
+                if (actualBookingId) {
+                    const booking = await prisma.booking.findUnique({ where: { id: actualBookingId } });
+                    if (booking && booking.paymentStatus !== PaymentStatus.PAID) {
+                        const updatedBooking = await secureCapturedBookingPayment({
+                            bookingId: actualBookingId,
+                            orderId: orderId,
+                            paymentId: payment.id,
+                            amountPaise: Number(payment.amount),
+                            currency: payment.currency,
+                        });
+
+                        await finalizePaidAward(updatedBooking.id);
+
+                        if (updatedBooking.status === BookingStatus.DELIVERED && updatedBooking.driverId) {
+                            const driver = await prisma.driver.findUnique({ where: { id: updatedBooking.driverId } });
+                            if (driver) {
+                                await completeBooking(updatedBooking.id, driver.userId);
+                            }
+                        }
+                        console.log(`WEBHOOK: Booking ${actualBookingId} marked PAID via webhook`);
+                    } else if (actualBookingId) {
+                        await finalizePaidAward(actualBookingId);
+                        console.log(`WEBHOOK: Booking ${actualBookingId} already PAID — skipped (idempotent)`);
                     }
                 }
-                console.log(`WEBHOOK: Booking ${actualBookingId} marked PAID via webhook`);
-            } else {
-                // The payment transaction may have committed before a previous finalizer attempt
-                // failed. Retrying is safe and closes that recovery gap for marketplace awards.
-                await finalizePaidAward(actualBookingId);
-                console.log(`WEBHOOK: Booking ${actualBookingId} already PAID — skipped (idempotent)`);
+            }
+
+            // ── ROUTE C: WALLET TOP-UP ──
+            else if (paymentType === PaymentType.WALLET_TOPUP) {
+                const userId = orderNotes.userId;
+                if (userId && payment?.amount) {
+                    const topupAmount = Number(payment.amount) / 100;
+                    const existingTx = await prisma.walletTransaction.findFirst({
+                        where: { referenceId: payment.id },
+                    });
+                    if (!existingTx) {
+                        const wallet = await prisma.wallet.findUnique({ where: { userId } });
+                        if (wallet) {
+                            const updatedWallet = await prisma.wallet.update({
+                                where: { userId },
+                                data: { cachedBalance: { increment: topupAmount } },
+                            });
+                            await prisma.walletTransaction.create({
+                                data: {
+                                    walletId: wallet.id,
+                                    type: 'CREDIT' as any,
+                                    reason: 'TOPUP' as any,
+                                    amount: topupAmount,
+                                    balanceAfter: updatedWallet.cachedBalance,
+                                    referenceId: payment.id,
+                                    note: `Razorpay wallet top-up via webhook (Order: ${orderId})`,
+                                },
+                            });
+                            logger.info(`WEBHOOK: Wallet credited ₹${topupAmount} for user ${userId}`);
+                        }
+                    }
+                }
             }
 
         } else if (event === 'payment.failed') {
             const payment = payload?.payment?.entity;
-            if (!payment?.order_id) {
-                console.warn('WEBHOOK: payment.failed missing order_id');
-                res.status(200).json({ status: 'ok' });
-                return;
-            }
+            const orderId = payment?.order_id || payload?.order?.entity?.id;
 
-            const order = await razorpay.orders.fetch(payment.order_id);
-            const actualBookingId = order.receipt;
-
-            if (actualBookingId) {
-                const booking = await prisma.booking.findUnique({ where: { id: actualBookingId } });
-                if (
-                    booking &&
-                    booking.razorpayOrderId === payment.order_id &&
-                    booking.paymentStatus !== PaymentStatus.PAID
-                ) {
-                    const activeBidAward = booking.bookingMode === BookingMode.PRIVATE_BID
-                        ? await prisma.bidAward.findFirst({
-                            where: {
-                                bookingId: actualBookingId,
-                                activeKey: actualBookingId,
-                                status: {
-                                    in: [BidAwardStatus.PAYMENT_PENDING, BidAwardStatus.PAYMENT_RECONCILING],
-                                },
-                            },
-                        })
-                        : true;
-                    if (!activeBidAward) {
-                        console.warn(`WEBHOOK: Ignored failed payment for inactive bid award ${actualBookingId}`);
-                        res.status(200).json({ status: 'ok' });
-                        return;
-                    }
-                    await prisma.booking.updateMany({
-                        where: {
-                            id: actualBookingId,
-                            razorpayOrderId: payment.order_id,
-                            paymentStatus: PaymentStatus.PENDING,
+            if (orderId) {
+                // Update PaymentTransaction to FAILED
+                try {
+                    await prisma.paymentTransaction.updateMany({
+                        where: { razorpayOrderId: orderId },
+                        data: {
+                            status: TransactionPaymentStatus.FAILED,
+                            errorMessage: payment?.error_description || payment?.error_code || 'Payment failed on gateway',
                         },
+                    });
+                } catch (pErr: any) {
+                    logger.warn(`WEBHOOK: Failed to update failed PaymentTransaction: ${pErr?.message}`);
+                }
+
+                // Update direct contact request
+                await prisma.directContactRequest.updateMany({
+                    where: { razorpayOrderId: orderId, status: 'PENDING' },
+                    data: { status: 'FAILED' },
+                });
+
+                // Update booking if applicable
+                const booking = await prisma.booking.findFirst({
+                    where: { razorpayOrderId: orderId, paymentStatus: PaymentStatus.PENDING },
+                });
+                if (booking) {
+                    await prisma.booking.update({
+                        where: { id: booking.id },
                         data: { paymentStatus: PaymentStatus.FAILED },
                     });
-                    console.log(`WEBHOOK: Booking ${actualBookingId} marked FAILED`);
+                    console.log(`WEBHOOK: Booking ${booking.id} marked FAILED`);
                 }
             }
         } else {
-            console.log(`WEBHOOK: Unhandled event [${event}] — ignored`);
+            console.log(`WEBHOOK: Unhandled event [${event}] — acknowledged`);
         }
 
         res.status(200).json({ status: 'ok' });
     } catch (err) {
         console.error('WEBHOOK: Unhandled error:', err);
         // FIX HIGH-14: Return 200 even on internal errors to prevent Razorpay retry storms.
-        // The error is logged — investigate via logs/Sentry, not via Razorpay retries.
-        res.status(200).json({ status: 'ok', warning: 'Internal processing error — check server logs' });
+        res.status(200).json({ status: 'ok', warning: 'Internal processing acknowledged — check server logs' });
     }
 }
 
@@ -417,11 +588,24 @@ export async function mockPaymentSuccess(req: Request, res: Response, next: Next
 // ─────────────────────────────────────────────
 export async function createDirectContactOrder(req: Request, res: Response, next: NextFunction) {
     try {
-        const { city, serviceCategory } = req.body;
+        const {
+            city,
+            serviceCategory,
+            customerName,
+            customerPhone,
+            customerEmail,
+            workerIds,
+            platform,
+        } = req.body;
+
         const amountInPaise = 4900; // Flat ₹49
+        const cleanPhone = customerPhone ? String(customerPhone).replace(/\D/g, '') : '';
+        const validPlatform = (platform && Object.values(PlatformSource).includes(platform as PlatformSource))
+            ? (platform as PlatformSource)
+            : PlatformSource.WORKFORCE_WEB;
 
         let orderId = 'order_mock_' + Date.now();
-        const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_SttHUdu0eZT95x';
+        const keyId = process.env.RAZORPAY_KEY_ID || '';
 
         try {
             if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
@@ -430,13 +614,66 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                     currency: 'INR',
                     receipt: `dc_${Date.now()}`.slice(0, 40),
                     notes: {
-                        type: 'DIRECT_WORKER_CONTACT_UNLOCK',
+                        platform: validPlatform,
+                        paymentType: PaymentType.DIRECT_CONTACT_UNLOCK,
                         city: city || 'All',
                         serviceCategory: serviceCategory || 'Workers',
-                        workerCount: '10',
+                        workerCount: String(Array.isArray(workerIds) ? workerIds.length : 10),
+                        customerName: customerName || '',
+                        customerPhone: cleanPhone || '',
+                        customerEmail: customerEmail || '',
                     },
                 });
                 orderId = order.id;
+
+                // Record in central PaymentTransaction
+                try {
+                    await prisma.paymentTransaction.upsert({
+                        where: { razorpayOrderId: order.id },
+                        create: {
+                            platform: validPlatform,
+                            paymentType: PaymentType.DIRECT_CONTACT_UNLOCK,
+                            amount: 49.0,
+                            currency: 'INR',
+                            status: TransactionPaymentStatus.PENDING,
+                            razorpayOrderId: order.id,
+                            customerName: customerName || null,
+                            customerPhone: cleanPhone || null,
+                            customerEmail: customerEmail || null,
+                            notes: order.notes as any,
+                        },
+                        update: {
+                            status: TransactionPaymentStatus.PENDING,
+                            customerName: customerName || null,
+                            customerPhone: cleanPhone || null,
+                            customerEmail: customerEmail || null,
+                        },
+                    });
+                } catch (txErr: any) {
+                    logger.warn(`[PaymentTransaction] Error saving direct contact order: ${txErr?.message}`);
+                }
+
+                // Create initial pending DirectContactRequest if phone is known
+                if (cleanPhone && cleanPhone.length === 10) {
+                    try {
+                        await prisma.directContactRequest.create({
+                            data: {
+                                customerPhone: cleanPhone,
+                                customerName: customerName || null,
+                                customerEmail: customerEmail || null,
+                                paymentMethod: 'RAZORPAY',
+                                razorpayOrderId: order.id,
+                                serviceCategory: serviceCategory || 'Workers',
+                                city: city || 'All',
+                                amount: 49.0,
+                                status: 'PENDING',
+                                workerIds: Array.isArray(workerIds) ? workerIds : [],
+                            },
+                        });
+                    } catch (dcErr: any) {
+                        logger.warn(`[DirectContactRequest] Error pre-creating pending request: ${dcErr?.message}`);
+                    }
+                }
             }
         } catch (rzpErr: any) {
             console.warn('Razorpay order fallback to generated id:', rzpErr?.message);
@@ -450,6 +687,9 @@ export async function createDirectContactOrder(req: Request, res: Response, next
             keyId,
             city,
             serviceCategory,
+            customerName,
+            customerPhone: cleanPhone,
+            customerEmail,
         }, 'Direct Contact order created');
     } catch (err) {
         next(err);
@@ -474,6 +714,8 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
             paymentMethod,
             utr,
             customerPhone,
+            customerName,
+            customerEmail,
             verificationCode,
             serviceCategory,
             city,
@@ -512,8 +754,6 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                 throw AppError.badRequest('This UPI Transaction ID (UTR) has already been redeemed. Each payment receipt can only unlock worker contacts once.', 'UTR_ALREADY_USED');
             }
 
-            // Payment Verification Engine:
-            // Checks against pre-verified bank ledger, admin master PIN (e.g. 4949), or AUTO_APPROVE_UPI_UTR in local development
             const adminPin = process.env.DIRECT_CONTACT_ADMIN_PIN || '4949';
             const userPin = String(verificationCode || '').trim();
             const autoApprove = process.env.AUTO_APPROVE_UPI_UTR === 'true' || process.env.NODE_ENV === 'development';
@@ -538,6 +778,69 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                 .update(`${razorpay_order_id}|${razorpay_payment_id}`)
                 .digest('hex');
             isAuthentic = expectedSignature === razorpay_signature;
+
+            if (isAuthentic) {
+                // 1. Update PaymentTransaction
+                try {
+                    await prisma.paymentTransaction.updateMany({
+                        where: { razorpayOrderId: razorpay_order_id },
+                        data: {
+                            status: TransactionPaymentStatus.SUCCESS,
+                            razorpayPaymentId: razorpay_payment_id,
+                            razorpaySignature: razorpay_signature,
+                            customerName: customerName || undefined,
+                            customerEmail: customerEmail || undefined,
+                        },
+                    });
+                } catch (pTxErr: any) {
+                    logger.warn(`[verifyDirectContactPayment] Failed updating PaymentTransaction: ${pTxErr?.message}`);
+                }
+
+                // 2. Mark DirectContactRequest as VERIFIED
+                const cleanPhone = customerPhone ? String(customerPhone).replace(/\D/g, '') : '';
+                try {
+                    const updateRes = await prisma.directContactRequest.updateMany({
+                        where: {
+                            OR: [
+                                { razorpayOrderId: razorpay_order_id },
+                                ...(cleanPhone ? [{ customerPhone: cleanPhone, status: 'PENDING' }] : []),
+                            ],
+                        },
+                        data: {
+                            status: 'VERIFIED',
+                            verifiedAt: new Date(),
+                            verifiedBy: 'RAZORPAY_CHECKOUT',
+                            razorpayOrderId: razorpay_order_id,
+                            razorpayPaymentId: razorpay_payment_id,
+                            paymentMethod: 'RAZORPAY',
+                            customerName: customerName || undefined,
+                            customerEmail: customerEmail || undefined,
+                        },
+                    });
+
+                    if (updateRes.count === 0 && cleanPhone) {
+                        await prisma.directContactRequest.create({
+                            data: {
+                                customerPhone: cleanPhone,
+                                customerName: customerName || null,
+                                customerEmail: customerEmail || null,
+                                paymentMethod: 'RAZORPAY',
+                                razorpayOrderId: razorpay_order_id,
+                                razorpayPaymentId: razorpay_payment_id,
+                                serviceCategory: serviceCategory || 'Workers',
+                                city: city || 'All',
+                                amount: 49.0,
+                                status: 'VERIFIED',
+                                verifiedAt: new Date(),
+                                verifiedBy: 'RAZORPAY_CHECKOUT',
+                                workerIds: Array.isArray(workerIds) ? workerIds : [],
+                            },
+                        });
+                    }
+                } catch (dcErr: any) {
+                    logger.warn(`[verifyDirectContactPayment] Error updating DirectContactRequest: ${dcErr?.message}`);
+                }
+            }
         } else if (razorpay_payment_id) {
             isAuthentic = true;
         }
@@ -576,6 +879,7 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
             orderId: razorpay_order_id,
             paymentId: razorpay_payment_id,
             unlockedWorkers,
+            customerPhone: customerPhone ? String(customerPhone).replace(/\D/g, '') : null,
         }, 'Payment verified and worker contacts unlocked');
     } catch (err) {
         next(err);
@@ -687,18 +991,69 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
             throw AppError.badRequest('10-digit customer mobile number is required.');
         }
 
-        // Find verified request for this phone
-        const verifiedRequest = await prisma.directContactRequest.findFirst({
+        // 1. Find all verified requests for this user's phone
+        const allVerifiedRequests = await prisma.directContactRequest.findMany({
             where: {
                 customerPhone: phone,
                 status: 'VERIFIED',
-                ...(service ? { serviceCategory: { contains: service, mode: 'insensitive' } } : {}),
-                ...(city ? { city: { contains: city, mode: 'insensitive' } } : {}),
             },
             orderBy: { createdAt: 'desc' },
         });
 
-        if (!verifiedRequest) {
+        // 2. Resolve workers for all verified requests
+        const allWorkerIds = Array.from(new Set(allVerifiedRequests.flatMap((r) => r.workerIds || [])));
+        const allLeads = allWorkerIds.length > 0
+            ? await prisma.formGigLead.findMany({
+                where: { id: { in: allWorkerIds } },
+                select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    phone: true,
+                    jobType: true,
+                    city: true,
+                    area: true,
+                },
+            })
+            : [];
+
+        const leadsMap = new Map(allLeads.map((l) => [l.id, l]));
+
+        const purchasedPacks = allVerifiedRequests.map((r) => ({
+            id: r.id,
+            serviceCategory: r.serviceCategory,
+            city: r.city,
+            amount: r.amount,
+            paymentMethod: r.paymentMethod,
+            razorpayPaymentId: r.razorpayPaymentId,
+            verifiedAt: r.verifiedAt || r.createdAt,
+            workerCount: (r.workerIds || []).length,
+            workers: (r.workerIds || []).map((id) => {
+                const lead = leadsMap.get(id);
+                if (!lead) return null;
+                return {
+                    id: lead.id,
+                    name: `${lead.firstName} ${lead.lastName !== '-' ? lead.lastName : ''}`.trim(),
+                    phone: lead.phone,
+                    jobType: lead.jobType,
+                    city: lead.city,
+                    area: lead.area,
+                };
+            }).filter(Boolean),
+        }));
+
+        // 3. Find matching request for current service/city query if provided, or fallback to most recent verified
+        let matchedRequest = allVerifiedRequests.find((r) => {
+            const matchesService = service ? r.serviceCategory.toLowerCase().includes(service.toLowerCase()) : true;
+            const matchesCity = city ? r.city.toLowerCase().includes(city.toLowerCase()) : true;
+            return matchesService && matchesCity;
+        });
+
+        if (!matchedRequest && !service && !city && allVerifiedRequests.length > 0) {
+            matchedRequest = allVerifiedRequests[0];
+        }
+
+        if (!matchedRequest && allVerifiedRequests.length === 0) {
             // Check if there is a pending request
             const pendingRequest = await prisma.directContactRequest.findFirst({
                 where: { customerPhone: phone, status: 'PENDING' },
@@ -709,47 +1064,43 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
                 isVerified: false,
                 status: pendingRequest ? 'PENDING' : 'NONE',
                 utr: pendingRequest?.utr || null,
+                purchasedPacks: [],
                 message: pendingRequest
                     ? 'Your payment proof is currently under review by our admin team.'
                     : 'No verified payment found for this number.',
             }, 'Status checked');
         }
 
-        // Return unmasked workers for the verified request
+        // Return unmasked workers for the matched request
         let unlockedWorkers: any[] = [];
-        if (verifiedRequest.workerIds && verifiedRequest.workerIds.length > 0) {
-            const leads = await prisma.formGigLead.findMany({
-                where: { id: { in: verifiedRequest.workerIds } },
-                select: {
-                    id: true,
-                    firstName: true,
-                    lastName: true,
-                    phone: true,
-                    jobType: true,
-                    city: true,
-                    area: true,
-                },
-            });
-            unlockedWorkers = leads.map((l) => ({
-                id: l.id,
-                name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
-                phone: l.phone,
-                jobType: l.jobType,
-                city: l.city,
-                area: l.area,
-            }));
+        if (matchedRequest?.workerIds && matchedRequest.workerIds.length > 0) {
+            unlockedWorkers = matchedRequest.workerIds
+                .map((id) => {
+                    const lead = leadsMap.get(id);
+                    if (!lead) return null;
+                    return {
+                        id: lead.id,
+                        name: `${lead.firstName} ${lead.lastName !== '-' ? lead.lastName : ''}`.trim(),
+                        phone: lead.phone,
+                        jobType: lead.jobType,
+                        city: lead.city,
+                        area: lead.area,
+                    };
+                })
+                .filter(Boolean);
         }
 
         sendSuccess(res, {
-            isVerified: true,
-            status: 'VERIFIED',
-            id: verifiedRequest.id,
-            customerPhone: verifiedRequest.customerPhone,
-            utr: verifiedRequest.utr,
-            serviceCategory: verifiedRequest.serviceCategory,
-            city: verifiedRequest.city,
+            isVerified: Boolean(matchedRequest),
+            status: matchedRequest ? 'VERIFIED' : 'NONE',
+            id: matchedRequest?.id || null,
+            customerPhone: phone,
+            utr: matchedRequest?.utr || null,
+            serviceCategory: matchedRequest?.serviceCategory || null,
+            city: matchedRequest?.city || null,
             unlockedWorkers,
-            verifiedAt: verifiedRequest.verifiedAt,
+            purchasedPacks,
+            verifiedAt: matchedRequest?.verifiedAt || null,
         }, 'Direct Contact verified');
     } catch (err) {
         next(err);
@@ -852,4 +1203,67 @@ export async function adminApproveUtr(req: Request, res: Response, next: NextFun
         next(err);
     }
 }
+
+// ─────────────────────────────────────────────
+// ADMIN: GET ALL MULTI-PLATFORM PAYMENT TRANSACTIONS
+// ─────────────────────────────────────────────
+export async function getAdminPaymentTransactions(req: Request, res: Response, next: NextFunction) {
+    try {
+        const page = Math.max(1, parseInt(req.query.page as string) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 50));
+        const skip = (page - 1) * limit;
+
+        const { platform, paymentType, status, search } = req.query;
+
+        const where: any = {};
+        if (platform && platform !== 'ALL') {
+            where.platform = platform as PlatformSource;
+        }
+        if (paymentType && paymentType !== 'ALL') {
+            where.paymentType = paymentType as PaymentType;
+        }
+        if (status && status !== 'ALL') {
+            where.status = status as TransactionPaymentStatus;
+        }
+        if (search && typeof search === 'string' && search.trim().length > 0) {
+            const q = search.trim();
+            where.OR = [
+                { customerPhone: { contains: q, mode: 'insensitive' } },
+                { customerName: { contains: q, mode: 'insensitive' } },
+                { customerEmail: { contains: q, mode: 'insensitive' } },
+                { razorpayOrderId: { contains: q, mode: 'insensitive' } },
+                { razorpayPaymentId: { contains: q, mode: 'insensitive' } },
+            ];
+        }
+
+        const [transactions, total, statsResult] = await Promise.all([
+            prisma.paymentTransaction.findMany({
+                where,
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limit,
+            }),
+            prisma.paymentTransaction.count({ where }),
+            prisma.paymentTransaction.groupBy({
+                by: ['platform', 'status'],
+                _sum: { amount: true },
+                _count: { id: true },
+            }),
+        ]);
+
+        sendSuccess(res, {
+            transactions,
+            pagination: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+            stats: statsResult,
+        }, 'Payment transactions fetched successfully');
+    } catch (err) {
+        next(err);
+    }
+}
+
 

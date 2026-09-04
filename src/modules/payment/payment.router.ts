@@ -14,10 +14,11 @@ paymentRouter.post('/verify-direct-contact', PaymentController.verifyDirectConta
 paymentRouter.post('/submit-direct-contact-request', PaymentController.submitDirectContactRequest);
 paymentRouter.get('/check-direct-contact-status', PaymentController.checkDirectContactStatus);
 
-// Admin Direct Contact Management
+// Admin Direct Contact & Multi-Platform Payment Management
 paymentRouter.get('/admin/direct-contact-requests', PaymentController.getAdminDirectContactRequests);
 paymentRouter.post('/admin/verify-direct-contact-request', PaymentController.adminVerifyDirectContactRequest);
 paymentRouter.post('/admin-approve-utr', PaymentController.adminApproveUtr);
+paymentRouter.get('/admin/transactions', PaymentController.getAdminPaymentTransactions);
 
 paymentRouter.use(authenticate);
 

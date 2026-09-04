@@ -2276,24 +2276,100 @@ model UnlockedWorker {
 }
 
 model DirectContactRequest {
-  id              String    @id @default(uuid())
-  customerPhone   String    @map("customer_phone")
-  utr             String    @unique
-  screenshotUrl   String?   @map("screenshot_url")
-  serviceCategory String    @map("service_category")
-  city            String
-  amount          Float     @default(49.0)
-  status          String    @default("PENDING") // PENDING, VERIFIED, REJECTED
-  workerIds       String[]  @default([]) @map("worker_ids")
-  verifiedAt      DateTime? @map("verified_at")
-  verifiedBy      String?   @map("verified_by")
-  rejectionReason String?   @map("rejection_reason")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  id                String    @id @default(uuid())
+  customerPhone     String    @map("customer_phone")
+  customerName      String?   @map("customer_name")
+  customerEmail     String?   @map("customer_email")
+  paymentMethod     String    @default("UPI_QR") @map("payment_method") // UPI_QR, RAZORPAY
+  utr               String?   @unique
+  razorpayOrderId   String?   @unique @map("razorpay_order_id")
+  razorpayPaymentId String?   @unique @map("razorpay_payment_id")
+  screenshotUrl     String?   @map("screenshot_url")
+  serviceCategory   String    @map("service_category")
+  city              String
+  amount            Float     @default(49.0)
+  status            String    @default("PENDING") // PENDING, VERIFIED, REJECTED
+  workerIds         String[]  @default([]) @map("worker_ids")
+  verifiedAt        DateTime? @map("verified_at")
+  verifiedBy        String?   @map("verified_by")
+  rejectionReason   String?   @map("rejection_reason")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   @@index([customerPhone])
   @@index([status])
+  @@index([razorpayOrderId])
+  @@index([razorpayPaymentId])
   @@map("direct_contact_requests")
 }
+
+// ─────────────────────────────────────────────
+// MULTI-PLATFORM PAYMENT AUDIT & RECONCILIATION
+// ─────────────────────────────────────────────
+
+enum PlatformSource {
+  CUSTOMER_APP
+  DRIVER_APP
+  WORKFORCE_APP
+  WORKFORCE_WEB
+  VAHAN_WEB
+  ADMIN_PANEL
+}
+
+enum PaymentType {
+  LOGISTICS_BOOKING
+  WALLET_TOPUP
+  DIRECT_CONTACT_UNLOCK
+  LEAD_UNLOCK
+  HOME_SERVICE_ORDER
+  COMMISSION_SETTLEMENT
+  SUBSCRIPTION
+}
+
+enum TransactionPaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+model PaymentTransaction {
+  id                String                    @id @default(uuid())
+  platform          PlatformSource            @default(CUSTOMER_APP)
+  paymentType       PaymentType               @default(LOGISTICS_BOOKING)
+  amount            Float                     // in INR (e.g. 49.00, 1250.00)
+  currency          String                    @default("INR")
+  status            TransactionPaymentStatus  @default(PENDING)
+
+  // Razorpay Gateway Identifiers
+  razorpayOrderId   String?                   @unique @map("razorpay_order_id")
+  razorpayPaymentId String?                   @unique @map("razorpay_payment_id")
+  razorpaySignature String?                   @map("razorpay_signature")
+
+  // Associated identifiers & Identity
+  entityId          String?                   @map("entity_id") // bookingId, directContactRequestId, etc.
+  userId            String?                   @map("user_id")
+  customerName      String?                   @map("customer_name")
+  customerPhone     String?                   @map("customer_phone")
+  customerEmail     String?                   @map("customer_email")
+
+  // Metadata & Audit
+  notes             Json?
+  metadata          Json?
+  errorMessage      String?                   @map("error_message")
+
+  createdAt         DateTime                  @default(now()) @map("created_at")
+  updatedAt         DateTime                  @updatedAt @map("updated_at")
+
+  @@index([platform])
+  @@index([paymentType])
+  @@index([status])
+  @@index([customerPhone])
+  @@index([razorpayOrderId])
+  @@index([razorpayPaymentId])
+  @@index([createdAt])
+  @@map("payment_transactions")
+}
+
 
 
