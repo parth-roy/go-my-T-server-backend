@@ -410,7 +410,7 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
                             razorpayPaymentId: payment?.id,
                             serviceCategory: String(orderNotes.serviceCategory || 'All Services'),
                             city: String(orderNotes.city || 'Kolkata'),
-                            amount: payment?.amount ? (Number(payment.amount) / 100) : (orderNotes?.amount ? Number(orderNotes.amount) : 1.0),
+                            amount: 49.0,
                             status: 'VERIFIED',
                             verifiedAt: new Date(),
                             verifiedBy: 'RAZORPAY_WEBHOOK',
@@ -598,9 +598,7 @@ export async function createDirectContactOrder(req: Request, res: Response, next
             platform,
         } = req.body;
 
-        const rawAmount = Number(req.body.amount);
-        const dynamicAmount = (rawAmount > 0) ? rawAmount : 1.0; // Dynamic amount: default ₹1 for testing, or custom
-        const amountInPaise = Math.round(dynamicAmount * 100);
+        const amountInPaise = 4900; // Flat ₹49
         const cleanPhone = customerPhone ? String(customerPhone).replace(/\D/g, '') : '';
         const validPlatform = (platform && Object.values(PlatformSource).includes(platform as PlatformSource))
             ? (platform as PlatformSource)
@@ -624,7 +622,6 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                         customerName: customerName || '',
                         customerPhone: cleanPhone || '',
                         customerEmail: customerEmail || '',
-                        amount: String(dynamicAmount),
                     },
                 });
                 orderId = order.id;
@@ -636,7 +633,7 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                         create: {
                             platform: validPlatform,
                             paymentType: PaymentType.DIRECT_CONTACT_UNLOCK,
-                            amount: dynamicAmount,
+                            amount: 49.0,
                             currency: 'INR',
                             status: TransactionPaymentStatus.PENDING,
                             razorpayOrderId: order.id,
@@ -647,7 +644,6 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                         },
                         update: {
                             status: TransactionPaymentStatus.PENDING,
-                            amount: dynamicAmount,
                             customerName: customerName || null,
                             customerPhone: cleanPhone || null,
                             customerEmail: customerEmail || null,
@@ -669,7 +665,7 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                                 razorpayOrderId: order.id,
                                 serviceCategory: serviceCategory || 'Workers',
                                 city: city || 'All',
-                                amount: dynamicAmount,
+                                amount: 49.0,
                                 status: 'PENDING',
                                 workerIds: Array.isArray(workerIds) ? workerIds : [],
                             },
@@ -833,7 +829,7 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                                 razorpayPaymentId: razorpay_payment_id,
                                 serviceCategory: serviceCategory || 'Workers',
                                 city: city || 'All',
-                                amount: req.body.amount ? Number(req.body.amount) : 1.0,
+                                amount: 49.0,
                                 status: 'VERIFIED',
                                 verifiedAt: new Date(),
                                 verifiedBy: 'RAZORPAY_CHECKOUT',
