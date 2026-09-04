@@ -21,6 +21,9 @@ formDriverLeadRouter.post(
   formDriverLeadController.createLead
 );
 
+// GET /api/v1/form-driver-leads/direct-preview?vehicleType=&city= - Public preview for Direct Contact
+formDriverLeadRouter.get('/direct-preview', formDriverLeadController.getDirectDriversPreview);
+
 // Admin routes
 formDriverLeadRouter.use(authenticate, requireRole(UserRole.ADMIN));
 

@@ -99,5 +99,20 @@ export const formDriverLeadController = {
     } catch (error) {
       next(error);
     }
+  },
+
+  getDirectDriversPreview: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const vehicleType = req.query.vehicleType as string;
+      const city = req.query.city as string;
+      const drivers = await formDriverLeadService.getDirectDriversPreview(vehicleType, city);
+      return res.status(200).json({
+        success: true,
+        count: drivers.length,
+        data: drivers,
+      });
+    } catch (error) {
+      next(error);
+    }
   }
 };
