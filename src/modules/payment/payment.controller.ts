@@ -596,9 +596,11 @@ export async function createDirectContactOrder(req: Request, res: Response, next
             customerEmail,
             workerIds,
             platform,
+            amount: requestedAmount,
         } = req.body;
 
-        const amountInPaise = 4900; // Flat ₹49
+        const chargedAmount = requestedAmount !== undefined && Number(requestedAmount) > 0 ? Number(requestedAmount) : 49.0;
+        const amountInPaise = Math.max(100, Math.round(chargedAmount * 100)); // Minimum ₹1 (100 paise) for Razorpay
         const cleanPhone = customerPhone ? String(customerPhone).replace(/\D/g, '') : '';
         const validPlatform = (platform && Object.values(PlatformSource).includes(platform as PlatformSource))
             ? (platform as PlatformSource)
@@ -633,7 +635,7 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                         create: {
                             platform: validPlatform,
                             paymentType: PaymentType.DIRECT_CONTACT_UNLOCK,
-                            amount: 49.0,
+                            amount: chargedAmount,
                             currency: 'INR',
                             status: TransactionPaymentStatus.PENDING,
                             razorpayOrderId: order.id,
@@ -644,6 +646,7 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                         },
                         update: {
                             status: TransactionPaymentStatus.PENDING,
+                            amount: chargedAmount,
                             customerName: customerName || null,
                             customerPhone: cleanPhone || null,
                             customerEmail: customerEmail || null,
@@ -665,7 +668,7 @@ export async function createDirectContactOrder(req: Request, res: Response, next
                                 razorpayOrderId: order.id,
                                 serviceCategory: serviceCategory || 'Workers',
                                 city: city || 'All',
-                                amount: 49.0,
+                                amount: chargedAmount,
                                 status: 'PENDING',
                                 workerIds: Array.isArray(workerIds) ? workerIds : [],
                             },
@@ -864,14 +867,37 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                     area: true,
                 },
             });
-            unlockedWorkers = leads.map((l) => ({
-                id: l.id,
-                name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
-                phone: l.phone,
-                jobType: l.jobType,
-                city: l.city,
-                area: l.area,
-            }));
+            if (leads.length > 0) {
+                unlockedWorkers = leads.map((l) => ({
+                    id: l.id,
+                    name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
+                    phone: l.phone,
+                    jobType: l.jobType,
+                    city: l.city,
+                    area: l.area,
+                }));
+            } else {
+                const driverLeads = await prisma.formDriverLead.findMany({
+                    where: { id: { in: workerIds } },
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        phone: true,
+                        vehicleType: true,
+                        city: true,
+                        area: true,
+                    },
+                });
+                unlockedWorkers = driverLeads.map((d) => ({
+                    id: d.id,
+                    name: `${d.firstName} ${d.lastName !== '-' ? d.lastName : ''}`.trim(),
+                    phone: d.phone,
+                    jobType: d.vehicleType,
+                    city: d.city,
+                    area: d.area,
+                }));
+            }
         }
 
         sendSuccess(res, {
