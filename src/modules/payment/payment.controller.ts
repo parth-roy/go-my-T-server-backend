@@ -881,21 +881,23 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                     where: { id: { in: workerIds } },
                     select: {
                         id: true,
-                        firstName: true,
-                        lastName: true,
+                        name: true,
                         phone: true,
                         vehicleType: true,
                         city: true,
-                        area: true,
+                        transportHub: true,
+                        givenStreet: true,
+                        vehicleNumber: true,
                     },
                 });
                 unlockedWorkers = driverLeads.map((d) => ({
                     id: d.id,
-                    name: `${d.firstName} ${d.lastName !== '-' ? d.lastName : ''}`.trim(),
+                    name: d.name,
                     phone: d.phone,
-                    jobType: d.vehicleType,
+                    jobType: String(d.vehicleType),
                     city: d.city,
-                    area: d.area,
+                    area: d.transportHub || d.givenStreet || d.city,
+                    vehicleNumber: d.vehicleNumber,
                 }));
             }
         }
@@ -1026,10 +1028,11 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
             orderBy: { createdAt: 'desc' },
         });
 
-        // 2. Resolve workers for all verified requests
+        // 2. Resolve workers for all verified requests (supports both gig leads and driver leads)
         const allWorkerIds = Array.from(new Set(allVerifiedRequests.flatMap((r) => r.workerIds || [])));
-        const allLeads = allWorkerIds.length > 0
-            ? await prisma.formGigLead.findMany({
+        let allLeads: any[] = [];
+        if (allWorkerIds.length > 0) {
+            const gigLeads = await prisma.formGigLead.findMany({
                 where: { id: { in: allWorkerIds } },
                 select: {
                     id: true,
@@ -1040,8 +1043,40 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
                     city: true,
                     area: true,
                 },
-            })
-            : [];
+            });
+            const driverLeads = await prisma.formDriverLead.findMany({
+                where: { id: { in: allWorkerIds } },
+                select: {
+                    id: true,
+                    name: true,
+                    phone: true,
+                    vehicleType: true,
+                    city: true,
+                    transportHub: true,
+                    givenStreet: true,
+                    vehicleNumber: true,
+                },
+            });
+            allLeads = [
+                ...gigLeads.map((l) => ({
+                    id: l.id,
+                    name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
+                    phone: l.phone,
+                    jobType: l.jobType,
+                    city: l.city,
+                    area: l.area,
+                })),
+                ...driverLeads.map((d) => ({
+                    id: d.id,
+                    name: d.name,
+                    phone: d.phone,
+                    jobType: String(d.vehicleType),
+                    city: d.city,
+                    area: d.transportHub || d.givenStreet || d.city,
+                    vehicleNumber: d.vehicleNumber,
+                })),
+            ];
+        }
 
         const leadsMap = new Map(allLeads.map((l) => [l.id, l]));
 
@@ -1059,7 +1094,7 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
                 if (!lead) return null;
                 return {
                     id: lead.id,
-                    name: `${lead.firstName} ${lead.lastName !== '-' ? lead.lastName : ''}`.trim(),
+                    name: lead.name,
                     phone: lead.phone,
                     jobType: lead.jobType,
                     city: lead.city,
@@ -1106,7 +1141,7 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
                     if (!lead) return null;
                     return {
                         id: lead.id,
-                        name: `${lead.firstName} ${lead.lastName !== '-' ? lead.lastName : ''}`.trim(),
+                        name: lead.name,
                         phone: lead.phone,
                         jobType: lead.jobType,
                         city: lead.city,
