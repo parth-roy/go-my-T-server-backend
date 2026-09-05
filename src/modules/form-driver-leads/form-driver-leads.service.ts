@@ -143,8 +143,8 @@ export class FormDriverLeadService {
       throw AppError.badRequest('A valid 10-digit Indian mobile number is required.', 'INVALID_PHONE');
     }
 
-    const amountInPaise = 100; // ₹1 for live testing (was 9900)
-    const chargedAmount = 1.0;
+    const amountInPaise = 9900; // ₹99
+    const chargedAmount = 99.0;
     let orderId = 'order_drv_' + Date.now();
     const keyId = process.env.RAZORPAY_KEY_ID || '';
 
@@ -351,7 +351,7 @@ export class FormDriverLeadService {
       create: {
         platform: PlatformSource.VAHAN_WEB,
         paymentType: PaymentType.SUBSCRIPTION,
-        amount: 1.0, // ₹1 for live testing (was 99.0)
+        amount: 99.0,
         currency: 'INR',
         status: TransactionPaymentStatus.SUCCESS,
         razorpayOrderId: razorpay_order_id || null,
