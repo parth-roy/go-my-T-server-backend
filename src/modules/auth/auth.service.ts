@@ -61,17 +61,13 @@ async function getOtp(phone: string): Promise<string | null> {
     logger.warn('[OTP] Redis read failed — falling back to in-memory');
   }
 
-  // 2. FIX S7: In-memory fallback only in non-production.
-  // In production with multiple server instances, the instance that sent the OTP
-  // may differ from the one that verifies it — in-memory would silently fail.
-  if (process.env.NODE_ENV !== 'production') {
-    const record = inMemoryOtp.get(phone);
-    if (record && record.expiresAt > Date.now()) {
-      logger.info('[OTP] Found in in-memory store (dev fallback)');
-      return record.otp;
-    }
-    inMemoryOtp.delete(phone);
+  // 2. In-memory safety fallback (instant, dual-written)
+  const record = inMemoryOtp.get(phone);
+  if (record && record.expiresAt > Date.now()) {
+    logger.info('[OTP] Found in in-memory store (safety fallback)');
+    return record.otp;
   }
+  inMemoryOtp.delete(phone);
 
   return null;
 }
@@ -172,7 +168,7 @@ export async function sendOtp({ phone, fcmToken }: SendOtpInput & { fcmToken?: s
       logger.info(`[OTP] FCM token saved to Redis for demo account ${phone}`);
     }
     logger.info(`[OTP] Demo account ${phone} — static OTP accepted, skipping delivery`);
-    return { message: 'OTP sent successfully' };
+    return { message: 'OTP sent successfully', otp: DEMO_ACCOUNTS[phone].staticOtp, _devOtp: DEMO_ACCOUNTS[phone].staticOtp };
   }
 
   // Generate 6-digit OTP
@@ -217,7 +213,7 @@ export async function sendOtp({ phone, fcmToken }: SendOtpInput & { fcmToken?: s
   return {
     message: 'OTP sent successfully',
     otp,
-    _devOtp: "123456"
+    _devOtp: otp,
   };
 }
 
@@ -386,6 +382,40 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     eventBus.emit('user.registered', { userId: user.id, fcmToken: tokenToSave ?? undefined });
   }
 
+  // Check if user is a driver or has active 90-day premium membership
+  const driverProfile = await prisma.driver.findFirst({
+    where: {
+      OR: [
+        { userId: user.id },
+        { user: { phone: user.phone } },
+      ],
+    },
+    include: {
+      subscription: true,
+    },
+  });
+
+  const isDriver = Boolean(driverProfile || user.role === 'DRIVER');
+  let driverMembership: any = null;
+  let isPremiumDriver = false;
+
+  if (driverProfile?.subscription) {
+    const sub = driverProfile.subscription;
+    const now = new Date();
+    if (sub.isActive && new Date(sub.endDate) > now) {
+      isPremiumDriver = true;
+      const daysRemaining = Math.max(0, Math.ceil((new Date(sub.endDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+      driverMembership = {
+        isPremium: true,
+        plan: sub.plan,
+        startDate: sub.startDate,
+        endDate: sub.endDate,
+        daysRemaining,
+        paymentReference: sub.paymentReference,
+      };
+    }
+  }
+
   return {
     accessToken,
     refreshToken,
@@ -400,6 +430,9 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
       whatsappOptIn: user.whatsappOptIn,
       profileComplete: user.profileComplete,
       isNewUser,
+      isDriver,
+      isPremiumDriver,
+      driverMembership,
     },
   };
 }
@@ -532,6 +565,15 @@ export async function getMe(userId: string) {
               registrationNo: true,
             },
           },
+          subscription: {
+            select: {
+              plan: true,
+              startDate: true,
+              endDate: true,
+              isActive: true,
+              paymentReference: true,
+            },
+          },
         },
       },
       fleetOwner: {
@@ -553,11 +595,29 @@ export async function getMe(userId: string) {
   if (user.driver) availableRoles.push('DRIVER');
   if (user.fleetOwner) availableRoles.push('FLEET_OWNER');
 
+  const sub = user.driver?.subscription;
+  const now = new Date();
+  const isPremiumDriver = Boolean(sub && sub.isActive && new Date(sub.endDate) > now);
+  const daysRemaining = isPremiumDriver
+    ? Math.max(0, Math.ceil((new Date(sub!.endDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+    : 0;
+
+  const driverMembership = isPremiumDriver ? {
+    isPremium: true,
+    plan: sub!.plan,
+    startDate: sub!.startDate,
+    endDate: sub!.endDate,
+    daysRemaining,
+  } : null;
+
   return {
     ...user,
     hasWorkerProfile: !!user.worker,
     hasDriverProfile: !!user.driver,
     hasFleetOwnerProfile: !!user.fleetOwner,
+    isDriver: !!user.driver || user.role === 'DRIVER',
+    isPremiumDriver,
+    driverMembership,
     availableRoles,
   };
 }

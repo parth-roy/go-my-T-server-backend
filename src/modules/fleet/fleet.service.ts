@@ -87,6 +87,7 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
     include: {
       vehicle: true,
       documents: { orderBy: { createdAt: 'desc' } },
+      subscription: true,
     },
   });
   if (!driver) throw AppError.notFound('Driver profile not found. Please register first.');
@@ -144,9 +145,23 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
     return Math.min(Math.max(trend, -100), 100); // Cap at -100% and +100%
   };
 
+  const sub = driver.subscription;
+  const isPremium = Boolean(sub && sub.isActive && new Date(sub.endDate) > now);
+  const daysRemaining = isPremium
+    ? Math.max(0, Math.ceil((new Date(sub!.endDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
+    : 0;
+
   const profile = _formatDriverProfile(driver);
   return {
     ...profile,
+    isPremium,
+    daysRemaining,
+    driverMembership: isPremium ? {
+      plan: sub!.plan,
+      startDate: sub!.startDate,
+      endDate: sub!.endDate,
+      daysRemaining,
+    } : null,
     todayEarnings,
     todayTrips,
     weeklyEarnings,

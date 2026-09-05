@@ -21,6 +21,24 @@ formDriverLeadRouter.post(
   formDriverLeadController.createLead
 );
 
+// POST /api/v1/form-driver-leads/create-onboarding-order - Create Razorpay order for ₹99 onboarding
+formDriverLeadRouter.post('/create-onboarding-order', formDriverLeadController.createOnboardingOrder);
+
+// POST /api/v1/form-driver-leads/onboard-with-payment - Submit onboarding form with verified payment
+formDriverLeadRouter.post(
+  '/onboard-with-payment',
+  upload.fields([
+    { name: 'profilePhoto', maxCount: 1 },
+    { name: 'aadharFront', maxCount: 1 },
+    { name: 'aadharBack', maxCount: 1 },
+    { name: 'dlFront', maxCount: 1 },
+    { name: 'dlBack', maxCount: 1 },
+    { name: 'rcBook', maxCount: 1 },
+    { name: 'insurance', maxCount: 1 }
+  ]),
+  formDriverLeadController.onboardWithPayment
+);
+
 // GET /api/v1/form-driver-leads/direct-preview?vehicleType=&city= - Public preview for Direct Contact
 formDriverLeadRouter.get('/direct-preview', formDriverLeadController.getDirectDriversPreview);
 

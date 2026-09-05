@@ -19,6 +19,33 @@ export const formDriverLeadController = {
     }
   },
 
+  createOnboardingOrder: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const order = await formDriverLeadService.createOnboardingOrder(req.body);
+      return res.status(200).json({
+        success: true,
+        data: order,
+        message: 'Driver onboarding payment order created',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  onboardWithPayment: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+      const result = await formDriverLeadService.onboardWithPayment(req.body, files || {});
+      return res.status(201).json({
+        success: true,
+        data: result,
+        message: 'Driver successfully onboarded with 90-day premium membership',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   getAllLeads: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const leads = await formDriverLeadService.getAllLeads();

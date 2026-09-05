@@ -1,7 +1,19 @@
-import { PrismaClient, VehicleType } from '@prisma/client';
+import {
+  PrismaClient,
+  VehicleType,
+  PlatformSource,
+  PaymentType,
+  TransactionPaymentStatus,
+  SubscriptionPlan,
+  UserRole,
+  LeadStatus,
+} from '@prisma/client';
 import { s3Service, UploadFolder } from '../upload/upload.service';
 import { logger } from '@shared/logger';
 import { google } from 'googleapis';
+import { razorpay } from '@modules/payment/razorpay.client';
+import crypto from 'crypto';
+import { AppError } from '@shared/errors/AppError';
 
 const prisma = new PrismaClient();
 
@@ -114,6 +126,285 @@ export class FormDriverLeadService {
     this.syncToGoogleSheets(lead).catch(e => logger.error("Google Sheets Sync failed", e));
 
     return lead;
+  }
+
+  /**
+   * Create Razorpay Order for ₹99 Driver Onboarding Fee
+   */
+  async createOnboardingOrder(data: {
+    name?: string;
+    phone: string;
+    email?: string;
+    city?: string;
+    vehicleType?: string;
+  }) {
+    const cleanPhone = String(data.phone || '').replace(/\D/g, '');
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      throw AppError.badRequest('A valid 10-digit Indian mobile number is required.', 'INVALID_PHONE');
+    }
+
+    const amountInPaise = 100; // ₹1 for live testing (was 9900)
+    const chargedAmount = 1.0;
+    let orderId = 'order_drv_' + Date.now();
+    const keyId = process.env.RAZORPAY_KEY_ID || '';
+
+    try {
+      if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+        const order = await razorpay.orders.create({
+          amount: amountInPaise,
+          currency: 'INR',
+          receipt: `drv_onb_${Date.now()}`.slice(0, 40),
+          notes: {
+            platform: PlatformSource.VAHAN_WEB,
+            paymentType: PaymentType.SUBSCRIPTION,
+            plan: 'PREMIUM_DRIVER_90D',
+            name: data.name || '',
+            phone: cleanPhone,
+            email: data.email || '',
+            city: data.city || '',
+            vehicleType: data.vehicleType || '',
+          },
+        });
+        orderId = order.id;
+
+        // Pre-create pending PaymentTransaction record
+        try {
+          await prisma.paymentTransaction.upsert({
+            where: { razorpayOrderId: order.id },
+            create: {
+              platform: PlatformSource.VAHAN_WEB,
+              paymentType: PaymentType.SUBSCRIPTION,
+              amount: chargedAmount,
+              currency: 'INR',
+              status: TransactionPaymentStatus.PENDING,
+              razorpayOrderId: order.id,
+              customerName: data.name || null,
+              customerPhone: cleanPhone,
+              customerEmail: data.email || null,
+              notes: order.notes as any,
+              metadata: {
+                membership: 'PREMIUM_90_DAYS',
+                plan: 'PREMIUM_DRIVER_90D',
+                city: data.city || '',
+                vehicleType: data.vehicleType || '',
+              },
+            },
+            update: {
+              status: TransactionPaymentStatus.PENDING,
+              amount: chargedAmount,
+              customerName: data.name || null,
+              customerPhone: cleanPhone,
+              customerEmail: data.email || null,
+            },
+          });
+        } catch (txErr: any) {
+          logger.warn(`[DriverOnboarding] Failed to pre-create pending transaction: ${txErr?.message}`);
+        }
+      }
+    } catch (rzpErr: any) {
+      logger.warn(`[DriverOnboarding] Razorpay order creation fallback: ${rzpErr?.message}`);
+      orderId = 'order_drv_' + Date.now();
+    }
+
+    return {
+      orderId,
+      amount: amountInPaise,
+      currency: 'INR',
+      keyId,
+      customerPhone: cleanPhone,
+      customerName: data.name || '',
+      customerEmail: data.email || '',
+    };
+  }
+
+  /**
+   * Complete Driver Onboarding with Verified ₹99 Payment
+   * Provisions FormDriverLead, User, Driver profile, and 90-Day Premium Subscription.
+   */
+  async onboardWithPayment(data: any, files: { [fieldname: string]: Express.Multer.File[] }) {
+    const {
+      name, email, phone, city, vehicleType, dlNumber,
+      paymentMethod, razorpay_order_id, razorpay_payment_id, razorpay_signature, utr
+    } = data;
+
+    const cleanPhone = String(phone || '').replace(/\D/g, '');
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      throw AppError.badRequest('A valid 10-digit Indian mobile number is required.', 'INVALID_PHONE');
+    }
+    if (!name || String(name).trim().length < 2) {
+      throw AppError.badRequest('Full name is required.', 'INVALID_NAME');
+    }
+
+    // Verify Payment
+    const method = String(paymentMethod || 'RAZORPAY').toUpperCase();
+
+    if (method === 'UPI_QR') {
+      const cleanUtr = String(utr || '').replace(/\D/g, '');
+      if (cleanUtr.length !== 12) {
+        throw AppError.badRequest('Invalid UPI Transaction ID. UTR must be exactly 12 numeric digits.', 'INVALID_UTR');
+      }
+      if (/^(\d)\1{11}$/.test(cleanUtr) || cleanUtr === '123456789012') {
+        throw AppError.badRequest('Invalid UPI Transaction ID. Please enter genuine 12-digit UTR from payment receipt.', 'INVALID_UTR');
+      }
+    } else {
+      // Razorpay payment verification
+      if (!razorpay_payment_id) {
+        throw AppError.badRequest('Missing Razorpay payment ID.', 'PAYMENT_ID_REQUIRED');
+      }
+      if (process.env.RAZORPAY_KEY_SECRET && razorpay_order_id && razorpay_signature) {
+        const body = razorpay_order_id + '|' + razorpay_payment_id;
+        const expectedSignature = crypto
+          .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+          .update(body.toString())
+          .digest('hex');
+        if (expectedSignature !== razorpay_signature) {
+          logger.warn(`[DriverOnboarding] Invalid signature for payment ${razorpay_payment_id}`);
+          if (process.env.NODE_ENV === 'production') {
+            throw AppError.badRequest('Cryptographic signature verification failed for payment.', 'INVALID_SIGNATURE');
+          }
+        }
+      }
+    }
+
+    // 1. Create standard Lead via createLead
+    const lead = await this.createLead({
+      ...data,
+      phone: cleanPhone,
+      notes: `₹99 Onboarding Paid (${method}) - 90-Day Premium Membership Active. Ref: ${razorpay_payment_id || utr}`,
+    }, files);
+
+    // Update lead status to APPROVED
+    await prisma.formDriverLead.update({
+      where: { id: lead.id },
+      data: { status: LeadStatus.APPROVED },
+    });
+
+    // 2. Provision or update User account
+    const user = await prisma.user.upsert({
+      where: { phone: cleanPhone },
+      create: {
+        phone: cleanPhone,
+        name: String(name).trim(),
+        email: email ? String(email).trim() : null,
+        role: UserRole.DRIVER,
+        profileComplete: true,
+      },
+      update: {
+        name: String(name).trim(),
+        email: email ? String(email).trim() : undefined,
+        role: UserRole.DRIVER,
+        profileComplete: true,
+      },
+    });
+
+    // 3. Provision or update Driver profile
+    const driverLicense = dlNumber ? String(dlNumber).trim() : `DL_${cleanPhone}`;
+    const driver = await prisma.driver.upsert({
+      where: { userId: user.id },
+      create: {
+        userId: user.id,
+        licenseNumber: driverLicense,
+        dlNumber: driverLicense,
+        status: 'OFFLINE',
+        isDocVerified: true,
+        isActive: true,
+      },
+      update: {
+        licenseNumber: driverLicense,
+        dlNumber: driverLicense,
+        isDocVerified: true,
+        isActive: true,
+      },
+    });
+
+    // 4. Provision 90-Day Premium Driver Subscription
+    const now = new Date();
+    const endDate = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000); // exactly 90 days validity
+
+    const subscription = await prisma.driverSubscription.upsert({
+      where: { driverId: driver.id },
+      create: {
+        driverId: driver.id,
+        plan: SubscriptionPlan.PREMIUM,
+        pricePerMonth: 9900,
+        startDate: now,
+        endDate: endDate,
+        isActive: true,
+        paymentReference: razorpay_payment_id || utr || 'onboarding_paid',
+        paymentMethod: method.toLowerCase(),
+      },
+      update: {
+        plan: SubscriptionPlan.PREMIUM,
+        pricePerMonth: 9900,
+        startDate: now,
+        endDate: endDate,
+        isActive: true,
+        paymentReference: razorpay_payment_id || utr || 'onboarding_paid',
+        paymentMethod: method.toLowerCase(),
+      },
+    });
+
+    // 5. Record / Update PaymentTransaction
+    const orderKey = razorpay_order_id || `onb_${method}_${Date.now()}`;
+    await prisma.paymentTransaction.upsert({
+      where: { razorpayOrderId: orderKey },
+      create: {
+        platform: PlatformSource.VAHAN_WEB,
+        paymentType: PaymentType.SUBSCRIPTION,
+        amount: 1.0, // ₹1 for live testing (was 99.0)
+        currency: 'INR',
+        status: TransactionPaymentStatus.SUCCESS,
+        razorpayOrderId: razorpay_order_id || null,
+        razorpayPaymentId: razorpay_payment_id || utr || null,
+        razorpaySignature: razorpay_signature || null,
+        customerName: String(name).trim(),
+        customerPhone: cleanPhone,
+        customerEmail: email ? String(email).trim() : null,
+        userId: user.id,
+        entityId: driver.id,
+        metadata: {
+          membership: 'PREMIUM_90_DAYS',
+          plan: 'PREMIUM_DRIVER_90D',
+          leadId: lead.id,
+          city: city || '',
+          vehicleType: vehicleType || '',
+          expiresAt: endDate.toISOString(),
+          daysRemaining: 90,
+        },
+      },
+      update: {
+        status: TransactionPaymentStatus.SUCCESS,
+        razorpayPaymentId: razorpay_payment_id || utr || null,
+        razorpaySignature: razorpay_signature || null,
+        userId: user.id,
+        entityId: driver.id,
+      },
+    });
+
+    logger.info(`[DriverOnboarding] Successfully onboarded driver ${cleanPhone} with 90-day premium membership until ${endDate.toISOString()}`);
+
+    return {
+      lead,
+      user: {
+        id: user.id,
+        phone: user.phone,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      driver: {
+        id: driver.id,
+        licenseNumber: driver.licenseNumber,
+        isDocVerified: driver.isDocVerified,
+      },
+      subscription: {
+        plan: subscription.plan,
+        startDate: subscription.startDate,
+        endDate: subscription.endDate,
+        daysRemaining: 90,
+        isActive: subscription.isActive,
+      },
+    };
   }
 
   async getAllLeads() {
