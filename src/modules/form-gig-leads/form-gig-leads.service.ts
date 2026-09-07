@@ -485,10 +485,9 @@ export const FormGigLeadService = {
     const cleanJobType = toStr(data.jobType) || 'Gig Worker';
     const cleanCity = toStr(data.city) || 'India';
 
-    // Production testing configuration: Gateway (Cashfree/Razorpay) is ₹1 for test onboarding.
-    // Static UPI QR Code (Scanner) remains ₹49.
-    const amountInPaise = 100; // ₹1 for production gateway test
-    const chargedAmount = 1.0;
+    // Onboarding fee: ₹49 for all payment methods (Gateway and UPI QR).
+    const amountInPaise = 4900; // ₹49 onboarding fee
+    const chargedAmount = 49.0;
     const requestedGateway = toStr(data.gateway || 'CASHFREE').toUpperCase();
 
     // 1. Try Cashfree if requested or default
@@ -703,8 +702,7 @@ export const FormGigLeadService = {
       paymentRef = razorpay_payment_id;
     }
 
-    const isGateway = method === 'CASHFREE' || method === 'RAZORPAY';
-    const amountPaid = isGateway ? 1.0 : 49.0;
+    const amountPaid = 49.0;
 
     // 1. Create Lead with payment notes
     const lead = await FormGigLeadService.createLead({
