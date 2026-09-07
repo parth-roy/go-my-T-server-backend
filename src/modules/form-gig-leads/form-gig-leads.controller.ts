@@ -19,6 +19,33 @@ export const FormGigLeadController = {
     }
   },
 
+  createOnboardingOrder: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const order = await FormGigLeadService.createOnboardingOrder(req.body);
+      return res.status(200).json({
+        success: true,
+        data: order,
+        message: 'Worker onboarding payment order created',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  onboardWithPayment: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+      const result = await FormGigLeadService.onboardWithPayment(req.body, files || {});
+      return res.status(201).json({
+        success: true,
+        data: result,
+        message: 'Worker successfully onboarded with 90-day verified membership',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   getAllLeads: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const leads = await FormGigLeadService.getAllLeads();

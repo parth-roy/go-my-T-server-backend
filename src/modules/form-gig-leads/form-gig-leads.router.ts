@@ -22,6 +22,25 @@ formGigLeadRouter.post(
   FormGigLeadController.createLead
 );
 
+// POST /api/v1/form-gig-leads/create-onboarding-order - Create Cashfree/Razorpay order for ₹49 worker onboarding
+formGigLeadRouter.post('/create-onboarding-order', FormGigLeadController.createOnboardingOrder);
+
+// POST /api/v1/form-gig-leads/onboard-with-payment - Submit onboarding form with verified payment
+formGigLeadRouter.post(
+  '/onboard-with-payment',
+  upload.fields([
+    { name: 'profilePhoto', maxCount: 1 },
+    { name: 'aadharFront', maxCount: 1 },
+    { name: 'aadharBack', maxCount: 1 },
+    { name: 'panFront', maxCount: 1 },
+    { name: 'dlFront', maxCount: 1 },
+    { name: 'dlBack', maxCount: 1 },
+    { name: 'rcBook', maxCount: 1 },
+    { name: 'insurance', maxCount: 1 }
+  ]),
+  FormGigLeadController.onboardWithPayment
+);
+
 // GET /api/v1/form-gig-leads/direct-preview?service=&city= - Public preview for Direct Contact
 formGigLeadRouter.get('/direct-preview', FormGigLeadController.getDirectWorkersPreview);
 
