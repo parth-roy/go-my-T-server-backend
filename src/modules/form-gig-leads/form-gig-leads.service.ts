@@ -15,15 +15,53 @@ import { AppError } from '@shared/errors/AppError';
 
 const prisma = new PrismaClient();
 
+/**
+ * Safely normalizes input values that could be strings or arrays of strings (e.g. if a multipart field is appended multiple times).
+ */
+const toStr = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  const raw = Array.isArray(val) ? val[0] : val;
+  return String(raw ?? '').trim();
+};
+
+const toNullableStr = (val: any): string | null => {
+  const s = toStr(val);
+  return s.length > 0 ? s : null;
+};
+
+const toNullableFloat = (val: any): number | null => {
+  if (val === null || val === undefined) return null;
+  const raw = Array.isArray(val) ? val[0] : val;
+  const num = parseFloat(String(raw));
+  return isNaN(num) ? null : num;
+};
+
 export const FormGigLeadService = {
   createLead: async (data: any, files: { [fieldname: string]: Express.Multer.File[] } = {}) => {
-    const {
-      firstName, lastName, email, phone, jobType, city, area, 
-      vehicleType, vehicleMake, aadharNumber, panNumber, 
-      dlNumber, rcNumber, insuranceDetails,
-      givenAddress, givenStreet, givenDistrict, givenState, givenPincode, givenLat, givenLng,
-      autoAddress, autoStreet, autoDistrict, autoState, autoPincode, autoLat, autoLng
-    } = data;
+    const firstName = toStr(data.firstName);
+    const lastName = toStr(data.lastName);
+    const email = toNullableStr(data.email);
+    const phone = toStr(data.phone);
+    const jobType = toStr(data.jobType);
+    const rawCity = toStr(data.city);
+    const givenDistrict = toNullableStr(data.givenDistrict);
+    const givenState = toNullableStr(data.givenState);
+    const city = rawCity || givenDistrict || givenState || 'India';
+    const area = toNullableStr(data.area);
+    const vehicleType = toNullableStr(data.vehicleType);
+    const vehicleMake = toNullableStr(data.vehicleMake);
+    const aadharNumber = toNullableStr(data.aadharNumber);
+    const panNumber = toNullableStr(data.panNumber);
+    const dlNumber = toNullableStr(data.dlNumber);
+    const rcNumber = toNullableStr(data.rcNumber);
+    const insuranceDetails = toNullableStr(data.insuranceDetails);
+
+    const givenAddress = toNullableStr(data.givenAddress);
+    const givenStreet = toNullableStr(data.givenStreet);
+    const givenPincode = toNullableStr(data.givenPincode);
+    const givenLat = toNullableFloat(data.givenLat);
+    const givenLng = toNullableFloat(data.givenLng);
+    const notes = toNullableStr(data.notes);
     
     // Upload files to S3 sequentially
     const uploadedUrls: Record<string, string> = {};
@@ -52,12 +90,12 @@ export const FormGigLeadService = {
 
     const lead = await prisma.formGigLead.create({
       data: {
-        firstName: firstName || '',
+        firstName: firstName || 'Worker',
         lastName: lastName || '',
         email: email || null,
         phone: phone || '',
-        jobType: jobType || '',
-        city: city || '',
+        jobType: jobType || 'general-helper',
+        city: city || 'India',
         area: area || null,
         vehicleType: vehicleType || null,
         vehicleMake: vehicleMake || null,
@@ -67,9 +105,14 @@ export const FormGigLeadService = {
         rcNumber: rcNumber || null,
         insuranceDetails: insuranceDetails || null,
         
-        givenAddress, givenStreet, givenDistrict, givenState, givenPincode, 
-        givenLat: givenLat ? parseFloat(givenLat) : null, 
-        givenLng: givenLng ? parseFloat(givenLng) : null,
+        givenAddress,
+        givenStreet,
+        givenDistrict,
+        givenState,
+        givenPincode, 
+        givenLat, 
+        givenLng,
+        notes,
 
         ...uploadedUrls
       }
@@ -429,17 +472,24 @@ export const FormGigLeadService = {
     jobType?: string;
     gateway?: 'CASHFREE' | 'RAZORPAY';
   }) => {
-    const cleanPhone = String(data.phone || '').replace(/\D/g, '').slice(-10);
+    const rawPhone = toStr(data.phone);
+    const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
     if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
       throw AppError.badRequest('A valid 10-digit Indian mobile number is required.', 'INVALID_PHONE');
     }
 
-    const fullName = `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'Gig Worker Candidate';
+    const firstName = toStr(data.firstName);
+    const lastName = toStr(data.lastName);
+    const fullName = `${firstName} ${lastName}`.trim() || 'Gig Worker Candidate';
+    const cleanEmail = toNullableStr(data.email) || `${cleanPhone}@metromitra.com`;
+    const cleanJobType = toStr(data.jobType) || 'Gig Worker';
+    const cleanCity = toStr(data.city) || 'India';
+
     // Production testing configuration: Gateway (Cashfree/Razorpay) is ₹1 for test onboarding.
     // Static UPI QR Code (Scanner) remains ₹49.
     const amountInPaise = 100; // ₹1 for production gateway test
     const chargedAmount = 1.0;
-    const requestedGateway = data.gateway || 'CASHFREE';
+    const requestedGateway = toStr(data.gateway || 'CASHFREE').toUpperCase();
 
     // 1. Try Cashfree if requested or default
     if (requestedGateway === 'CASHFREE' && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
@@ -451,13 +501,13 @@ export const FormGigLeadService = {
           orderCurrency: 'INR',
           customerPhone: cleanPhone,
           customerName: fullName,
-          customerEmail: data.email || `${cleanPhone}@metromitra.com`,
-          orderNote: `Metro Mitra Worker Onboarding Test 1 - ${data.jobType || 'Gig Worker'}`,
+          customerEmail: cleanEmail,
+          orderNote: `Metro Mitra Worker Onboarding Test 1 - ${cleanJobType}`,
           orderTags: {
             platform: PlatformSource.WORKFORCE_WEB,
             paymentType: PaymentType.SUBSCRIPTION,
-            jobType: data.jobType || '',
-            city: data.city || '',
+            jobType: cleanJobType,
+            city: cleanCity,
           },
         });
 
@@ -473,19 +523,19 @@ export const FormGigLeadService = {
               razorpayOrderId: cfOrder.order_id,
               customerName: fullName,
               customerPhone: cleanPhone,
-              customerEmail: data.email || null,
+              customerEmail: cleanEmail,
               notes: {
                 platform: 'WORKFORCE_WEB',
-                jobType: data.jobType || '',
-                city: data.city || '',
+                jobType: cleanJobType,
+                city: cleanCity,
               },
               metadata: {
                 gateway: 'CASHFREE',
                 cf_order_id: cfOrder.cf_order_id,
                 paymentSessionId: cfOrder.payment_session_id,
                 membership: 'PREMIUM_WORKER_90D',
-                jobType: data.jobType || '',
-                city: data.city || '',
+                jobType: cleanJobType,
+                city: cleanCity,
               },
             },
           });
@@ -522,9 +572,9 @@ export const FormGigLeadService = {
             plan: 'PREMIUM_WORKER_90D',
             name: fullName,
             phone: cleanPhone,
-            email: data.email || '',
-            city: data.city || '',
-            jobType: data.jobType || '',
+            email: cleanEmail,
+            city: cleanCity,
+            jobType: cleanJobType,
           },
         });
         orderId = rzpOrder.id;
@@ -540,17 +590,17 @@ export const FormGigLeadService = {
               razorpayOrderId: rzpOrder.id,
               customerName: fullName,
               customerPhone: cleanPhone,
-              customerEmail: data.email || null,
+              customerEmail: cleanEmail,
               notes: {
                 platform: 'WORKFORCE_WEB',
-                jobType: data.jobType || '',
-                city: data.city || '',
+                jobType: cleanJobType,
+                city: cleanCity,
               },
               metadata: {
                 gateway: 'RAZORPAY',
                 membership: 'PREMIUM_WORKER_90D',
-                jobType: data.jobType || '',
-                city: data.city || '',
+                jobType: cleanJobType,
+                city: cleanCity,
               },
             },
           });
@@ -578,23 +628,32 @@ export const FormGigLeadService = {
    * Supports CASHFREE, RAZORPAY, and UPI_QR (with 12-digit UTR)
    */
   onboardWithPayment: async (data: any, files: { [fieldname: string]: Express.Multer.File[] } = {}) => {
-    const {
-      firstName, lastName, email, phone, jobType, city, area,
-      paymentMethod, razorpay_order_id, razorpay_payment_id, razorpay_signature,
-      cashfree_order_id, utr
-    } = data;
-
-    const cleanPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+    const rawPhone = toStr(data.phone);
+    const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
     if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
       throw AppError.badRequest('A valid 10-digit Indian mobile number is required.', 'INVALID_PHONE');
     }
 
-    const fullName = `${firstName || ''} ${lastName || ''}`.trim();
+    const firstName = toStr(data.firstName);
+    const lastName = toStr(data.lastName);
+    const fullName = `${firstName} ${lastName}`.trim();
     if (!fullName || fullName.length < 2) {
       throw AppError.badRequest('Full name is required.', 'INVALID_NAME');
     }
 
-    const method = String(paymentMethod || 'CASHFREE').toUpperCase();
+    const email = toNullableStr(data.email);
+    const jobType = toStr(data.jobType);
+    const rawCity = toStr(data.city);
+    const givenDistrict = toNullableStr(data.givenDistrict);
+    const city = rawCity || givenDistrict || 'India';
+    const area = toNullableStr(data.area);
+    const method = toStr(data.paymentMethod || 'CASHFREE').toUpperCase();
+    const razorpay_order_id = toNullableStr(data.razorpay_order_id);
+    const razorpay_payment_id = toNullableStr(data.razorpay_payment_id);
+    const razorpay_signature = toNullableStr(data.razorpay_signature);
+    const cashfree_order_id = toNullableStr(data.cashfree_order_id);
+    const utr = toNullableStr(data.utr);
+
     let paymentRef = '';
 
     if (method === 'UPI_QR') {
@@ -650,9 +709,13 @@ export const FormGigLeadService = {
     // 1. Create Lead with payment notes
     const lead = await FormGigLeadService.createLead({
       ...data,
-      firstName: firstName || '',
-      lastName: lastName || '',
+      firstName,
+      lastName,
+      email,
       phone: cleanPhone,
+      city,
+      area,
+      jobType,
       notes: `₹${amountPaid} Onboarding Paid (${method}) - 90-Day Verified Gig Worker Membership Active. Ref: ${paymentRef}`,
     }, files);
 

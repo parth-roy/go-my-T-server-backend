@@ -17,27 +17,69 @@ import { AppError } from '@shared/errors/AppError';
 
 const prisma = new PrismaClient();
 
+/**
+ * Safely normalizes input values that could be strings or arrays of strings (e.g. if a multipart field is appended multiple times).
+ */
+const toStr = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  const raw = Array.isArray(val) ? val[0] : val;
+  return String(raw ?? '').trim();
+};
+
+const toNullableStr = (val: any): string | null => {
+  const s = toStr(val);
+  return s.length > 0 ? s : null;
+};
+
+const toNullableFloat = (val: any): number | null => {
+  if (val === null || val === undefined) return null;
+  const raw = Array.isArray(val) ? val[0] : val;
+  const num = parseFloat(String(raw));
+  return isNaN(num) ? null : num;
+};
+
 export class FormDriverLeadService {
   async createLead(data: any, files: { [fieldname: string]: Express.Multer.File[] }) {
-    // Extract textual data
-    const {
-      name, email, phone, altPhone, city, transportHub, vehicleType, vehicleNumber, aadharNumber, dlNumber,
-      givenAddress, givenStreet, givenDistrict, givenState, givenPincode, givenLat, givenLng,
-      autoAddress, autoStreet, autoDistrict, autoState, autoPincode, autoLat, autoLng
-    } = data;
-    
-    const state = data.state || givenState || autoState || 'N/A';
+    // Extract & normalize textual data
+    const name = toStr(data.name);
+    const email = toNullableStr(data.email);
+    const phone = toStr(data.phone);
+    const altPhone = toNullableStr(data.altPhone || data.alternatePhone);
+    const rawCity = toStr(data.city);
+    const givenDistrict = toNullableStr(data.givenDistrict);
+    const givenState = toNullableStr(data.givenState);
+    const autoDistrict = toNullableStr(data.autoDistrict);
+    const autoState = toNullableStr(data.autoState);
+    const state = toStr(data.state) || givenState || autoState || 'N/A';
+    const city = rawCity || givenDistrict || autoDistrict || 'N/A';
+    const transportHub = toNullableStr(data.transportHub);
+    const vehicleType = toStr(data.vehicleType) as VehicleType;
+    const vehicleNumber = toStr(data.vehicleNumber);
+    const aadharNumber = toStr(data.aadharNumber);
+    const dlNumber = toStr(data.dlNumber);
+
+    const givenAddress = toNullableStr(data.givenAddress);
+    const givenStreet = toNullableStr(data.givenStreet);
+    const givenPincode = toNullableStr(data.givenPincode);
+    const givenLat = toNullableFloat(data.givenLat);
+    const givenLng = toNullableFloat(data.givenLng);
+
+    const autoAddress = toNullableStr(data.autoAddress);
+    const autoStreet = toNullableStr(data.autoStreet);
+    const autoPincode = toNullableStr(data.autoPincode);
+    const autoLat = toNullableFloat(data.autoLat);
+    const autoLng = toNullableFloat(data.autoLng);
 
     // Haversine Distance Calculation (if both coordinates are provided)
     let locationDistance = null;
     let isLocationVerified = false;
 
-    if (givenLat && givenLng && autoLat && autoLng) {
+    if (givenLat != null && givenLng != null && autoLat != null && autoLng != null) {
       const R = 6371e3; // Earth radius in meters
-      const lat1 = parseFloat(givenLat) * Math.PI / 180;
-      const lat2 = parseFloat(autoLat) * Math.PI / 180;
-      const deltaLat = (parseFloat(autoLat) - parseFloat(givenLat)) * Math.PI / 180;
-      const deltaLng = (parseFloat(autoLng) - parseFloat(givenLng)) * Math.PI / 180;
+      const lat1 = givenLat * Math.PI / 180;
+      const lat2 = autoLat * Math.PI / 180;
+      const deltaLat = (autoLat - givenLat) * Math.PI / 180;
+      const deltaLng = (autoLng - givenLng) * Math.PI / 180;
 
       const a = Math.sin(deltaLat/2) * Math.sin(deltaLat/2) +
                 Math.cos(lat1) * Math.cos(lat2) *
@@ -105,8 +147,8 @@ export class FormDriverLeadService {
         givenDistrict: givenDistrict || null,
         givenState: givenState || null,
         givenPincode: givenPincode || null,
-        givenLat: givenLat ? parseFloat(givenLat) : null,
-        givenLng: givenLng ? parseFloat(givenLng) : null,
+        givenLat: givenLat,
+        givenLng: givenLng,
 
         // Auto Location
         autoAddress: autoAddress || null,
@@ -114,8 +156,8 @@ export class FormDriverLeadService {
         autoDistrict: autoDistrict || null,
         autoState: autoState || null,
         autoPincode: autoPincode || null,
-        autoLat: autoLat ? parseFloat(autoLat) : null,
-        autoLng: autoLng ? parseFloat(autoLng) : null,
+        autoLat: autoLat,
+        autoLng: autoLng,
 
         locationDistance: locationDistance,
         isLocationVerified: isLocationVerified,
@@ -222,21 +264,29 @@ export class FormDriverLeadService {
    * Provisions FormDriverLead, User, Driver profile, and 90-Day Premium Subscription.
    */
   async onboardWithPayment(data: any, files: { [fieldname: string]: Express.Multer.File[] }) {
-    const {
-      name, email, phone, city, vehicleType, dlNumber,
-      paymentMethod, razorpay_order_id, razorpay_payment_id, razorpay_signature, utr
-    } = data;
-
-    const cleanPhone = String(phone || '').replace(/\D/g, '');
+    const rawPhone = toStr(data.phone);
+    const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
     if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
       throw AppError.badRequest('A valid 10-digit Indian mobile number is required.', 'INVALID_PHONE');
     }
-    if (!name || String(name).trim().length < 2) {
+    const name = toStr(data.name);
+    if (!name || name.length < 2) {
       throw AppError.badRequest('Full name is required.', 'INVALID_NAME');
     }
 
+    const email = toNullableStr(data.email);
+    const rawCity = toStr(data.city);
+    const givenDistrict = toNullableStr(data.givenDistrict);
+    const city = rawCity || givenDistrict || 'N/A';
+    const vehicleType = toStr(data.vehicleType);
+    const dlNumber = toNullableStr(data.dlNumber);
+
     // Verify Payment
-    const method = String(paymentMethod || 'RAZORPAY').toUpperCase();
+    const method = toStr(data.paymentMethod || 'RAZORPAY').toUpperCase();
+    const razorpay_order_id = toNullableStr(data.razorpay_order_id);
+    const razorpay_payment_id = toNullableStr(data.razorpay_payment_id);
+    const razorpay_signature = toNullableStr(data.razorpay_signature);
+    const utr = toNullableStr(data.utr);
 
     if (method === 'UPI_QR') {
       const cleanUtr = String(utr || '').replace(/\D/g, '');
@@ -269,7 +319,12 @@ export class FormDriverLeadService {
     // 1. Create standard Lead via createLead
     const lead = await this.createLead({
       ...data,
+      name,
+      email,
       phone: cleanPhone,
+      city,
+      vehicleType,
+      dlNumber,
       notes: `₹99 Onboarding Paid (${method}) - 90-Day Premium Membership Active. Ref: ${razorpay_payment_id || utr}`,
     }, files);
 
