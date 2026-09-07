@@ -1399,8 +1399,8 @@ export async function createDirectContactCashfreeOrder(req: Request, res: Respon
             returnUrl,
         } = req.body;
 
-        // Enforce strict ₹49.00 flat fee (fail-closed against client-side tampering)
-        const chargedAmount = 49.0;
+        // TEMPORARY LIVE TEST OVERRIDE: Set to ₹1.00 so user can test real payment settlement via UPI QR scan. Will revert to 49.0 once verified.
+        const chargedAmount = 1.0;
         const cleanPhone = customerPhone ? String(customerPhone).replace(/\D/g, '').slice(-10) : '';
         if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
             throw AppError.badRequest('A valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9) is required.');
@@ -1539,7 +1539,8 @@ export async function verifyDirectContactCashfreePayment(req: Request, res: Resp
             if (!isPaid) {
                 throw AppError.badRequest('Payment has not been completed or is still pending on Cashfree.', 'PAYMENT_PENDING');
             }
-            if (Number(cfOrder.order_amount) < 49.0) {
+            // TEMPORARY LIVE TEST OVERRIDE: Accept ₹1.00 for testing settlement. Will revert to 49.0 once verified.
+            if (Number(cfOrder.order_amount) < 1.0) {
                 logger.warn(`[verifyDirectContactCashfreePayment] Suspicious order amount ${cfOrder.order_amount} for order ${orderId}`);
                 throw AppError.badRequest('Invalid order amount recorded on payment gateway.', 'INVALID_PAYMENT_AMOUNT');
             }
