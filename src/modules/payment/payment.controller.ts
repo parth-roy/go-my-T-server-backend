@@ -1396,6 +1396,7 @@ export async function createDirectContactCashfreeOrder(req: Request, res: Respon
             workerIds,
             platform,
             amount: requestedAmount,
+            returnUrl,
         } = req.body;
 
         const chargedAmount = requestedAmount !== undefined && Number(requestedAmount) > 0 ? Number(requestedAmount) : 49.0;
@@ -1416,6 +1417,7 @@ export async function createDirectContactCashfreeOrder(req: Request, res: Respon
             customerPhone: cleanPhone,
             customerName: customerName || 'MetroMitra Customer',
             customerEmail: customerEmail || 'support@metromitra.com',
+            returnUrl: returnUrl || undefined,
             orderNote: `Unlock 10 ${serviceCategory || 'Worker'} Contacts in ${city || 'India'}`,
             orderTags: {
                 platform: validPlatform,

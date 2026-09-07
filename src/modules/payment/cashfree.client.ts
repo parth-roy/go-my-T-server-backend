@@ -82,7 +82,10 @@ class CashfreeClient {
     const cleanPhone = String(params.customerPhone || '').replace(/\D/g, '').slice(-10);
     const cleanCustomerId = `cust_${cleanPhone || Date.now()}`;
 
-    const payload = {
+    const defaultReturnUrl = params.returnUrl || `https://metromitra.com/direct-contact?cf_order_id=${params.orderId}`;
+    const defaultNotifyUrl = params.notifyUrl || `https://api.gomytruck.com/api/v1/payments/cashfree-webhook`;
+
+    const payload: Record<string, any> = {
       order_id: params.orderId,
       order_amount: Number(params.orderAmount.toFixed(2)),
       order_currency: params.orderCurrency || 'INR',
@@ -93,9 +96,8 @@ class CashfreeClient {
         customer_email: params.customerEmail?.trim() || 'support@metromitra.com',
       },
       order_meta: {
-        return_url: params.returnUrl || undefined,
-        notify_url: params.notifyUrl || undefined,
-        payment_methods: 'cc,dc,upi,nb,app',
+        return_url: defaultReturnUrl,
+        notify_url: defaultNotifyUrl,
       },
       order_note: params.orderNote || 'MetroMitra Direct Contact Unlock',
       order_tags: params.orderTags || {},
