@@ -39,7 +39,7 @@ import { formGigLeadRouter } from '@modules/form-gig-leads/form-gig-leads.router
 import { gigRouter } from '@modules/gig/gig.router';
 import { leadUnlockRouter } from '@modules/lead-unlock/lead-unlock.router';
 import { sentryErrorHandler } from '@config/sentry';
-import { razorpayWebhook } from '@modules/payment/payment.controller';
+import { razorpayWebhook, cashfreeWebhook } from '@modules/payment/payment.controller';
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
 
 export function createApp(): Application {
@@ -73,6 +73,12 @@ export function createApp(): Application {
     '/api/v1/payments/webhook',
     express.raw({ type: 'application/json' }),
     razorpayWebhook,
+  );
+
+  app.post(
+    '/api/v1/payments/cashfree-webhook',
+    express.raw({ type: 'application/json' }),
+    cashfreeWebhook,
   );
 
   app.post(

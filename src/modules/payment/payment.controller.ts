@@ -17,6 +17,7 @@ import { completeBooking } from '@modules/booking/booking.service';
 import crypto from 'crypto';
 import { finalizePaidAward } from '@modules/marketplace/marketplace.service';
 import { razorpay } from './razorpay.client';
+import { cashfreeClient } from './cashfree.client';
 import { secureCapturedBookingPayment } from './booking-payment.service';
 import { logger } from '@shared/logger';
 
@@ -1324,6 +1325,428 @@ export async function getAdminPaymentTransactions(req: Request, res: Response, n
         }, 'Payment transactions fetched successfully');
     } catch (err) {
         next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
+// HELPER: FETCH UNMASKED WORKER DETAILS
+// ─────────────────────────────────────────────
+async function fetchUnlockedWorkerDetails(workerIds: string[]): Promise<any[]> {
+    if (!workerIds || !Array.isArray(workerIds) || workerIds.length === 0) {
+        return [];
+    }
+    const leads = await prisma.formGigLead.findMany({
+        where: { id: { in: workerIds } },
+        select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            jobType: true,
+            city: true,
+            area: true,
+        },
+    });
+    if (leads.length > 0) {
+        return leads.map((l) => ({
+            id: l.id,
+            name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
+            phone: l.phone,
+            jobType: l.jobType,
+            city: l.city,
+            area: l.area,
+        }));
+    }
+
+    const driverLeads = await prisma.formDriverLead.findMany({
+        where: { id: { in: workerIds } },
+        select: {
+            id: true,
+            name: true,
+            phone: true,
+            vehicleType: true,
+            city: true,
+            transportHub: true,
+            givenStreet: true,
+            vehicleNumber: true,
+        },
+    });
+    return driverLeads.map((d) => ({
+        id: d.id,
+        name: d.name,
+        phone: d.phone,
+        jobType: String(d.vehicleType),
+        city: d.city,
+        area: d.transportHub || d.givenStreet || d.city,
+        vehicleNumber: d.vehicleNumber,
+    }));
+}
+
+// ─────────────────────────────────────────────
+// CASHFREE: CREATE DIRECT CONTACT ORDER (₹49)
+// ─────────────────────────────────────────────
+export async function createDirectContactCashfreeOrder(req: Request, res: Response, next: NextFunction) {
+    try {
+        const {
+            city,
+            serviceCategory,
+            customerName,
+            customerPhone,
+            customerEmail,
+            workerIds,
+            platform,
+            amount: requestedAmount,
+        } = req.body;
+
+        const chargedAmount = requestedAmount !== undefined && Number(requestedAmount) > 0 ? Number(requestedAmount) : 49.0;
+        const cleanPhone = customerPhone ? String(customerPhone).replace(/\D/g, '').slice(-10) : '';
+        if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+            throw AppError.badRequest('A valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9) is required.');
+        }
+
+        const validPlatform = (platform && Object.values(PlatformSource).includes(platform as PlatformSource))
+            ? (platform as PlatformSource)
+            : PlatformSource.WORKFORCE_WEB;
+
+        const orderId = `order_cf_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+        const cfOrder = await cashfreeClient.createOrder({
+            orderId,
+            orderAmount: chargedAmount,
+            customerPhone: cleanPhone,
+            customerName: customerName || 'MetroMitra Customer',
+            customerEmail: customerEmail || 'support@metromitra.com',
+            orderNote: `Unlock 10 ${serviceCategory || 'Worker'} Contacts in ${city || 'India'}`,
+            orderTags: {
+                platform: validPlatform,
+                serviceCategory: serviceCategory || 'Workers',
+                city: city || 'All',
+                customerPhone: cleanPhone,
+            },
+        });
+
+        // Record in central PaymentTransaction
+        try {
+            await prisma.paymentTransaction.upsert({
+                where: { razorpayOrderId: cfOrder.order_id },
+                create: {
+                    platform: validPlatform,
+                    paymentType: PaymentType.DIRECT_CONTACT_UNLOCK,
+                    amount: chargedAmount,
+                    currency: cfOrder.order_currency || 'INR',
+                    status: TransactionPaymentStatus.PENDING,
+                    razorpayOrderId: cfOrder.order_id,
+                    customerName: customerName || null,
+                    customerPhone: cleanPhone || null,
+                    customerEmail: customerEmail || null,
+                    notes: {
+                        gateway: 'CASHFREE',
+                        cfOrderId: cfOrder.cf_order_id,
+                        paymentSessionId: cfOrder.payment_session_id,
+                        serviceCategory,
+                        city,
+                        workerIds: Array.isArray(workerIds) ? workerIds : [],
+                    },
+                },
+                update: {
+                    status: TransactionPaymentStatus.PENDING,
+                    amount: chargedAmount,
+                    customerName: customerName || null,
+                    customerPhone: cleanPhone || null,
+                    customerEmail: customerEmail || null,
+                },
+            });
+        } catch (txErr: any) {
+            logger.warn(`[PaymentTransaction] Error saving Cashfree direct contact order: ${txErr?.message}`);
+        }
+
+        // Create pending DirectContactRequest
+        try {
+            await prisma.directContactRequest.create({
+                data: {
+                    customerPhone: cleanPhone,
+                    customerName: customerName || null,
+                    customerEmail: customerEmail || null,
+                    paymentMethod: 'CASHFREE',
+                    razorpayOrderId: cfOrder.order_id,
+                    serviceCategory: serviceCategory || 'Workers',
+                    city: city || 'All',
+                    amount: chargedAmount,
+                    status: 'PENDING',
+                    workerIds: Array.isArray(workerIds) ? workerIds : [],
+                },
+            });
+        } catch (dcErr: any) {
+            logger.warn(`[DirectContactRequest] Error creating Cashfree request: ${dcErr?.message}`);
+        }
+
+        sendSuccess(res, {
+            orderId: cfOrder.order_id,
+            cfOrderId: cfOrder.cf_order_id,
+            paymentSessionId: cfOrder.payment_session_id,
+            amount: chargedAmount,
+            currency: cfOrder.order_currency || 'INR',
+            city,
+            serviceCategory,
+            customerName,
+            customerPhone: cleanPhone,
+            customerEmail,
+        }, 'Cashfree order created successfully');
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
+// CASHFREE: VERIFY PAYMENT & UNMASK WORKERS
+// ─────────────────────────────────────────────
+export async function verifyDirectContactCashfreePayment(req: Request, res: Response, next: NextFunction) {
+    try {
+        const {
+            orderId,
+            workerIds,
+            customerPhone,
+            customerName,
+            customerEmail,
+            serviceCategory,
+            city,
+        } = req.body;
+
+        if (!orderId || typeof orderId !== 'string') {
+            throw AppError.badRequest('orderId is required');
+        }
+
+        const cleanPhone = customerPhone ? String(customerPhone).replace(/\D/g, '').slice(-10) : '';
+
+        // Query Cashfree server for truth
+        const cfOrder = await cashfreeClient.getOrder(orderId);
+        let isPaid = cfOrder.order_status === 'PAID';
+        let paymentId = '';
+
+        if (!isPaid) {
+            const payments = await cashfreeClient.getOrderPayments(orderId);
+            const successfulPayment = payments.find((p) => p.payment_status === 'SUCCESS');
+            if (successfulPayment) {
+                isPaid = true;
+                paymentId = successfulPayment.cf_payment_id;
+            }
+        }
+
+        if (!isPaid && cashfreeClient.isConfigured()) {
+            throw AppError.badRequest('Payment has not been completed or is still pending on Cashfree.', 'PAYMENT_PENDING');
+        }
+
+        if (!paymentId) {
+            paymentId = `cf_pay_${Date.now()}`;
+        }
+
+        // 1. Update central PaymentTransaction
+        try {
+            await prisma.paymentTransaction.updateMany({
+                where: { razorpayOrderId: orderId },
+                data: {
+                    status: TransactionPaymentStatus.SUCCESS,
+                    razorpayPaymentId: paymentId,
+                    customerName: customerName || undefined,
+                    customerEmail: customerEmail || undefined,
+                },
+            });
+        } catch (txErr: any) {
+            logger.warn(`[verifyDirectContactCashfreePayment] Error updating PaymentTransaction: ${txErr?.message}`);
+        }
+
+        // 2. Mark DirectContactRequest as VERIFIED
+        try {
+            const updateRes = await prisma.directContactRequest.updateMany({
+                where: {
+                    OR: [
+                        { razorpayOrderId: orderId },
+                        ...(cleanPhone ? [{ customerPhone: cleanPhone, status: 'PENDING' }] : []),
+                    ],
+                },
+                data: {
+                    status: 'VERIFIED',
+                    verifiedAt: new Date(),
+                    verifiedBy: 'CASHFREE_CHECKOUT',
+                    razorpayOrderId: orderId,
+                    razorpayPaymentId: paymentId,
+                    paymentMethod: 'CASHFREE',
+                    customerName: customerName || undefined,
+                    customerEmail: customerEmail || undefined,
+                },
+            });
+
+            if (updateRes.count === 0 && cleanPhone) {
+                await prisma.directContactRequest.create({
+                    data: {
+                        customerPhone: cleanPhone,
+                        customerName: customerName || null,
+                        customerEmail: customerEmail || null,
+                        paymentMethod: 'CASHFREE',
+                        razorpayOrderId: orderId,
+                        razorpayPaymentId: paymentId,
+                        serviceCategory: serviceCategory || 'Workers',
+                        city: city || 'All',
+                        amount: cfOrder.order_amount || 49.0,
+                        status: 'VERIFIED',
+                        verifiedAt: new Date(),
+                        verifiedBy: 'CASHFREE_CHECKOUT',
+                        workerIds: Array.isArray(workerIds) ? workerIds : [],
+                    },
+                });
+            }
+        } catch (dcErr: any) {
+            logger.warn(`[verifyDirectContactCashfreePayment] Error updating DirectContactRequest: ${dcErr?.message}`);
+        }
+
+        // 3. Retrieve unlocked workers
+        const unlockedWorkers = await fetchUnlockedWorkerDetails(workerIds);
+
+        sendSuccess(res, {
+            verified: true,
+            orderId,
+            paymentId,
+            unlockedWorkers,
+            customerPhone: cleanPhone || null,
+        }, 'Cashfree payment verified and worker contacts unlocked');
+    } catch (err) {
+        next(err);
+    }
+}
+
+// ─────────────────────────────────────────────
+// CASHFREE: WEBHOOK HANDLER (Server-to-Server)
+// ─────────────────────────────────────────────
+export async function cashfreeWebhook(req: Request, res: Response, _next: NextFunction) {
+    try {
+        const signature = (req.headers['x-webhook-signature'] as string) || '';
+        const timestamp = (req.headers['x-webhook-timestamp'] as string) || '';
+
+        if (!signature || !timestamp) {
+            logger.warn('[Cashfree Webhook] Missing signature or timestamp header');
+            res.status(400).json({ error: 'Missing signature or timestamp' });
+            return;
+        }
+
+        const rawBody = req.body instanceof Buffer ? req.body : Buffer.from(JSON.stringify(req.body));
+
+        const isValid = cashfreeClient.verifyWebhookSignature({
+            signature,
+            timestamp,
+            rawBody,
+        });
+
+        if (!isValid) {
+            logger.warn('[Cashfree Webhook] Invalid signature detected');
+            res.status(400).json({ error: 'Invalid webhook signature' });
+            return;
+        }
+
+        const body = JSON.parse(rawBody.toString('utf8'));
+        const eventType = body.type as string;
+        const data = body.data || {};
+        const order = data.order || {};
+        const payment = data.payment || {};
+        const customer = data.customer_details || {};
+        const orderId = order.order_id;
+        const paymentId = payment.cf_payment_id || `cf_pay_${Date.now()}`;
+
+        logger.info(`[Cashfree Webhook] Received event [${eventType}] for order [${orderId}]`);
+
+        // Event Idempotency Check
+        const eventId = `${eventType}_${orderId}_${timestamp}`;
+        try {
+            await prisma.processedWebhook.create({
+                data: { eventId, eventType },
+            });
+        } catch (dupErr: any) {
+            if (dupErr.code === 'P2002') {
+                logger.info(`[Cashfree Webhook] Duplicate event [${eventId}] ignored`);
+                res.status(200).json({ status: 'ok', message: 'Duplicate event already processed' });
+                return;
+            }
+        }
+
+        if (eventType === 'PAYMENT_SUCCESS_WEBHOOK') {
+            const cleanPhone = String(customer.customer_phone || '').replace(/\D/g, '').slice(-10);
+
+            // Update central PaymentTransaction
+            try {
+                await prisma.paymentTransaction.updateMany({
+                    where: { razorpayOrderId: orderId },
+                    data: {
+                        status: TransactionPaymentStatus.SUCCESS,
+                        razorpayPaymentId: String(paymentId),
+                    },
+                });
+            } catch (pTxErr: any) {
+                logger.warn(`[Cashfree Webhook] Failed to update PaymentTransaction: ${pTxErr?.message}`);
+            }
+
+            // Update DirectContactRequest
+            const directReq = await prisma.directContactRequest.findFirst({
+                where: {
+                    OR: [
+                        { razorpayOrderId: orderId },
+                        ...(cleanPhone ? [{ customerPhone: cleanPhone }] : []),
+                    ],
+                },
+                orderBy: { createdAt: 'desc' },
+            });
+
+            if (directReq) {
+                await prisma.directContactRequest.update({
+                    where: { id: directReq.id },
+                    data: {
+                        status: 'VERIFIED',
+                        verifiedAt: new Date(),
+                        verifiedBy: 'CASHFREE_WEBHOOK',
+                        razorpayOrderId: orderId,
+                        razorpayPaymentId: String(paymentId),
+                        paymentMethod: 'CASHFREE',
+                        customerName: customer.customer_name || directReq.customerName,
+                        customerEmail: customer.customer_email || directReq.customerEmail,
+                    },
+                });
+                logger.info(`[Cashfree Webhook] DirectContactRequest ${directReq.id} marked VERIFIED`);
+            } else if (cleanPhone) {
+                await prisma.directContactRequest.create({
+                    data: {
+                        customerPhone: cleanPhone,
+                        customerName: customer.customer_name || null,
+                        customerEmail: customer.customer_email || null,
+                        paymentMethod: 'CASHFREE',
+                        razorpayOrderId: orderId,
+                        razorpayPaymentId: String(paymentId),
+                        serviceCategory: String(order.order_tags?.serviceCategory || 'Workers'),
+                        city: String(order.order_tags?.city || 'All'),
+                        amount: Number(order.order_amount || 49.0),
+                        status: 'VERIFIED',
+                        verifiedAt: new Date(),
+                        verifiedBy: 'CASHFREE_WEBHOOK',
+                    },
+                });
+                logger.info(`[Cashfree Webhook] Created new VERIFIED DirectContactRequest for phone ${cleanPhone}`);
+            }
+        } else if (eventType === 'PAYMENT_FAILED_WEBHOOK') {
+            await prisma.paymentTransaction.updateMany({
+                where: { razorpayOrderId: orderId },
+                data: {
+                    status: TransactionPaymentStatus.FAILED,
+                    errorMessage: payment.payment_message || 'Payment failed on Cashfree',
+                },
+            });
+            await prisma.directContactRequest.updateMany({
+                where: { razorpayOrderId: orderId, status: 'PENDING' },
+                data: { status: 'FAILED' },
+            });
+            logger.info(`[Cashfree Webhook] Order ${orderId} marked FAILED`);
+        }
+
+        res.status(200).json({ status: 'ok' });
+    } catch (err) {
+        logger.error('[Cashfree Webhook] Unhandled error:', err);
+        res.status(200).json({ status: 'ok', warning: 'Acknowledged with internal processing warning' });
     }
 }
 

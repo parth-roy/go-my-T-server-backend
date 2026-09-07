@@ -107,6 +107,12 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+  // ── Cashfree Payment Gateway ─────────────────────────────────────
+  CASHFREE_APP_ID: z.string().min(1).optional(),
+  CASHFREE_SECRET_KEY: z.string().min(1).optional(),
+  CASHFREE_ENV: z.enum(['TEST', 'PROD', 'sandbox', 'production']).default('TEST'),
+  CASHFREE_API_VERSION: z.string().default('2023-08-01'),
+
   // Google Sheets
   GOOGLE_SPREADSHEET_ID: z.string().optional(),
   GOOGLE_CLIENT_EMAIL: z.string().optional(),
