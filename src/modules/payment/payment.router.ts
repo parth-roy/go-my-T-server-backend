@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate } from '@shared/middleware/auth.middleware';
+import { authenticate, optionalAuth } from '@shared/middleware/auth.middleware';
 import * as PaymentController from './payment.controller';
 
 export const paymentRouter = Router();
@@ -9,13 +9,13 @@ export const paymentRouter = Router();
 paymentRouter.post('/webhook', PaymentController.razorpayWebhook);
 paymentRouter.post('/cashfree-webhook', PaymentController.cashfreeWebhook);
 
-// Direct Contact: Rs.49 Worker Number Unlock (Public flow)
+// Direct Contact: Rs.49 / Rs.99 Worker Number Unlock (Public flow)
 paymentRouter.post('/create-direct-contact-order', PaymentController.createDirectContactOrder);
 paymentRouter.post('/verify-direct-contact', PaymentController.verifyDirectContactPayment);
 paymentRouter.post('/cashfree-create-order', PaymentController.createDirectContactCashfreeOrder);
 paymentRouter.post('/cashfree-verify', PaymentController.verifyDirectContactCashfreePayment);
 paymentRouter.post('/submit-direct-contact-request', PaymentController.submitDirectContactRequest);
-paymentRouter.get('/check-direct-contact-status', PaymentController.checkDirectContactStatus);
+paymentRouter.get('/check-direct-contact-status', optionalAuth, PaymentController.checkDirectContactStatus);
 
 // Admin Direct Contact & Multi-Platform Payment Management
 paymentRouter.get('/admin/direct-contact-requests', PaymentController.getAdminDirectContactRequests);

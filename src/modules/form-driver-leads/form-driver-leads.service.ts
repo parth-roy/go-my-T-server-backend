@@ -927,7 +927,6 @@ export class FormDriverLeadService {
         distance,
         status: 'Commercial DL & RC Verified',
         phoneMasked: masked,
-        phoneRaw: raw10,
       };
     });
   }

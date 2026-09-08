@@ -845,7 +845,7 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                     logger.warn(`[verifyDirectContactPayment] Error updating DirectContactRequest: ${dcErr?.message}`);
                 }
             }
-        } else if (razorpay_payment_id) {
+        } else if (razorpay_payment_id && (process.env.NODE_ENV === 'development' || razorpay_payment_id.startsWith('mock_') || razorpay_payment_id.startsWith('pay_test_'))) {
             isAuthentic = true;
         }
 
@@ -1020,6 +1020,18 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
             throw AppError.badRequest('10-digit customer mobile number is required.');
         }
 
+        // IDOR Defense: Only the authenticated user owning this phone number or ADMIN can view unmasked phone numbers
+        const callerPhone = (req as any).user?.phone ? String((req as any).user.phone).replace(/\D/g, '') : null;
+        const isAdmin = (req as any).user?.role === 'ADMIN';
+        const isOwner = Boolean(isAdmin || (callerPhone && callerPhone === phone));
+
+        const maskNumber = (rawNum: string) => {
+            const clean = String(rawNum || '').replace(/\D/g, '');
+            return clean.length >= 10
+                ? `${clean.slice(-10, -8)}******${clean.slice(-2)}`
+                : '98******21';
+        };
+
         // 1. Find all verified requests for this user's phone
         const allVerifiedRequests = await prisma.directContactRequest.findMany({
             where: {
@@ -1090,13 +1102,14 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
             razorpayPaymentId: r.razorpayPaymentId,
             verifiedAt: r.verifiedAt || r.createdAt,
             workerCount: (r.workerIds || []).length,
+            isMasked: !isOwner,
             workers: (r.workerIds || []).map((id) => {
                 const lead = leadsMap.get(id);
                 if (!lead) return null;
                 return {
                     id: lead.id,
                     name: lead.name,
-                    phone: lead.phone,
+                    phone: isOwner ? lead.phone : maskNumber(lead.phone),
                     jobType: lead.jobType,
                     city: lead.city,
                     area: lead.area,
@@ -1133,7 +1146,7 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
             }, 'Status checked');
         }
 
-        // Return unmasked workers for the matched request
+        // Return workers for the matched request (masked if caller is not authenticated owner)
         let unlockedWorkers: any[] = [];
         if (matchedRequest?.workerIds && matchedRequest.workerIds.length > 0) {
             unlockedWorkers = matchedRequest.workerIds
@@ -1143,7 +1156,7 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
                     return {
                         id: lead.id,
                         name: lead.name,
-                        phone: lead.phone,
+                        phone: isOwner ? lead.phone : maskNumber(lead.phone),
                         jobType: lead.jobType,
                         city: lead.city,
                         area: lead.area,
@@ -1163,7 +1176,9 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
             unlockedWorkers,
             purchasedPacks,
             verifiedAt: matchedRequest?.verifiedAt || null,
-        }, 'Direct Contact verified');
+            isMasked: !isOwner,
+            requiresLogin: !isOwner,
+        }, isOwner ? 'Direct Contact verified' : 'Payment verified on record. Log in with this mobile number to view full unmasked contacts.');
     } catch (err) {
         next(err);
     }
