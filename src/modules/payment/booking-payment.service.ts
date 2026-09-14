@@ -51,15 +51,7 @@ export async function secureCapturedBookingPayment(input: CapturedPaymentInput) 
       expectedAmountPaise = Math.round(Number(award.customerTotal) * 100);
     }
 
-    // ─────────────────────────────────────────────
-    // PRODUCTION TEST TOGGLE: Force ₹1.00 payment
-    // Must match the toggle in payment.controller.ts createOrder().
-    // Set to false to restore real fare amount verification.
-    // ─────────────────────────────────────────────
-    const FORCE_PRODUCTION_TEST_ONE_RUPEE = true;
-    const effectiveExpectedPaise = FORCE_PRODUCTION_TEST_ONE_RUPEE ? 100 : expectedAmountPaise;
-
-    if (input.amountPaise !== effectiveExpectedPaise || input.currency !== 'INR') {
+    if (input.amountPaise !== expectedAmountPaise || input.currency !== 'INR') {
       throw AppError.badRequest(
         'Payment amount, currency or order does not match this booking',
         'PAYMENT_MISMATCH',

@@ -64,37 +64,27 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
             }
         }
 
-        // ─────────────────────────────────────────────
-        // PRODUCTION TEST TOGGLE: Force ₹1.00 payment
-        // Set to true to test production payment with ₹1.00 for all vehicles/distances.
-        // Set to false to restore dynamic fare calculation.
-        // ─────────────────────────────────────────────
-        const FORCE_PRODUCTION_TEST_ONE_RUPEE = true;
-
         // FIX HIGH-15: Idempotency — return the existing unpaid order if one exists,
         // preventing duplicate charges from double-clicks.
         if ((booking as any).razorpayOrderId && booking.paymentStatus === PaymentStatus.PENDING) {
             try {
                 const existingOrder = await razorpay.orders.fetch((booking as any).razorpayOrderId);
                 if ((existingOrder as any).status === 'created') {
-                    if (!FORCE_PRODUCTION_TEST_ONE_RUPEE || existingOrder.amount === 100) {
-                        sendSuccess(res, {
-                            orderId: existingOrder.id,
-                            amount: existingOrder.amount,
-                            currency: existingOrder.currency,
-                            keyId: process.env.RAZORPAY_KEY_ID,
-                        }, 'Existing order returned (idempotent)');
-                        return;
-                    }
+                    sendSuccess(res, {
+                        orderId: existingOrder.id,
+                        amount: existingOrder.amount,
+                        currency: existingOrder.currency,
+                        keyId: process.env.RAZORPAY_KEY_ID,
+                    }, 'Existing order returned (idempotent)');
+                    return;
                 }
             } catch {
                 // Fetch failed — order expired or invalid; fall through to create a new one
             }
         }
 
-        const calculatedFare = (booking.grandTotal ?? booking.totalFare ?? 0);
-        const fareAmount = FORCE_PRODUCTION_TEST_ONE_RUPEE ? 1.00 : calculatedFare;
-        const amountInPaise = FORCE_PRODUCTION_TEST_ONE_RUPEE ? 100 : Math.round(fareAmount * 100);
+        const fareAmount = (booking.grandTotal ?? booking.totalFare ?? 0);
+        const amountInPaise = Math.round(fareAmount * 100);
 
         if (amountInPaise <= 0) {
             throw AppError.badRequest('Booking has no valid fare amount. Please ensure the booking is confirmed with a calculated fare before payment.');
