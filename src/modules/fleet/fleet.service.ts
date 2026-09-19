@@ -776,14 +776,16 @@ export async function uploadOnboardingDocuments(
       });
     }
 
-    // If document type is RC_FRONT or VEHICLE_RC and docNumber is provided, and driver has a vehicle:
+    // If document type is RC_FRONT or VEHICLE_RC and docNumber is provided:
     if ((upperType === 'RC_FRONT' || upperType === 'VEHICLE_RC') && doc.docNumber) {
       const currentDriver = await prisma.driver.findUnique({
         where: { id: driver.id },
         include: { vehicle: true },
       });
+      const regNo = doc.docNumber.toUpperCase().replace(/[\s-]/g, '');
+      const metaVehicleType = doc.meta?.vehicleType || 'TATA_ACE';
+
       if (currentDriver?.vehicleId) {
-        const regNo = doc.docNumber.toUpperCase().replace(/[\s-]/g, '');
         const conflictVehicle = await prisma.vehicle.findFirst({
           where: { registrationNo: regNo, id: { not: currentDriver.vehicleId } },
         });
@@ -795,8 +797,36 @@ export async function uploadOnboardingDocuments(
         }
         await prisma.vehicle.update({
           where: { id: currentDriver.vehicleId },
-          data: { registrationNo: regNo },
+          data: {
+            registrationNo: regNo,
+            ...(doc.meta?.vehicleType ? { type: metaVehicleType as any } : {}),
+          },
         });
+      } else {
+        const existingVehicle = await prisma.vehicle.findUnique({
+          where: { registrationNo: regNo },
+        });
+        if (existingVehicle) {
+          await prisma.driver.update({
+            where: { id: driver.id },
+            data: { vehicleId: existingVehicle.id },
+          });
+        } else {
+          const newVehicle = await prisma.vehicle.create({
+            data: {
+              registrationNo: regNo,
+              type: metaVehicleType as any,
+              make: 'Commercial',
+              model: metaVehicleType,
+              year: new Date().getFullYear(),
+              capacityKg: 750,
+            },
+          });
+          await prisma.driver.update({
+            where: { id: driver.id },
+            data: { vehicleId: newVehicle.id },
+          });
+        }
       }
     }
   }
