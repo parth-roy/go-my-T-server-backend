@@ -6,7 +6,7 @@ export async function startAllWorkers() {
   const { startInvoiceWorker }      = await import('@shared/queue/workers/invoice.worker');
   const { startDispatchWorker }     = await import('@modules/dispatch/dispatch.worker');
   const { startEtaWorker, scheduleEtaRecalculationJob } = await import('@shared/jobs/eta.worker');
-  const { startUlipWorker }         = await import('@shared/queue/workers/ulip.worker');
+  // [PAUSED - ULIP DEPRECATION] const { startUlipWorker }         = await import('@shared/queue/workers/ulip.worker');
   const { startAnnouncementWorker } = await import('@shared/queue/workers/announcement.worker');
 
   startOtpWorker();
@@ -14,7 +14,7 @@ export async function startAllWorkers() {
   startInvoiceWorker();
   startDispatchWorker();
   startEtaWorker();
-  startUlipWorker(); // Processes ULIP gov-API verifications in the background
+  // [PAUSED - ULIP DEPRECATION] startUlipWorker(); // Processes ULIP gov-API verifications in the background
   startAnnouncementWorker();
 
   // Schedule repeatable ETA batch (every 60 seconds)

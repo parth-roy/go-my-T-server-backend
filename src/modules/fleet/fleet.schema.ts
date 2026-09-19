@@ -103,3 +103,38 @@ export const updateDriverStatusSchema = z.object({
 });
 
 export type UpdateDriverStatusInput = z.infer<typeof updateDriverStatusSchema>;
+
+// ── Manual Onboarding: Documents ──────────────────────────────────────
+
+export const documentItemSchema = z.object({
+  type: z.string().min(1).trim(),
+  fileUrl: z.string().url().trim(),
+  docNumber: z.string().trim().optional(),
+  fuelType: z.string().trim().optional(),
+  meta: z.any().optional(),
+});
+
+export const onboardingDocumentsSchema = z.union([
+  documentItemSchema,
+  z.object({
+    documents: z.array(documentItemSchema).min(1),
+  }),
+  z.array(documentItemSchema).min(1),
+]);
+
+export type DocumentItemInput = z.infer<typeof documentItemSchema>;
+export type OnboardingDocumentsInput = z.infer<typeof onboardingDocumentsSchema>;
+
+// ── Manual Onboarding: Profile Info ───────────────────────────────────
+
+export const updateProfileInfoSchema = z.object({
+  name: z.string().min(1).max(100).trim().optional(),
+  dob: z.string().trim().optional(),
+  gender: z.string().trim().optional(),
+  profileImageUrl: z.string().url().trim().optional().or(z.literal('')),
+  whatsappUpdates: z.boolean().optional(),
+  referralCode: z.string().trim().optional(),
+});
+
+export type UpdateProfileInfoInput = z.infer<typeof updateProfileInfoSchema>;
+

@@ -13,6 +13,8 @@ import {
   verifyLicenseSchema,
   verifyVehicleRcSchema,
   updateDriverStatusSchema,
+  onboardingDocumentsSchema,
+  updateProfileInfoSchema,
 } from './fleet.schema';
 
 // POST /api/v1/fleet/drivers/register
@@ -119,3 +121,48 @@ export async function adminOverrideVerification(
     next(err);
   }
 }
+
+// POST /api/v1/fleet/onboarding/documents
+export async function uploadOnboardingDocuments(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const input = onboardingDocumentsSchema.parse(req.body);
+    const data = await fleetService.uploadOnboardingDocuments(req.user!.id, input);
+    res.status(200).json({ success: true, data, message: 'Documents uploaded successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/v1/fleet/onboarding/status
+export async function getOnboardingStatus(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const data = await fleetService.getOnboardingStatus(req.user!.id);
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PATCH /api/v1/fleet/profile-info
+export async function updateProfileInfo(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const input = updateProfileInfoSchema.parse(req.body);
+    const data = await fleetService.updateProfileInfo(req.user!.id, input);
+    res.json({ success: true, data, message: 'Profile info updated successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
+

@@ -142,7 +142,7 @@ async function sendOtpViaPush(fcmToken: string, otp: string): Promise<void> {
       data: {
         type: 'OTP',
         otp: otp,
-        title: '\uD83D\uDD10 Your Truker Captain OTP',
+        title: '\uD83D\uDD10 Your GoMyTruck Captain OTP',
         body: `Your verification code is: ${otp}. Valid for 5 minutes. Do not share with anyone.`,
       },
       android: {

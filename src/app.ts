@@ -25,7 +25,7 @@ import { mapsRouter } from '@modules/maps/maps.router';
 import { notificationRouter } from '@modules/notifications/notification.router';
 import { uploadRouter } from '@modules/upload/upload.router';
 import { announcementRouter } from '@modules/announcement/announcement.router';
-import { ulipRouter } from '@modules/ulip/ulip.router';
+// [PAUSED - ULIP DEPRECATION] import { ulipRouter } from '@modules/ulip/ulip.router';
 import { subscriptionRouter } from '@modules/subscription/subscription.router';
 import { adminRouter } from '@modules/admin/admin.router';
 import { workforceRouter } from '@modules/workforce/workforce.router';
@@ -178,7 +178,7 @@ export function createApp(): Application {
   app.use('/api/v1/notifications', notificationRouter);
   app.use('/api/v1/announcements', announcementRouter);
   app.use('/api/v1/upload', uploadRouter);
-  app.use('/api/v1/ulip', ulipRouter);
+  // [PAUSED - ULIP DEPRECATION] app.use('/api/v1/ulip', ulipRouter);
   app.use('/api/v1/subscription', subscriptionRouter);
   app.use('/api/v1/admin',        adminRouter);
   app.use('/api/v1/workforce',    workforceRouter);

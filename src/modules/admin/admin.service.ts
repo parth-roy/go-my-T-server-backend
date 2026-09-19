@@ -571,7 +571,7 @@ export async function getDrivers(q: DriversQuery) {
         user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
         vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true } },
         subscription: { select: { plan: true, endDate: true, isActive: true } },
-        documents: { select: { id: true, type: true, status: true } },
+        documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
       },
     }),
   ]);

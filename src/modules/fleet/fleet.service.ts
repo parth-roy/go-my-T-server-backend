@@ -28,6 +28,9 @@ import type {
   VerifyLicenseInput,
   VerifyVehicleRcInput,
   UpdateDriverStatusInput,
+  OnboardingDocumentsInput,
+  DocumentItemInput,
+  UpdateProfileInfoInput,
 } from './fleet.schema';
 
 
@@ -675,4 +678,251 @@ export async function adminOverrideVerification(
   logger.info(`[Admin] Driver ${driverId} verification manually overridden by admin ${adminId}. Notes: ${notes}`);
 
   return _formatDriverProfile(updatedDriver);
+}
+
+// ── Manual Onboarding & Verification ──────────────────────────────────────────
+
+async function _getOrCreateDriver(userId: string) {
+  let driver = await prisma.driver.findUnique({
+    where: { userId },
+    include: { vehicle: true },
+  });
+  if (!driver) {
+    driver = await prisma.driver.create({
+      data: {
+        userId,
+        licenseNumber: `PENDING_${userId}`,
+      },
+      include: { vehicle: true },
+    });
+    logger.info('[Fleet] Auto-created driver profile for onboarding', { userId, driverId: driver.id });
+  }
+  return driver;
+}
+
+/**
+ * Uploads or updates onboarding documents for the authenticated driver.
+ * Supports single document or array of documents.
+ * Updates DL / RC numbers on Driver and Vehicle if provided.
+ */
+export async function uploadOnboardingDocuments(
+  userId: string,
+  input: OnboardingDocumentsInput
+): Promise<object> {
+  const driver = await _getOrCreateDriver(userId);
+
+  let docList: DocumentItemInput[] = [];
+  if (Array.isArray(input)) {
+    docList = input;
+  } else if ('documents' in input && Array.isArray(input.documents)) {
+    docList = input.documents;
+  } else {
+    docList = [input as DocumentItemInput];
+  }
+
+  const savedDocuments = [];
+
+  for (const doc of docList) {
+    const existingDoc = await prisma.driverDocument.findFirst({
+      where: {
+        driverId: driver.id,
+        type: doc.type,
+      },
+    });
+
+    let savedDoc;
+    if (existingDoc) {
+      savedDoc = await prisma.driverDocument.update({
+        where: { id: existingDoc.id },
+        data: {
+          fileUrl: doc.fileUrl,
+          status: 'PENDING',
+          rejectedReason: null,
+          verifiedAt: null,
+        },
+      });
+    } else {
+      savedDoc = await prisma.driverDocument.create({
+        data: {
+          driverId: driver.id,
+          type: doc.type,
+          fileUrl: doc.fileUrl,
+          status: 'PENDING',
+        },
+      });
+    }
+    savedDocuments.push(savedDoc);
+
+    const upperType = doc.type.toUpperCase();
+
+    // If document type is DL_FRONT or DRIVING_LICENSE and docNumber is provided:
+    if ((upperType === 'DL_FRONT' || upperType === 'DRIVING_LICENSE') && doc.docNumber) {
+      const dlNum = doc.docNumber.trim().toUpperCase();
+      const conflict = await prisma.driver.findFirst({
+        where: { licenseNumber: dlNum, id: { not: driver.id } },
+      });
+      if (conflict) {
+        throw AppError.conflict(
+          'This Driving License number is already registered to another account.',
+          'DL_ALREADY_REGISTERED'
+        );
+      }
+      await prisma.driver.update({
+        where: { id: driver.id },
+        data: {
+          licenseNumber: dlNum,
+          dlNumber: dlNum,
+        },
+      });
+    }
+
+    // If document type is RC_FRONT or VEHICLE_RC and docNumber is provided, and driver has a vehicle:
+    if ((upperType === 'RC_FRONT' || upperType === 'VEHICLE_RC') && doc.docNumber) {
+      const currentDriver = await prisma.driver.findUnique({
+        where: { id: driver.id },
+        include: { vehicle: true },
+      });
+      if (currentDriver?.vehicleId) {
+        const regNo = doc.docNumber.toUpperCase().replace(/[\s-]/g, '');
+        const conflictVehicle = await prisma.vehicle.findFirst({
+          where: { registrationNo: regNo, id: { not: currentDriver.vehicleId } },
+        });
+        if (conflictVehicle) {
+          throw AppError.conflict(
+            `Vehicle "${regNo}" is already registered in the system`,
+            'VEHICLE_REG_NO_TAKEN'
+          );
+        }
+        await prisma.vehicle.update({
+          where: { id: currentDriver.vehicleId },
+          data: { registrationNo: regNo },
+        });
+      }
+    }
+  }
+
+  const updatedDriver = await prisma.driver.findUnique({
+    where: { id: driver.id },
+    include: {
+      vehicle: true,
+      documents: { orderBy: { createdAt: 'desc' } },
+    },
+  });
+
+  return {
+    documents: updatedDriver?.documents ?? savedDocuments,
+    driver: updatedDriver ? _formatDriverProfile(updatedDriver) : null,
+    vehicle: updatedDriver?.vehicle ?? null,
+  };
+}
+
+/**
+ * Returns current onboarding status, documents, vehicle, driver profile, and user info.
+ */
+export async function getOnboardingStatus(userId: string): Promise<object> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      profileImageUrl: true,
+      profileComplete: true,
+    },
+  });
+  if (!user) {
+    throw AppError.notFound('User not found');
+  }
+
+  const driver = await prisma.driver.findUnique({
+    where: { userId },
+    include: {
+      vehicle: true,
+      documents: { orderBy: { createdAt: 'desc' } },
+    },
+  });
+
+  const formattedDob = driver?.dob ? driver.dob.toISOString().split('T')[0] : null;
+
+  return {
+    isDocVerified: driver?.isDocVerified ?? false,
+    profileComplete: user.profileComplete,
+    documents: driver?.documents ?? [],
+    vehicle: driver?.vehicle ?? null,
+    driver: driver ? _formatDriverProfile(driver) : null,
+    user: {
+      name: user.name ?? null,
+      phone: user.phone ?? null,
+      dob: formattedDob,
+      gender: null,
+      profileImage: user.profileImageUrl ?? null,
+    },
+  };
+}
+
+/**
+ * Updates user and driver profile information.
+ */
+export async function updateProfileInfo(
+  userId: string,
+  input: UpdateProfileInfoInput
+): Promise<object> {
+  const driver = await _getOrCreateDriver(userId);
+
+  const userUpdateData: any = {};
+  if (input.name !== undefined) userUpdateData.name = input.name;
+  if (input.profileImageUrl !== undefined) {
+    userUpdateData.profileImageUrl = input.profileImageUrl || null;
+  }
+  if (input.whatsappUpdates !== undefined) {
+    userUpdateData.whatsappOptIn = input.whatsappUpdates;
+  }
+
+  const driverUpdateData: any = {};
+  if (input.dob) {
+    const parsedDob = new Date(input.dob);
+    if (!isNaN(parsedDob.getTime())) {
+      driverUpdateData.dob = parsedDob;
+    }
+  }
+
+  const [updatedUser, updatedDriver] = await prisma.$transaction([
+    prisma.user.update({
+      where: { id: userId },
+      data: userUpdateData,
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        profileImageUrl: true,
+        profileComplete: true,
+        whatsappOptIn: true,
+      },
+    }),
+    prisma.driver.update({
+      where: { id: driver.id },
+      data: driverUpdateData,
+      include: {
+        vehicle: true,
+        documents: { orderBy: { createdAt: 'desc' } },
+      },
+    }),
+  ]);
+
+  const formattedDob = updatedDriver.dob ? updatedDriver.dob.toISOString().split('T')[0] : null;
+
+  return {
+    user: {
+      name: updatedUser.name ?? null,
+      phone: updatedUser.phone ?? null,
+      dob: formattedDob,
+      gender: input.gender ?? null,
+      profileImage: updatedUser.profileImageUrl ?? null,
+      profileImageUrl: updatedUser.profileImageUrl ?? null,
+      whatsappUpdates: updatedUser.whatsappOptIn,
+      profileComplete: updatedUser.profileComplete,
+    },
+    driver: _formatDriverProfile(updatedDriver),
+    vehicle: updatedDriver.vehicle ?? null,
+  };
 }

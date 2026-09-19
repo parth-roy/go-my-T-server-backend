@@ -17,19 +17,18 @@ import * as fleetController from './fleet.controller';
 
 export const fleetRouter = Router();
 
-// ── Rate limiter for ULIP verification endpoints ──────────────────────
-// 10 calls per IP per minute — protects ULIP API quota from abuse
-const ulipRateLimit = rateLimit({
-  windowMs: 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    message: 'Too many verification requests. Please wait a minute before trying again.',
-    code: 'ULIP_RATE_LIMITED',
-  },
-});
+// [PAUSED - ULIP DEPRECATION]
+// const ulipRateLimit = rateLimit({
+//   windowMs: 60 * 1000,
+//   max: 10,
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   message: {
+//     success: false,
+//     message: 'Too many verification requests. Please wait a minute before trying again.',
+//     code: 'ULIP_RATE_LIMITED',
+//   },
+// });
 
 // ── Admin Override Routes ───────────────────────────────────────────────
 // These bypass the DRIVER role requirement and strictly require ADMIN
@@ -57,17 +56,27 @@ fleetRouter.patch('/drivers/status', fleetController.updateStatus);
 // POST /api/v1/fleet/vehicles/register
 fleetRouter.post('/vehicles/register', fleetController.registerVehicle);
 
-// ── ULIP Verification (rate-limited) ─────────────────────────────────
-// POST /api/v1/fleet/drivers/verify-license  (SARATHI AUTHAPI/03)
-fleetRouter.post(
-  '/drivers/verify-license',
-  ulipRateLimit,
-  fleetController.verifyLicense
-);
+// ── Manual Onboarding & Documents ─────────────────────────────────────
+// POST /api/v1/fleet/onboarding/documents
+fleetRouter.post('/onboarding/documents', fleetController.uploadOnboardingDocuments);
 
-// POST /api/v1/fleet/vehicles/verify-rc  (VAHAN AUTHAPI/02)
-fleetRouter.post(
-  '/vehicles/verify-rc',
-  ulipRateLimit,
-  fleetController.verifyVehicleRc
-);
+// GET /api/v1/fleet/onboarding/status
+fleetRouter.get('/onboarding/status', fleetController.getOnboardingStatus);
+
+// PATCH /api/v1/fleet/profile-info
+fleetRouter.patch('/profile-info', fleetController.updateProfileInfo);
+
+// [PAUSED - ULIP DEPRECATION] ─────────────────────────────────────────
+// // POST /api/v1/fleet/drivers/verify-license  (SARATHI AUTHAPI/03)
+// fleetRouter.post(
+//   '/drivers/verify-license',
+//   ulipRateLimit,
+//   fleetController.verifyLicense
+// );
+//
+// // POST /api/v1/fleet/vehicles/verify-rc  (VAHAN AUTHAPI/02)
+// fleetRouter.post(
+//   '/vehicles/verify-rc',
+//   ulipRateLimit,
+//   fleetController.verifyVehicleRc
+// );
