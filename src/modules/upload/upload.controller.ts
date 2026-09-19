@@ -40,10 +40,13 @@ export const uploadController = {
         return res.status(400).json({ success: false, message: 'No file provided' });
       }
 
-      // Validate folder param against allowed values; fall back to 'uploads'
-      const allowedFolders = Object.values(UploadFolder) as string[];
+      // Validate folder param against allowed values; sanitize safe folder name or fall back to 'documents'
       const rawFolder = (req.body.folder as string | undefined)?.trim().toLowerCase() ?? '';
-      const folder = allowedFolders.includes(rawFolder) ? rawFolder : UploadFolder.UPLOADS;
+      const safeFolder = rawFolder.replace(/[^a-z0-9_-]/g, '');
+      const allowedFolders = Object.values(UploadFolder) as string[];
+      const folder = allowedFolders.includes(safeFolder)
+        ? safeFolder
+        : (safeFolder.length > 0 ? safeFolder : UploadFolder.DOCUMENTS);
 
       const result = await s3Service.uploadFile(
         file.buffer,

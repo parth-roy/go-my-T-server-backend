@@ -67,6 +67,32 @@ function buildKey(folder: string, originalName: string): string {
 }
 
 /**
+ * Resolves content type from filename extension if rawContentType is generic/missing.
+ */
+export function resolveContentType(fileName: string, rawContentType?: string): string {
+  const normalized = (rawContentType || '').trim().toLowerCase();
+  if (normalized && normalized !== 'application/octet-stream' && ALLOWED_MIME_TYPES.has(normalized)) {
+    return normalized;
+  }
+  const ext = path.extname(fileName).toLowerCase();
+  switch (ext) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.png':
+      return 'image/png';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    case '.pdf':
+      return 'application/pdf';
+    default:
+      return normalized || 'application/octet-stream';
+  }
+}
+
+/**
  * Validate file before upload.
  * Returns an error message string, or null if valid.
  */
@@ -82,19 +108,20 @@ function validate(buffer: Buffer, contentType: string, maxBytes = MAX_SIZE_BYTES
 export const s3Service = {
   /**
    * Upload a single file to DigitalOcean Spaces.
-   * @param file        Raw file buffer
-   * @param fileName    Original file name (used to derive extension)
-   * @param contentType MIME type (e.g. 'image/jpeg')
-   * @param folder      Subfolder in the bucket (use UploadFolder constants)
-   * @param maxBytes    Optional per-call size override (e.g. 3 MB for profile pics)
+   * @param file           Raw file buffer
+   * @param fileName       Original file name (used to derive extension)
+   * @param rawContentType MIME type (e.g. 'image/jpeg')
+   * @param folder         Subfolder in the bucket (use UploadFolder constants)
+   * @param maxBytes       Optional per-call size override (e.g. 3 MB for profile pics)
    */
   uploadFile: async (
     file: Buffer,
     fileName: string,
-    contentType: string,
+    rawContentType: string,
     folder: UploadFolderType | string = UploadFolder.UPLOADS,
     maxBytes?: number,
   ): Promise<UploadResult> => {
+    const contentType = resolveContentType(fileName, rawContentType);
     // Validate
     const validationError = validate(file, contentType, maxBytes);
     if (validationError) {
