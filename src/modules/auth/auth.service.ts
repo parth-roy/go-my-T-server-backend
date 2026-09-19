@@ -563,6 +563,15 @@ export async function getMe(userId: string) {
             select: {
               id: true,
               registrationNo: true,
+              type: true,
+            },
+          },
+          documents: {
+            select: {
+              id: true,
+              type: true,
+              status: true,
+              fileUrl: true,
             },
           },
           subscription: {
