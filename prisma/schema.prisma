@@ -1947,6 +1947,7 @@ model GigJob {
   razorpayOrderId String?
 
   completionOtp String?
+  source        String  @default("APP") // "APP" | "WEB" — origin of the job post
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -200,6 +200,7 @@ export async function createGig(customerId: string, data: any) {
         isTaskBased:   data.isTaskBased || false,
         scheduledSlot: data.scheduledSlot,
         tipAmount:     data.tipAmount || 0,
+        source:        data.source || 'APP',
         tasks: data.tasks && data.tasks.length > 0 ? {
           create: data.tasks.map((t: any) => ({
             title: t.title,

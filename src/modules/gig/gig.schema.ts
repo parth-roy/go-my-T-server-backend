@@ -3,6 +3,7 @@ import { z } from 'zod';
 const GIG_SKILLS = [
   'HELPER', 'LOADER', 'FURNITURE_MOVER', 'HEAVY_LOADER',
   'PACKER', 'CLEANER', 'ELECTRICIAN', 'RIGGER', 'PLUMBER', 'AC_REPAIR', 'APPLIANCE_REPAIR', 'SECURITY_GUARD', 'CARPENTER', 'PAINTER',
+  'LAST_MILE_DELIVERY', 'GENERAL_HELPER',
 ] as const;
 
 const GIG_URGENCIES = ['IMMEDIATE', 'WITHIN_HOUR', 'SCHEDULED'] as const;
@@ -30,7 +31,8 @@ export const createGigSchema = z.object({
     quantity: z.number().int().min(1).default(1),
     price: z.number().min(0).default(0),
     variant: z.string().optional()
-  })).optional()
+  })).optional(),
+  source: z.enum(['APP', 'WEB']).optional().default('APP'),
 });
 
 export const verifyGigPaymentSchema = z.object({
