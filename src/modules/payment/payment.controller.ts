@@ -1733,6 +1733,26 @@ export async function cashfreeWebhook(req: Request, res: Response, _next: NextFu
                     },
                 });
                 logger.info(`[Cashfree Webhook] DirectContactRequest ${directReq.id} marked VERIFIED`);
+            } else if (orderId.startsWith('cf_wrk_') || order.order_tags?.paymentType === 'SUBSCRIPTION') {
+                // Worker Onboarding Payment via Cashfree Webhook
+                try {
+                    await prisma.formGigLead.updateMany({
+                        where: {
+                            OR: [
+                                { paymentRef: orderId },
+                                ...(cleanPhone ? [{ phone: cleanPhone, paymentStatus: { not: 'PAID' } }] : []),
+                            ],
+                        },
+                        data: {
+                            paymentStatus: 'PAID',
+                            status: 'SUITABLE',
+                            reviewNotes: `Auto-verified via Cashfree webhook. Payment ID: ${paymentId}`,
+                        },
+                    });
+                    logger.info(`[Cashfree Webhook] Worker onboarding lead verified for order ${orderId}`);
+                } catch (leadErr: any) {
+                    logger.warn(`[Cashfree Webhook] Error updating FormGigLead: ${leadErr?.message}`);
+                }
             } else if (cleanPhone) {
                 await prisma.directContactRequest.create({
                     data: {

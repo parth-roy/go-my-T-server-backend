@@ -4,6 +4,7 @@ import { mapsController } from './maps.controller';
 export const mapsRouter = Router();
 
 // Place search
+mapsRouter.get('/cities', mapsController.searchCities);
 mapsRouter.get('/autocomplete', mapsController.autocomplete);
 mapsRouter.get('/place-details', mapsController.placeDetails);
 

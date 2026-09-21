@@ -77,7 +77,7 @@ export function createApp(): Application {
 
   app.post(
     '/api/v1/payments/cashfree-webhook',
-    express.raw({ type: 'application/json' }),
+    express.raw({ type: ['application/json', '*/*'] }),
     cashfreeWebhook,
   );
 

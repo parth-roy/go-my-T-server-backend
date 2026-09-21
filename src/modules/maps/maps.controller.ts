@@ -3,6 +3,14 @@ import { recentSearchService } from './recent-search.service';
 import { mapsService } from './maps.service';
 
 export const mapsController = {
+  searchCities: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const query = (req.query.query || req.query.q || '') as string;
+      const cities = await mapsService.searchCities(query);
+      res.status(200).json({ success: true, data: cities });
+    } catch (error) { next(error); }
+  },
+
   autocomplete: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const input = req.query.input as string | undefined;

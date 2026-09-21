@@ -669,17 +669,30 @@ export const FormGigLeadService = {
       if (!cfOrderId) {
         throw AppError.badRequest('Missing Cashfree order identifier.', 'ORDER_ID_REQUIRED');
       }
-      try {
-        const payments = await cashfreeClient.getOrderPayments(cfOrderId);
-        const successful = payments.find(p => p.payment_status === 'SUCCESS');
-        if (successful) {
-          paymentRef = successful.cf_payment_id;
-        } else {
-          paymentRef = `cf_pay_${cfOrderId}`;
+      if (cashfreeClient.isConfigured()) {
+        try {
+          const cfOrder = await cashfreeClient.getOrder(cfOrderId);
+          let isPaid = cfOrder.order_status === 'PAID';
+          if (!isPaid) {
+            const payments = await cashfreeClient.getOrderPayments(cfOrderId);
+            const successful = payments.find(p => p.payment_status === 'SUCCESS');
+            if (successful) {
+              isPaid = true;
+              paymentRef = successful.cf_payment_id;
+            }
+          } else {
+            paymentRef = `cf_pay_${cfOrderId}`;
+          }
+          if (!isPaid) {
+            throw AppError.badRequest('Payment has not been completed or is still pending on Cashfree.', 'PAYMENT_PENDING');
+          }
+        } catch (err: any) {
+          if (err instanceof AppError) throw err;
+          logger.warn(`[WorkerOnboarding] Cashfree verify check error: ${err?.message}`);
+          throw AppError.badRequest(err?.message || 'Failed to verify Cashfree payment status.', 'PAYMENT_VERIFICATION_FAILED');
         }
-      } catch (err: any) {
-        logger.warn(`[WorkerOnboarding] Cashfree verify check: ${err?.message}`);
-        paymentRef = `cf_pay_${cfOrderId}`;
+      } else {
+        paymentRef = `cf_mock_${cfOrderId}`;
       }
     } else {
       // RAZORPAY
