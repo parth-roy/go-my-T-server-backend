@@ -52,6 +52,7 @@ export const DEFAULT_INDIAN_CITIES: CitySearchResult[] = [
 
 // ── Cache TTL constants ────────────────────────────────────────────────────────
 const AUTOCOMPLETE_TTL  = 60 * 60 * 24;     // 24 hours — place names rarely change
+const CITIES_CACHE_TTL  = 60 * 60 * 24 * 30;// 30 days  — cities are permanent geographic entities (prevents Google API costs)
 const REVERSE_GEO_TTL   = 60 * 60 * 6;      // 6 hours  — address at coords is stable
 const PLACE_DETAILS_TTL = 60 * 60 * 24 * 7; // 7 days   — place ID → coords is permanent
 
@@ -280,7 +281,7 @@ export const mapsService = {
    */
   searchCities: async (query?: string): Promise<CitySearchResult[]> => {
     const q = (query || '').trim();
-    if (q.length < 2) {
+    if (q.length < 1) {
       return DEFAULT_INDIAN_CITIES;
     }
 
@@ -321,7 +322,7 @@ export const mapsService = {
           placeId: p.place_id,
         }));
 
-        await cacheSet(cacheKey, results, AUTOCOMPLETE_TTL);
+        await cacheSet(cacheKey, results, CITIES_CACHE_TTL);
         return results;
       }
 
