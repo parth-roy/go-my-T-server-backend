@@ -202,6 +202,14 @@ export const deleteEntitySchema = z.object({
   permanent: z.boolean().default(false),
 });
 
+export const bulkDeleteSchema = z.object({
+  ids: z.array(z.string()).optional(),
+  selectAllFiltered: z.boolean().optional(),
+  filter: z.record(z.string(), z.any()).optional(),
+  reason: z.string().default('Admin bulk permanent delete'),
+});
+export type BulkDeleteInput = z.infer<typeof bulkDeleteSchema>;
+
 export const driverStatusOverrideSchema = z.object({
   status: z.enum(['OFFLINE', 'AVAILABLE', 'BREAK']),
 });

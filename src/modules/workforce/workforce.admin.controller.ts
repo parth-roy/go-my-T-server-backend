@@ -4,7 +4,7 @@ import { AppError } from '@shared/errors/AppError';
 import { sendSuccess } from '@shared/utils/response';
 import { z } from 'zod';
 import * as adminService from '@modules/admin/admin.service';
-import { deleteEntitySchema } from '@modules/admin/admin.schema';
+import { deleteEntitySchema, bulkDeleteSchema } from '@modules/admin/admin.schema';
 
 const workforceQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
@@ -152,3 +152,34 @@ export const hardDeleteWorker = async (req: Request, res: Response, next: NextFu
     sendSuccess(res, await adminService.hardDeleteWorker(req.params.id as string, reason));
   } catch (err) { next(err); }
 };
+
+export const bulkHardDeleteWorkers = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = bulkDeleteSchema.parse(req.body);
+    let ids = input.ids || [];
+
+    if (input.selectAllFiltered && input.filter) {
+      const q = workforceQuerySchema.parse(input.filter);
+      const where: any = {};
+      if (q.status) where.status = q.status;
+      if (q.isDocVerified !== undefined) where.isDocVerified = q.isDocVerified;
+      if (q.bankVerified !== undefined) where.bankVerified = q.bankVerified;
+      if (q.isActive !== undefined) where.isActive = q.isActive;
+      if (q.search) {
+        where.OR = [
+          { user: { name: { contains: q.search, mode: 'insensitive' } } },
+          { user: { phone: { contains: q.search } } },
+        ];
+      }
+      const workers = await prisma.worker.findMany({ where, select: { id: true } });
+      ids = workers.map(w => w.id);
+    }
+
+    if (ids.length === 0) {
+      return sendSuccess(res, { deletedCount: 0, skippedCount: 0, skipped: [] });
+    }
+
+    sendSuccess(res, await adminService.bulkHardDeleteWorkers(ids, input.reason));
+  } catch (err) { next(err); }
+};
+

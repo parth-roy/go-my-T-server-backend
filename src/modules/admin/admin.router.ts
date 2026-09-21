@@ -61,6 +61,7 @@ adminRouter.delete('/users/:id/sessions',             ctrl.forceLogoutUser);
 adminRouter.post('/users/:id/wallet-credit',          ctrl.creditWallet);
 adminRouter.delete('/users/:id/soft',                 ctrl.softDeleteUser);
 adminRouter.delete('/users/:id/hard',                 ctrl.hardDeleteUser);
+adminRouter.post('/users/bulk-hard',                  ctrl.bulkHardDeleteUsers);
 
 // ── Drivers ───────────────────────────────────────────────────────────────────
 adminRouter.get('/drivers',                                          ctrl.listDrivers);
@@ -72,6 +73,7 @@ adminRouter.patch('/drivers/:id/block',                              ctrl.blockD
 adminRouter.patch('/drivers/:id/status-override',                    ctrl.overrideDriverStatus);
 adminRouter.delete('/drivers/:id/soft',                              ctrl.softDeleteDriver);
 adminRouter.delete('/drivers/:id/hard',                              ctrl.hardDeleteDriver);
+adminRouter.post('/drivers/bulk-hard',                               ctrl.bulkHardDeleteDrivers);
 
 // ── Fleet Owners ──────────────────────────────────────────────────────────────
 adminRouter.get('/fleet-owners',                      ctrl.listFleetOwners);
@@ -80,6 +82,7 @@ adminRouter.patch('/fleet-owners/:id/status',         ctrl.setFleetOwnerStatus);
 adminRouter.post('/fleet-owners/:id/wallet-credit',   ctrl.creditFleetOwnerWallet);
 adminRouter.delete('/fleet-owners/:id/soft',          ctrl.softDeleteFleetOwner);
 adminRouter.delete('/fleet-owners/:id/hard',          ctrl.hardDeleteFleetOwner);
+adminRouter.post('/fleet-owners/bulk-hard',           ctrl.bulkHardDeleteFleetOwners);
 
 // ── Workforce & Gigs ──────────────────────────────────────────────────────────
 import * as workforceAdminCtrl from '@modules/workforce/workforce.admin.controller';
@@ -91,6 +94,7 @@ adminRouter.patch('/workforce/:id/suspend',           workforceAdminCtrl.suspend
 adminRouter.patch('/workforce/:id/revoke-verification', workforceAdminCtrl.revokeVerification);
 adminRouter.delete('/workforce/:id/soft',             workforceAdminCtrl.softDeleteWorker);
 adminRouter.delete('/workforce/:id/hard',             workforceAdminCtrl.hardDeleteWorker);
+adminRouter.post('/workforce/bulk-hard',              workforceAdminCtrl.bulkHardDeleteWorkers);
 adminRouter.get('/workforce-bookings',                gigCtrl.getAllGigsAdmin);
 adminRouter.get('/workforce-bookings/:id',            gigCtrl.getGigByIdAdmin);
 adminRouter.get('/gigs',                              gigCtrl.getAllGigsAdmin);
@@ -99,6 +103,8 @@ adminRouter.get('/gigs/:id',                          gigCtrl.getGigByIdAdmin);
 // ── Fleet Trucks ──────────────────────────────────────────────────────────────
 adminRouter.get('/fleet-trucks/expiring',             ctrl.getExpiringTrucks);  // BEFORE /:id
 adminRouter.get('/fleet-trucks',                      ctrl.listFleetTrucks);
+adminRouter.delete('/fleet-trucks/:id/hard',          ctrl.hardDeleteFleetTruck);
+adminRouter.post('/fleet-trucks/bulk-hard',           ctrl.bulkHardDeleteFleetTrucks);
 
 // ── Finance ───────────────────────────────────────────────────────────────────
 adminRouter.get('/finance/revenue',                       ctrl.getRevenue);

@@ -1574,3 +1574,243 @@ export async function hardDeleteWorker(workerId: string, reason: string) {
   return { deleted: true, permanent: true };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BULK HARD DELETE OPERATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function bulkHardDeleteDrivers(ids: string[], reason = 'Admin bulk permanent delete') {
+  const skipped: Array<{ id: string; name?: string; phone?: string; reason: string }> = [];
+  const deleted: string[] = [];
+
+  for (const driverId of ids) {
+    try {
+      const driver = await prisma.driver.findUnique({
+        where: { id: driverId },
+        include: { user: { select: { id: true, name: true, phone: true } } },
+      });
+      if (!driver) continue;
+
+      const activeCount = await prisma.booking.count({
+        where: { driverId, status: { in: ACTIVE_BOOKING_STATUSES } },
+      });
+      if (activeCount > 0) {
+        skipped.push({
+          id: driverId,
+          name: driver.user?.name || undefined,
+          phone: driver.user?.phone || undefined,
+          reason: 'Has active bookings in progress',
+        });
+        continue;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.booking.updateMany({
+          where: { driverId },
+          data: { driverId: null },
+        });
+        await purgeUserRelatedRecords(tx, driver.userId);
+      });
+      deleted.push(driverId);
+    } catch (err: any) {
+      logger.error(`[Admin] Failed to bulk hard delete driver ${driverId}:`, err);
+      skipped.push({ id: driverId, reason: err.message || 'Database error' });
+    }
+  }
+
+  logger.info(`[Admin] Bulk hard deleted ${deleted.length} drivers, skipped ${skipped.length} — reason: ${reason}`);
+  return { deletedCount: deleted.length, skippedCount: skipped.length, skipped };
+}
+
+export async function bulkHardDeleteUsers(ids: string[], reason = 'Admin bulk permanent delete') {
+  const skipped: Array<{ id: string; name?: string; phone?: string; reason: string }> = [];
+  const deleted: string[] = [];
+
+  for (const userId of ids) {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true, phone: true },
+      });
+      if (!user) continue;
+
+      const activeBookingCount = await prisma.booking.count({
+        where: {
+          customerId: userId,
+          status: { in: ACTIVE_BOOKING_STATUSES },
+        },
+      });
+      if (activeBookingCount > 0) {
+        skipped.push({
+          id: userId,
+          name: user.name || undefined,
+          phone: user.phone || undefined,
+          reason: 'Has active bookings in progress',
+        });
+        continue;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await purgeUserRelatedRecords(tx, userId);
+      });
+      deleted.push(userId);
+    } catch (err: any) {
+      logger.error(`[Admin] Failed to bulk hard delete user ${userId}:`, err);
+      skipped.push({ id: userId, reason: err.message || 'Database error' });
+    }
+  }
+
+  logger.info(`[Admin] Bulk hard deleted ${deleted.length} users, skipped ${skipped.length} — reason: ${reason}`);
+  return { deletedCount: deleted.length, skippedCount: skipped.length, skipped };
+}
+
+export async function bulkHardDeleteWorkers(ids: string[], reason = 'Admin bulk permanent delete') {
+  const skipped: Array<{ id: string; name?: string; phone?: string; reason: string }> = [];
+  const deleted: string[] = [];
+
+  for (const workerId of ids) {
+    try {
+      const worker = await prisma.worker.findUnique({
+        where: { id: workerId },
+        include: { user: { select: { id: true, name: true, phone: true } } },
+      });
+      if (!worker) continue;
+
+      const activeGigCount = await prisma.gigJob.count({
+        where: {
+          assignments: { some: { workerId, status: { notIn: ['COMPLETED', 'DECLINED', 'CANCELLED'] } } },
+        },
+      });
+      if (activeGigCount > 0) {
+        skipped.push({
+          id: workerId,
+          name: worker.user?.name || undefined,
+          phone: worker.user?.phone || undefined,
+          reason: 'Has active gig assignments in progress',
+        });
+        continue;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await purgeUserRelatedRecords(tx, worker.userId);
+      });
+      deleted.push(workerId);
+    } catch (err: any) {
+      logger.error(`[Admin] Failed to bulk hard delete worker ${workerId}:`, err);
+      skipped.push({ id: workerId, reason: err.message || 'Database error' });
+    }
+  }
+
+  logger.info(`[Admin] Bulk hard deleted ${deleted.length} workers, skipped ${skipped.length} — reason: ${reason}`);
+  return { deletedCount: deleted.length, skippedCount: skipped.length, skipped };
+}
+
+export async function bulkHardDeleteFleetOwners(ids: string[], reason = 'Admin bulk permanent delete') {
+  const skipped: Array<{ id: string; name?: string; companyName?: string; reason: string }> = [];
+  const deleted: string[] = [];
+
+  for (const id of ids) {
+    try {
+      const fleetOwner = await prisma.fleetOwner.findUnique({
+        where: { id },
+        include: { user: { select: { id: true, name: true } } },
+      });
+      if (!fleetOwner) continue;
+
+      const activeCount = await prisma.booking.count({
+        where: { awardedFleetOwnerId: id, status: { in: ACTIVE_BOOKING_STATUSES } },
+      });
+      if (activeCount > 0) {
+        skipped.push({
+          id,
+          name: fleetOwner.user?.name || undefined,
+          companyName: fleetOwner.companyName || undefined,
+          reason: 'Has active bookings in progress',
+        });
+        continue;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.booking.updateMany({
+          where: { awardedFleetOwnerId: id },
+          data: { awardedFleetOwnerId: null },
+        });
+        await purgeUserRelatedRecords(tx, fleetOwner.userId);
+      });
+      deleted.push(id);
+    } catch (err: any) {
+      logger.error(`[Admin] Failed to bulk hard delete fleet owner ${id}:`, err);
+      skipped.push({ id, reason: err.message || 'Database error' });
+    }
+  }
+
+  logger.info(`[Admin] Bulk hard deleted ${deleted.length} fleet owners, skipped ${skipped.length} — reason: ${reason}`);
+  return { deletedCount: deleted.length, skippedCount: skipped.length, skipped };
+}
+
+export async function hardDeleteFleetTruck(id: string, reason: string) {
+  const truck = await prisma.fleetTruck.findUnique({ where: { id } });
+  if (!truck) throw AppError.notFound('Fleet truck not found');
+
+  const activeAssignment = await prisma.truckAssignment.findFirst({
+    where: {
+      truckId: id,
+      booking: { status: { in: ACTIVE_BOOKING_STATUSES } },
+    },
+  });
+  if (activeAssignment) {
+    throw AppError.badRequest('Cannot delete truck currently assigned to an active booking');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.fleetTruckDocument.deleteMany({ where: { truckId: id } });
+    await tx.fleetTruckUsage.deleteMany({ where: { truckId: id } });
+    await tx.fleetMaintenance.deleteMany({ where: { truckId: id } });
+    await tx.fleetFuelLog.deleteMany({ where: { truckId: id } });
+    await tx.truckAssignment.deleteMany({ where: { truckId: id } });
+    await tx.fleetTruck.delete({ where: { id } });
+  });
+
+  logger.info(`[Admin] Hard-deleted fleet truck ${id} (${truck.registrationNo}) — reason: ${reason}`);
+  return { deleted: true, permanent: true };
+}
+
+export async function bulkHardDeleteFleetTrucks(ids: string[], reason = 'Admin bulk permanent delete') {
+  const skipped: Array<{ id: string; registrationNo?: string; reason: string }> = [];
+  const deleted: string[] = [];
+
+  for (const id of ids) {
+    try {
+      const truck = await prisma.fleetTruck.findUnique({ where: { id } });
+      if (!truck) continue;
+
+      const activeAssignment = await prisma.truckAssignment.findFirst({
+        where: {
+          truckId: id,
+          booking: { status: { in: ACTIVE_BOOKING_STATUSES } },
+        },
+      });
+      if (activeAssignment) {
+        skipped.push({ id, registrationNo: truck.registrationNo, reason: 'Assigned to an active booking' });
+        continue;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.fleetTruckDocument.deleteMany({ where: { truckId: id } });
+        await tx.fleetTruckUsage.deleteMany({ where: { truckId: id } });
+        await tx.fleetMaintenance.deleteMany({ where: { truckId: id } });
+        await tx.fleetFuelLog.deleteMany({ where: { truckId: id } });
+        await tx.truckAssignment.deleteMany({ where: { truckId: id } });
+        await tx.fleetTruck.delete({ where: { id } });
+      });
+      deleted.push(id);
+    } catch (err: any) {
+      logger.error(`[Admin] Failed to delete fleet truck ${id}:`, err);
+      skipped.push({ id, reason: err.message || 'Database error' });
+    }
+  }
+
+  logger.info(`[Admin] Bulk hard deleted ${deleted.length} fleet trucks, skipped ${skipped.length} — reason: ${reason}`);
+  return { deletedCount: deleted.length, skippedCount: skipped.length, skipped };
+}
+
+

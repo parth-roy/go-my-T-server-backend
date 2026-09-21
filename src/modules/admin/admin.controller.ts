@@ -9,8 +9,9 @@ import {
   pricingUpdateSchema, announcementSchema, broadcastNotificationSchema,
   subscriptionUpdateSchema, ulipLogsQuerySchema, userStatusSchema,
   fleetStatusSchema, ticketStatusSchema, ticketReplySchema,
-  deleteEntitySchema, driverStatusOverrideSchema,
+  deleteEntitySchema, driverStatusOverrideSchema, bulkDeleteSchema,
 } from './admin.schema';
+import { prisma } from '@shared/db/prisma';
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -541,3 +542,131 @@ export const getPendingWorkerDocuments = async (_req: Request, res: Response, ne
 export const verifyWorkerDocuments = async (req: Request, res: Response, next: NextFunction) => {
   try { ok(res, await adminService.verifyWorkerDocuments(req.params.workerId as string, req.body)); } catch (e) { next(e); }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BULK HARD DELETE CONTROLLERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const bulkHardDeleteDrivers = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = bulkDeleteSchema.parse(req.body);
+    let ids = input.ids || [];
+
+    if (input.selectAllFiltered && input.filter) {
+      const q = driversQuerySchema.parse(input.filter);
+      const where: any = {};
+      if (q.status) where.status = q.status;
+      if (q.dlVerifStatus) where.dlVerifStatus = q.dlVerifStatus;
+      if (q.rcVerifStatus) where.vehicle = { rcVerifStatus: q.rcVerifStatus };
+      if (q.plan) where.subscription = { plan: q.plan };
+      if (q.isDocVerified !== undefined) where.isDocVerified = q.isDocVerified;
+      if (q.search) {
+        where.OR = [
+          { user: { name: { contains: q.search, mode: 'insensitive' } } },
+          { user: { phone: { contains: q.search } } },
+          { licenseNumber: { contains: q.search, mode: 'insensitive' } },
+        ];
+      }
+      const drivers = await prisma.driver.findMany({ where, select: { id: true } });
+      ids = drivers.map(d => d.id);
+    }
+
+    if (ids.length === 0) {
+      return ok(res, { deletedCount: 0, skippedCount: 0, skipped: [] });
+    }
+
+    ok(res, await adminService.bulkHardDeleteDrivers(ids, input.reason));
+  } catch (e) { next(e); }
+};
+
+export const bulkHardDeleteUsers = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = bulkDeleteSchema.parse(req.body);
+    let ids = input.ids || [];
+
+    if (input.selectAllFiltered && input.filter) {
+      const q = usersQuerySchema.parse(input.filter);
+      const where: any = {};
+      if (q.role) where.role = q.role;
+      if (q.isActive !== undefined) where.isActive = q.isActive;
+      if (q.search) {
+        where.OR = [
+          { name: { contains: q.search, mode: 'insensitive' } },
+          { phone: { contains: q.search } },
+          { email: { contains: q.search, mode: 'insensitive' } },
+        ];
+      }
+      const users = await prisma.user.findMany({ where, select: { id: true } });
+      ids = users.map(u => u.id);
+    }
+
+    if (ids.length === 0) {
+      return ok(res, { deletedCount: 0, skippedCount: 0, skipped: [] });
+    }
+
+    ok(res, await adminService.bulkHardDeleteUsers(ids, input.reason));
+  } catch (e) { next(e); }
+};
+
+export const bulkHardDeleteFleetOwners = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = bulkDeleteSchema.parse(req.body);
+    let ids = input.ids || [];
+
+    if (input.selectAllFiltered && input.filter) {
+      const q = fleetQuerySchema.parse(input.filter);
+      const where: any = {};
+      if (q.isVerified !== undefined) where.isVerified = q.isVerified;
+      if (q.isActive !== undefined) where.isActive = q.isActive;
+      if (q.search) {
+        where.OR = [
+          { companyName: { contains: q.search, mode: 'insensitive' } },
+          { user: { name: { contains: q.search, mode: 'insensitive' } } },
+          { user: { phone: { contains: q.search } } },
+        ];
+      }
+      const owners = await prisma.fleetOwner.findMany({ where, select: { id: true } });
+      ids = owners.map(o => o.id);
+    }
+
+    if (ids.length === 0) {
+      return ok(res, { deletedCount: 0, skippedCount: 0, skipped: [] });
+    }
+
+    ok(res, await adminService.bulkHardDeleteFleetOwners(ids, input.reason));
+  } catch (e) { next(e); }
+};
+
+export const hardDeleteFleetTruck = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { reason } = deleteEntitySchema.parse(req.body);
+    ok(res, await adminService.hardDeleteFleetTruck(p(req.params.id), reason));
+  } catch (e) { next(e); }
+};
+
+export const bulkHardDeleteFleetTrucks = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = bulkDeleteSchema.parse(req.body);
+    let ids = input.ids || [];
+
+    if (input.selectAllFiltered && input.filter) {
+      const q = fleetQuerySchema.parse(input.filter);
+      const where: any = {};
+      if (q.search) {
+        where.OR = [
+          { registrationNo: { contains: q.search, mode: 'insensitive' } },
+          { fleetOwner: { companyName: { contains: q.search, mode: 'insensitive' } } },
+        ];
+      }
+      const trucks = await prisma.fleetTruck.findMany({ where, select: { id: true } });
+      ids = trucks.map(t => t.id);
+    }
+
+    if (ids.length === 0) {
+      return ok(res, { deletedCount: 0, skippedCount: 0, skipped: [] });
+    }
+
+    ok(res, await adminService.bulkHardDeleteFleetTrucks(ids, input.reason));
+  } catch (e) { next(e); }
+};
+
