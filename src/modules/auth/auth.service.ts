@@ -553,17 +553,30 @@ export async function getMe(userId: string) {
           isDocVerified: true,
         },
       },
-      // If the role is DRIVER, also fetch the driver profile info for onboarding resume
+      // If the role is DRIVER, also fetch the driver profile info for onboarding resume & profile display
       driver: {
         select: {
           id: true,
           dlNumber: true,       // Used by router to determine onboarding step
+          licenseNumber: true,
+          dlVerifStatus: true,
           isDocVerified: true,
-          vehicle: {            // Used by router to determine onboarding step
+          bankAccountNo: true,
+          bankIfsc: true,
+          bankName: true,
+          bankAccountHolderName: true,
+          bankVerified: true,
+          vehicle: {            // Used by router to determine onboarding step and profile display
             select: {
               id: true,
               registrationNo: true,
               type: true,
+              make: true,
+              model: true,
+              year: true,
+              color: true,
+              capacityKg: true,
+              rcVerifStatus: true,
             },
           },
           documents: {
@@ -572,6 +585,9 @@ export async function getMe(userId: string) {
               type: true,
               status: true,
               fileUrl: true,
+              rejectedReason: true,
+              verifiedAt: true,
+              createdAt: true,
             },
           },
           subscription: {

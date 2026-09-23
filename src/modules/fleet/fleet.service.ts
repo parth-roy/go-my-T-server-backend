@@ -157,6 +157,8 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
   const profile = _formatDriverProfile(driver);
   return {
     ...profile,
+    dlStatus: driver.dlVerifStatus,
+    rcStatus: driver.vehicle?.rcVerifStatus ?? 'PENDING',
     isPremium,
     daysRemaining,
     driverMembership: isPremium ? {
