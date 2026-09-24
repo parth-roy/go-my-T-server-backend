@@ -20,10 +20,10 @@ export const brokerRouter = Router();
 
 brokerRouter.use(authenticate);
 
-// Customer routes (CUSTOMER role)
+// Post open loads (CUSTOMER, MIDDLEMAN, or ADMIN)
 brokerRouter.post(
   '/loads',
-  requireRole(UserRole.CUSTOMER),
+  requireRole(UserRole.CUSTOMER, UserRole.MIDDLEMAN, UserRole.ADMIN),
   validate(postBrokerLoadSchema),
   BrokerController.postBrokerLoad
 );
@@ -41,12 +41,36 @@ brokerRouter.get(
   BrokerController.getBrokerLoad
 );
 
-// Broker (MIDDLEMAN) routes
+// Broker (MIDDLEMAN / ADMIN) routes
 brokerRouter.post(
   '/loads/:loadId/quote',
-  requireRole(UserRole.MIDDLEMAN),
+  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN),
   validate(submitBrokerQuoteSchema),
   BrokerController.submitBrokerQuote
+);
+
+brokerRouter.get(
+  '/profile',
+  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN),
+  BrokerController.getAgentProfile
+);
+
+brokerRouter.put(
+  '/profile',
+  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN),
+  BrokerController.updateAgentProfile
+);
+
+brokerRouter.get(
+  '/wallet',
+  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN),
+  BrokerController.getAgentWallet
+);
+
+brokerRouter.get(
+  '/tracking',
+  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN),
+  BrokerController.getAgentTracking
 );
 
 // Driver routes

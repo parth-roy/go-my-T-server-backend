@@ -139,3 +139,39 @@ export async function updateBrokerConfig(req: Request, res: Response, next: Next
   }
 }
 
+export async function getAgentProfile(req: Request, res: Response, next: NextFunction) {
+  try {
+    const profile = await BrokerService.getAgentProfile(req.user!.id);
+    sendSuccess(res, profile, 'Agent profile fetched');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateAgentProfile(req: Request, res: Response, next: NextFunction) {
+  try {
+    const profile = await BrokerService.updateAgentProfile(req.user!.id, req.body);
+    sendSuccess(res, profile, 'Agent profile updated');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getAgentWallet(req: Request, res: Response, next: NextFunction) {
+  try {
+    const wallet = await BrokerService.getAgentWallet(req.user!.id);
+    sendSuccess(res, wallet, 'Agent wallet fetched');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getAgentTracking(req: Request, res: Response, next: NextFunction) {
+  try {
+    const tracking = await BrokerService.getAgentTracking(req.user!.id);
+    sendSuccess(res, tracking, 'Agent tracking fetched');
+  } catch (err) {
+    next(err);
+  }
+}
+
