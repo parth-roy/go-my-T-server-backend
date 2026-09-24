@@ -11,6 +11,9 @@ import {
   verifyLoadingOtpSchema,
   settleBountySchema,
   brokerLoadsQuerySchema,
+  adminAgentsQuerySchema,
+  updateAgentKycSchema,
+  updateBrokerConfigSchema,
 } from './broker.schema';
 
 export const brokerRouter = Router();
@@ -87,3 +90,31 @@ brokerRouter.get(
   requireRole(UserRole.ADMIN),
   BrokerController.getAdminBountyDashboard
 );
+
+brokerRouter.get(
+  '/admin/agents',
+  requireRole(UserRole.ADMIN),
+  validate(adminAgentsQuerySchema, 'query'),
+  BrokerController.getAdminAgents
+);
+
+brokerRouter.patch(
+  '/admin/agents/:agentId/kyc',
+  requireRole(UserRole.ADMIN),
+  validate(updateAgentKycSchema),
+  BrokerController.updateAgentKyc
+);
+
+brokerRouter.get(
+  '/admin/config',
+  requireRole(UserRole.ADMIN),
+  BrokerController.getBrokerConfig
+);
+
+brokerRouter.patch(
+  '/admin/config',
+  requireRole(UserRole.ADMIN),
+  validate(updateBrokerConfigSchema),
+  BrokerController.updateBrokerConfig
+);
+

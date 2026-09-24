@@ -102,3 +102,40 @@ export async function getAdminBountyDashboard(req: Request, res: Response, next:
     next(err);
   }
 }
+
+export async function getAdminAgents(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await BrokerService.getAdminAgents(req.query as any);
+    sendSuccess(res, result.agents, 'Agents fetched', 200, result.meta);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateAgentKyc(req: Request, res: Response, next: NextFunction) {
+  try {
+    const agent = await BrokerService.updateAgentKyc(req.params.agentId as string, req.user!.id, req.body);
+    sendSuccess(res, agent, 'Agent KYC status updated');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getBrokerConfig(req: Request, res: Response, next: NextFunction) {
+  try {
+    const config = await BrokerService.getBrokerConfig();
+    sendSuccess(res, config, 'Broker configuration fetched');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateBrokerConfig(req: Request, res: Response, next: NextFunction) {
+  try {
+    const config = await BrokerService.updateBrokerConfig(req.user!.id, req.body);
+    sendSuccess(res, config, 'Broker configuration updated');
+  } catch (err) {
+    next(err);
+  }
+}
+

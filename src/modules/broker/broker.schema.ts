@@ -66,6 +66,27 @@ export const brokerLoadsQuerySchema = z.object({
   city: z.string().optional(),
 });
 
+export const updateAgentKycSchema = z.object({
+  isKycVerified: z.boolean(),
+  notes: z.string().optional(),
+});
+
+export const adminAgentsQuerySchema = z.object({
+  page: z.string().default('1').transform(Number),
+  limit: z.string().default('20').transform(Number),
+  search: z.string().optional(),
+  isKycVerified: z.string().optional(),
+  city: z.string().optional(),
+});
+
+export const updateBrokerConfigSchema = z.object({
+  customerAdvancePercent: z.number().min(0).max(100).optional(),
+  platformRetentionPercent: z.number().min(0).max(100).optional(),
+  driverAdvancePercent: z.number().min(0).max(100).optional(),
+  defaultFlatFeeBounty: z.number().min(0).optional(),
+  driverRetentionBonus: z.number().min(0).optional(),
+});
+
 export type PostBrokerLoadInput = z.infer<typeof postBrokerLoadSchema>;
 export type SubmitBrokerQuoteInput = z.infer<typeof submitBrokerQuoteSchema>;
 export type ReviewBrokerQuoteInput = z.infer<typeof reviewBrokerQuoteSchema>;
@@ -73,3 +94,7 @@ export type ConfirmAdvanceInput = z.infer<typeof confirmAdvanceSchema>;
 export type VerifyLoadingOtpInput = z.infer<typeof verifyLoadingOtpSchema>;
 export type SettleBountyInput = z.infer<typeof settleBountySchema>;
 export type BrokerLoadsQuery = z.infer<typeof brokerLoadsQuerySchema>;
+export type UpdateAgentKycInput = z.infer<typeof updateAgentKycSchema>;
+export type AdminAgentsQuery = z.infer<typeof adminAgentsQuerySchema>;
+export type UpdateBrokerConfigInput = z.infer<typeof updateBrokerConfigSchema>;
+

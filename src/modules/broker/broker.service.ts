@@ -10,6 +10,9 @@ import {
   VerifyLoadingOtpInput,
   SettleBountyInput,
   BrokerLoadsQuery,
+  UpdateAgentKycInput,
+  AdminAgentsQuery,
+  UpdateBrokerConfigInput,
 } from './broker.schema';
 
 export async function createBrokerLoad(customerId: string, data: PostBrokerLoadInput) {
@@ -446,3 +449,85 @@ export async function getAdminBountyDashboard(query: { status?: string, page: nu
 
   return { ledgers, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
 }
+
+export async function getAdminAgents(query: AdminAgentsQuery) {
+  const { page, limit, search, isKycVerified, city } = query;
+  const skip = (page - 1) * limit;
+
+  const where: any = {};
+  if (isKycVerified !== undefined && isKycVerified !== 'all' && isKycVerified !== '') {
+    where.isKycVerified = isKycVerified === 'true' || isKycVerified === 'verified';
+  }
+  if (city) {
+    where.primaryCity = { contains: city, mode: 'insensitive' };
+  }
+  if (search) {
+    where.user = {
+      OR: [
+        { name: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ],
+    };
+  }
+
+  const [agents, total] = await prisma.$transaction([
+    prisma.brokerProfile.findMany({
+      where,
+      skip,
+      take: limit,
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, isActive: true } },
+        _count: { select: { quotes: true, driverRetentions: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.brokerProfile.count({ where }),
+  ]);
+
+  return { agents, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+}
+
+export async function updateAgentKyc(agentId: string, opsUserId: string, data: UpdateAgentKycInput) {
+  const profile = await prisma.brokerProfile.findUnique({ where: { id: agentId }, include: { user: true } });
+  if (!profile) throw AppError.notFound('Agent profile not found');
+
+  const updated = await prisma.brokerProfile.update({
+    where: { id: agentId },
+    data: {
+      isKycVerified: data.isKycVerified,
+      kycVerifiedAt: data.isKycVerified ? new Date() : null,
+    },
+    include: {
+      user: { select: { name: true, phone: true, email: true } },
+    },
+  });
+
+  return updated;
+}
+
+// In-memory / dynamic platform commission configuration cache with sensible defaults
+let brokerConfigState = {
+  customerAdvancePercent: 25,     // Customer pays 25% advance to lock in booking
+  platformRetentionPercent: 10,  // Platform retains 10%
+  driverAdvancePercent: 15,      // Driver assigned payout advance 15% (upon arrival/loading)
+  defaultFlatFeeBounty: 100,     // Default flat-fee bounty paid to Middleman per loaded trip
+  driverRetentionBonus: 500,     // Micro-commission for onboarding driver who completes 3 trips
+};
+
+export async function getBrokerConfig() {
+  return brokerConfigState;
+}
+
+export async function updateBrokerConfig(opsUserId: string, data: UpdateBrokerConfigInput) {
+  brokerConfigState = {
+    ...brokerConfigState,
+    ...(data.customerAdvancePercent !== undefined && { customerAdvancePercent: data.customerAdvancePercent }),
+    ...(data.platformRetentionPercent !== undefined && { platformRetentionPercent: data.platformRetentionPercent }),
+    ...(data.driverAdvancePercent !== undefined && { driverAdvancePercent: data.driverAdvancePercent }),
+    ...(data.defaultFlatFeeBounty !== undefined && { defaultFlatFeeBounty: data.defaultFlatFeeBounty }),
+    ...(data.driverRetentionBonus !== undefined && { driverRetentionBonus: data.driverRetentionBonus }),
+  };
+  return brokerConfigState;
+}
+
