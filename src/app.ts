@@ -41,6 +41,7 @@ import { leadUnlockRouter } from '@modules/lead-unlock/lead-unlock.router';
 import { sentryErrorHandler } from '@config/sentry';
 import { razorpayWebhook, cashfreeWebhook } from '@modules/payment/payment.controller';
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
+import { brokerRouter } from '@modules/broker/broker.router';
 
 export function createApp(): Application {
   const app = express();
@@ -188,6 +189,7 @@ export function createApp(): Application {
   app.use('/api/v1/gig', gigRouter);
   app.use('/api/v1/gigs', gigRouter);
   app.use('/api/v1/lead-unlock', leadUnlockRouter);
+  app.use('/api/v1/broker', brokerRouter);
 
   // Leads
   app.use('/api/v1/leads', publicLeadsRouter);

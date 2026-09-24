@@ -346,6 +346,18 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     });
   }
 
+  // Auto-provision BrokerProfile if logging in as MIDDLEMAN (Transport Agent)
+  if (user.role === 'MIDDLEMAN') {
+    await prisma.brokerProfile.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        isActive: true,
+      },
+    });
+  }
+
   // ── Auto-provision demo profiles to prevent 404s ──
   if (demoInfo) {
     if (demoInfo.role === 'DRIVER') {

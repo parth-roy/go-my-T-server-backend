@@ -7,7 +7,7 @@ export const sendOtpSchema = z.object({
       message: 'Enter a valid 10-digit mobile number or email address',
     }),
   fcmToken: z.string().optional(), // FCM device token — OTP is delivered via push notification
-  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']).optional().default('CUSTOMER'),
+  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER', 'MIDDLEMAN', 'B2B_OWNER']).optional().default('CUSTOMER'),
 });
 
 export const verifyOtpSchema = z.object({
@@ -21,7 +21,8 @@ export const verifyOtpSchema = z.object({
     .length(6, 'OTP must be 6 digits')
     .regex(/^\d+$/, 'OTP must be numeric'),
   fcmToken: z.string().optional(), // Firebase Cloud Messaging token
-  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']).optional().default('CUSTOMER'),
+  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER', 'MIDDLEMAN', 'B2B_OWNER']).optional().default('CUSTOMER'),
+  intendedRole: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER', 'MIDDLEMAN', 'B2B_OWNER']).optional(),
 });
 
 export const refreshSchema = z.object({

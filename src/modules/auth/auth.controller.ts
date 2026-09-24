@@ -13,7 +13,8 @@ export async function sendOtp(req: Request, res: Response, next: NextFunction) {
 
 export async function verifyOtp(req: Request, res: Response, next: NextFunction) {
   try {
-    const result = await AuthService.verifyOtp(req.body);
+    const role = req.body.intendedRole || req.body.role;
+    const result = await AuthService.verifyOtp({ ...req.body, role });
     sendSuccess(res, result, 'Authenticated successfully');
   } catch (err) {
     next(err);

@@ -22,6 +22,8 @@ enum UserRole {
   FLEET_OWNER
   ADMIN
   WORKER
+  MIDDLEMAN
+  B2B_OWNER
 }
 
 enum SubscriptionPlan {
@@ -140,6 +142,34 @@ enum WalletTransactionReason {
   ADMIN_DEBIT
 }
 
+enum BrokerQuoteStatus {
+  PENDING        // Submitted by broker, awaiting Ops review
+  OPS_REVIEW     // Ops is reviewing the quote
+  ACCEPTED       // Winning quote — driver confirmed
+  REJECTED       // Rejected by Ops
+  DRIVER_DROPOUT // Driver backed out after acceptance — needs re-sourcing
+  COUNTER_OFFERED // Ops sent a counter amount back to broker
+}
+
+enum BrokerBookingStatus {
+  SOURCING         // Open load — brokers can submit quotes
+  PENDING_REVIEW   // Quote(s) submitted, Ops is reviewing
+  ADVANCE_PENDING  // Quote accepted, waiting for customer 25% advance
+  BOOKING_LOCKED   // Advance collected, truck confirmed — no payouts yet
+  LOADING_CONFIRMED // Physical loading OTP verified — bounty eligible
+  TRIP_COMPLETED   // Full trip done
+  RE_SOURCING      // Driver dropout — back to SOURCING state
+  CANCELLED        // Cancelled before loading
+}
+
+enum BountySettlementStatus {
+  PENDING          // Truck not yet loaded
+  ELIGIBLE         // LOADING_CONFIRMED — ready for manual payout
+  MANUALLY_SETTLED // Ops has paid out the bounty via bank transfer
+  VOIDED           // Driver dropout — no payout
+  PARTIAL          // Cancellation post-arrival — 50% dry-run bounty
+}
+
 enum CoinTransactionType {
   EARN
   REDEEM
@@ -158,6 +188,7 @@ enum DriverWalletReason {
   WITHDRAWAL // Payout transferred to driver's bank account
   ADMIN_CREDIT // Manual admin adjustment (goodwill / error correction)
   ADMIN_DEBIT // Manual admin debit (reversal / clawback)
+  BROKER_BOUNTY   // Gig-broker flat-fee bounty credited for a confirmed physical load
   FLEET_SALARY // Payment received from fleet owner via internal transfer
   SUBSCRIPTION // Monthly subscription deducted
 }
@@ -312,6 +343,8 @@ model User {
   GigJob      GigJob[]
   sentGigMessages GigMessage[] @relation("GigMessageSender")
   leadUnlockTransactions LeadUnlockTransaction[]
+
+  brokerProfile   BrokerProfile?    @relation("BrokerProfile")
 
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin)
@@ -2372,5 +2405,232 @@ model PaymentTransaction {
   @@map("payment_transactions")
 }
 
+// ─────────────────────────────────────────────
+// GIG-BROKER (MIDDLEMAN) ECOSYSTEM
+// ─────────────────────────────────────────────
 
+// Broker Profile: Extended profile for MIDDLEMAN-role users
+model BrokerProfile {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  user                  User     @relation("BrokerProfile", fields: [userId], references: [id], onDelete: Cascade)
+  
+  // KYC & Onboarding
+  isKycVerified         Boolean  @default(false)
+  kycVerifiedAt         DateTime?
+  aadhaarLast4          String?  // Only last 4 digits stored
+  panNumber             String?  // PAN for tax compliance
+  
+  // Ops-assigned city zone for load visibility
+  primaryCity           String?
+  primaryState          String?
+  operatingCities       String[] @default([]) // Comma list of cities they cover
+  
+  // Performance KPIs
+  totalQuotesSubmitted  Int      @default(0)
+  totalLoadsFulfilled   Int      @default(0)
+  totalBountiesEarned   Float    @default(0.0)
+  successRate           Float    @default(0.0) // % of submitted quotes that became LOADING_CONFIRMED
+  
+  // App Migration KPI
+  driversOnboarded      Int      @default(0)  // How many drivers they got to install the app
+  microCommissionBonus  Float    @default(0.0) // Total micro-commissions earned from driver retention
+  
+  // Referral / Onboarding
+  referredByBrokerId    String?  // Self-referral chain for network growth
+  referralCode          String?  @unique // Unique code for the broker to share
+  
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  quotes                BrokerQuote[]
+  driverRetentions      BrokerDriverRetention[]
+  
+  @@index([primaryCity, isActive])
+  @@index([isKycVerified, isActive])
+  @@map("broker_profiles")
+}
 
+// Open Load posted for broker sourcing (1:1 with a source Booking or standalone)
+model BrokerLoad {
+  id                    String              @id @default(uuid())
+  
+  // The original customer booking this load originates from (optional)
+  // If null, it was posted directly by Ops via admin panel
+  sourceBookingId       String?             @unique
+  
+  // Load details (denormalized for fast broker display)
+  pickupCity            String
+  pickupAddress         String
+  dropCity              String
+  dropAddress           String
+  vehicleType           VehicleType
+  goodsType             String              @default("General Goods")
+  goodsWeightKg         Float?
+  estimatedDistanceKm   Float?
+  
+  // Budget / Pricing
+  customerBudget        Float               // Customer's preferable budget (INR)
+  platformFinalPrice    Float?              // Ops finalizes this with customer
+  
+  // Visibility control
+  targetCities          String[]            @default([]) // Which broker-cities can see this load
+  isUrgent              Boolean             @default(false) // Re-sourcing loads get this flag
+  
+  // Operational status
+  brokerStatus          BrokerBookingStatus @default(SOURCING)
+  selectedQuoteId       String?             @unique
+  
+  // Advance tracking
+  advanceAmount         Float?              // 25% advance amount
+  isAdvanceCollected    Boolean             @default(false)
+  advanceCollectedAt    DateTime?
+  advancePaymentRef     String?             // Razorpay order/payment ID
+  
+  // Physical loading milestone (OTP-based fraud gate)
+  loadingOtp            String?             // 4-digit OTP for loading confirmation
+  loadingOtpExpiry      DateTime?
+  isLoadingConfirmed    Boolean             @default(false)
+  loadingConfirmedAt    DateTime?
+  loadingConfirmedByDriverId String?        // Which driver entered the OTP
+  
+  // Trip completion
+  isTripCompleted       Boolean             @default(false)
+  tripCompletedAt       DateTime?
+  
+  // Cancellation
+  cancelledAt           DateTime?
+  cancellationReason    String?
+  
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  
+  quotes                BrokerQuote[]
+  auditLog              BrokerLoadAuditLog[]
+  
+  @@index([brokerStatus])
+  @@index([pickupCity, brokerStatus])
+  @@index([isUrgent, brokerStatus])
+  @@index([createdAt])
+  @@map("broker_loads")
+}
+
+// Quote submitted by a Broker for a specific open load
+model BrokerQuote {
+  id                    String            @id @default(uuid())
+  loadId                String
+  load                  BrokerLoad        @relation(fields: [loadId], references: [id], onDelete: Cascade)
+  brokerId              String
+  broker                BrokerProfile     @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  
+  // Driver details submitted by broker
+  driverPhone           String
+  driverName            String?
+  vehicleRegNo          String            // RC number for verification
+  vehicleRcPhotoUrl     String            // S3 URL
+  vehiclePhotoUrl       String?           // Optional truck photo
+  negotiatedAmount      Float             // Amount broker negotiated with driver
+  
+  // Counter-offer flow (Ops can send back an alternative)
+  counterAmount         Float?            // Ops counter-amount if different from negotiated
+  isCounterAccepted     Boolean           @default(false)
+  
+  // Platform verification
+  isRcBlacklisted       Boolean           @default(false) // Auto-check result
+  isDriverVerified      Boolean           @default(false) // Ops manual verification
+  opsVerifiedAt         DateTime?
+  opsVerifiedBy         String?           // Admin userId who verified
+  
+  status                BrokerQuoteStatus @default(PENDING)
+  rejectedReason        String?
+  
+  // Admin-defined Flat-Fee Bounty for this specific quote
+  // Set by Ops when accepting — NOT a percentage, a fixed admin-defined amount
+  flatFeeBounty         Float             @default(100.0)  // e.g. Rs 100
+  
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  
+  bountyLedger          BrokerBountyLedger?
+  
+  @@unique([loadId, brokerId]) // One active quote per broker per load
+  @@index([loadId, status])
+  @@index([brokerId, status])
+  @@index([vehicleRegNo]) // For RC blacklist lookup
+  @@map("broker_quotes")
+}
+
+// Immutable Audit Log — every state change on a BrokerLoad is recorded here
+// NEVER delete rows from this table. Used for dispute resolution and Ops review.
+model BrokerLoadAuditLog {
+  id          String     @id @default(uuid())
+  loadId      String
+  load        BrokerLoad @relation(fields: [loadId], references: [id], onDelete: Cascade)
+  actorId     String     // userId of who triggered this action
+  actorRole   UserRole   // MIDDLEMAN, ADMIN, CUSTOMER, DRIVER
+  action      String     // e.g. "QUOTE_SUBMITTED", "LOADING_CONFIRMED", "DRIVER_DROPOUT"
+  previousStatus BrokerBookingStatus?
+  newStatus   BrokerBookingStatus?
+  metadata    Json?      // Additional context (quoteId, amount, reason, etc.)
+  timestamp   DateTime   @default(now())
+  
+  @@index([loadId, timestamp])
+  @@index([actorId])
+  @@map("broker_load_audit_logs")
+}
+
+// Bounty Ledger — tracks the manual payout status for each winning broker quote
+model BrokerBountyLedger {
+  id              String                @id @default(uuid())
+  quoteId         String                @unique
+  quote           BrokerQuote           @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  brokerId        String
+  
+  bountyAmount    Float                 // Matches quote.flatFeeBounty at time of creation
+  settlementStatus BountySettlementStatus @default(PENDING)
+  
+  eligibleAt      DateTime?             // When LOADING_CONFIRMED was hit
+  settledAt       DateTime?             // When Ops manually transferred the bounty
+  settledBy       String?               // Admin userId who marked it settled
+  settlementRef   String?               // Bank transfer ref / UTR number
+  voidedAt        DateTime?             // If driver dropout voided this bounty
+  voidReason      String?
+  
+  notes           String?               // Ops notes
+  
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  
+  @@index([settlementStatus])
+  @@index([brokerId, settlementStatus])
+  @@map("broker_bounty_ledger")
+}
+
+// Driver Retention Tracking — for App Migration KPI and Micro-Commission Bonus
+// Tracks whether a broker successfully got a driver onto the GoMyTruck app
+model BrokerDriverRetention {
+  id                  String       @id @default(uuid())
+  brokerId            String
+  broker              BrokerProfile @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  
+  // The driver they onboarded
+  driverPhone         String       // Store phone since driver may not have an account yet
+  driverId            String?      // Populated once driver creates GoMyTruck account
+  
+  // App install tracking
+  appInstallConfirmed Boolean      @default(false)
+  appInstalledAt      DateTime?
+  
+  // Retention bonus: 3 independent trips = micro-commission bonus
+  independentTripsCompleted Int    @default(0)  // 0-3
+  microCommissionEarned     Float  @default(0.0) // Credited when reaches 3 trips
+  bonusCreditedAt           DateTime?
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  
+  @@unique([brokerId, driverPhone])
+  @@index([driverId])
+  @@map("broker_driver_retentions")
+}
