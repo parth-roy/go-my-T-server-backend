@@ -220,7 +220,7 @@ export async function sendOtp({ phone, fcmToken }: SendOtpInput & { fcmToken?: s
 // ─────────────────────────────────────────────
 // VERIFY OTP
 // ─────────────────────────────────────────────
-export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: VerifyOtpInput & { role?: any }) {
+export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name, email }: VerifyOtpInput & { role?: any }) {
   // ── Demo account: accept static OTP, skip Redis entirely ────────────────
   if (isDemoAccount(phone)) {
     const demo = DEMO_ACCOUNTS[phone];
@@ -272,11 +272,20 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     updateData.fcmToken = tokenToSave;
   }
 
+  if (name && name.trim()) {
+    updateData.name = name.trim();
+  }
+  if (email && email.trim() && !existingUser?.email) {
+    updateData.email = email.trim();
+  }
+
   if (role === 'ADMIN' && (!existingUser || existingUser.role !== 'ADMIN')) {
     throw AppError.forbidden('Cannot self-assign ADMIN role');
   }
-  if (role && existingUser && existingUser.role === 'CUSTOMER' && role !== 'CUSTOMER') {
-    updateData.role = role as any;
+  if (role && existingUser && existingUser.role !== 'ADMIN' && role !== 'ADMIN') {
+    if (existingUser.role === 'CUSTOMER' || role === 'MIDDLEMAN') {
+      updateData.role = role as any;
+    }
   }
 
   // Find or create user
@@ -307,10 +316,10 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     user = await prisma.user.create({
       data: {
         phone: synthPhone,
-        email: isEmail ? normalizedIdentifier : undefined,
+        email: isEmail ? normalizedIdentifier : (email?.trim() || undefined),
         role: role as any,
-        name: demoInfo?.name,
-        profileComplete: !!demoInfo,
+        name: (name && name.trim()) || demoInfo?.name,
+        profileComplete: !!demoInfo || !!(name && name.trim()),
         ...(tokenToSave && { fcmToken: tokenToSave }),
       },
       select: {

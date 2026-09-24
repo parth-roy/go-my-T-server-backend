@@ -21,6 +21,8 @@ export const verifyOtpSchema = z.object({
     .length(6, 'OTP must be 6 digits')
     .regex(/^\d+$/, 'OTP must be numeric'),
   fcmToken: z.string().optional(), // Firebase Cloud Messaging token
+  name: z.string().optional(),
+  email: z.string().optional(),
   role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER', 'MIDDLEMAN', 'B2B_OWNER']).optional().default('CUSTOMER'),
   intendedRole: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER', 'MIDDLEMAN', 'B2B_OWNER']).optional(),
 });

@@ -576,7 +576,15 @@ export async function getAdminAgents(query: AdminAgentsQuery) {
     prisma.brokerProfile.count({ where }),
   ]);
 
-  return { agents, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+  const formattedAgents = agents.map((agent) => ({
+    ...agent,
+    user: {
+      ...agent.user,
+      name: agent.user?.name || (agent.user?.phone ? `Agent (${agent.user.phone.slice(-4)})` : 'GMT Agent'),
+    },
+  }));
+
+  return { agents: formattedAgents, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
 }
 
 export async function updateAgentKyc(agentId: string, opsUserId: string, data: UpdateAgentKycInput) {
