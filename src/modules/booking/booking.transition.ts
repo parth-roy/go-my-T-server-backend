@@ -53,6 +53,7 @@ const VALID_BROKER_TRANSITIONS: Partial<Record<BrokerBookingStatus, BrokerBookin
     BrokerBookingStatus.TRIP_COMPLETED,
   ],
   [BrokerBookingStatus.RE_SOURCING]: [
+    BrokerBookingStatus.PENDING_REVIEW, // Allow brokers to submit quotes after a driver dropout
     BrokerBookingStatus.SOURCING,     // Reset to open sourcing after driver dropout
     BrokerBookingStatus.CANCELLED,
   ],

@@ -99,22 +99,21 @@ export async function getBrokerLoad(loadId: string, requesterId: string, request
 }
 
 export async function submitBrokerQuote(loadId: string, brokerId: string, data: SubmitBrokerQuoteInput) {
-  const load = await prisma.brokerLoad.findUnique({ where: { id: loadId } });
-  if (!load) throw AppError.notFound('Load not found');
-  
-  if (load.brokerStatus !== BrokerBookingStatus.SOURCING && load.brokerStatus !== BrokerBookingStatus.RE_SOURCING) {
-    throw AppError.badRequest('Load is not open for quoting');
-  }
+  return await prisma.$transaction(async (tx) => {
+    const load = await tx.brokerLoad.findUnique({ where: { id: loadId } });
+    if (!load) throw AppError.notFound('Load not found');
+    
+    if (load.brokerStatus !== BrokerBookingStatus.SOURCING && load.brokerStatus !== BrokerBookingStatus.RE_SOURCING) {
+      throw AppError.badRequest('Load is not open for quoting');
+    }
 
-  const existingQuote = await prisma.brokerQuote.findFirst({
-    where: { loadId, brokerId, status: { not: BrokerQuoteStatus.REJECTED } }
-  });
-  if (existingQuote) throw AppError.badRequest('You have already submitted a quote for this load', 'DUPLICATE_QUOTE');
+    const existingQuote = await tx.brokerQuote.findFirst({
+      where: { loadId, brokerId, status: { not: BrokerQuoteStatus.REJECTED } }
+    });
+    if (existingQuote) throw AppError.badRequest('You have already submitted a quote for this load', 'DUPLICATE_QUOTE');
 
-  const profile = await prisma.brokerProfile.findUnique({ where: { userId: brokerId } });
-  if (!profile?.isKycVerified) throw AppError.forbidden('KYC verification is required to submit quotes');
-
-  const quote = await prisma.$transaction(async (tx) => {
+    const profile = await tx.brokerProfile.findUnique({ where: { userId: brokerId } });
+    if (!profile?.isKycVerified) throw AppError.forbidden('KYC verification is required to submit quotes');
     const created = await tx.brokerQuote.create({
       data: {
         loadId,
@@ -153,16 +152,13 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
 
     return created;
   });
-
-  return quote;
 }
 
 export async function reviewBrokerQuote(quoteId: string, opsUserId: string, data: ReviewBrokerQuoteInput) {
-  const quote = await prisma.brokerQuote.findUnique({ where: { id: quoteId }, include: { load: true } });
-  if (!quote) throw AppError.notFound('Quote not found');
-  const load = quote.load;
-
   return await prisma.$transaction(async (tx) => {
+    const quote = await tx.brokerQuote.findUnique({ where: { id: quoteId }, include: { load: true } });
+    if (!quote) throw AppError.notFound('Quote not found');
+    const load = quote.load;
     if (data.action === 'ACCEPT') {
       if (load.brokerStatus !== BrokerBookingStatus.PENDING_REVIEW) {
         throw AppError.badRequest('Load is not in pending review state');
@@ -259,49 +255,50 @@ export async function reviewBrokerQuote(quoteId: string, opsUserId: string, data
 }
 
 export async function confirmAdvanceCollected(loadId: string, opsUserId: string, data: ConfirmAdvanceInput) {
-  const load = await prisma.brokerLoad.findUnique({ where: { id: loadId } });
-  if (!load) throw AppError.notFound('Load not found');
-  if (load.brokerStatus !== BrokerBookingStatus.ADVANCE_PENDING) throw AppError.badRequest('Load is not waiting for advance');
+  return await prisma.$transaction(async (tx) => {
+    const load = await tx.brokerLoad.findUnique({ where: { id: loadId } });
+    if (!load) throw AppError.notFound('Load not found');
+    if (load.brokerStatus !== BrokerBookingStatus.ADVANCE_PENDING) throw AppError.badRequest('Load is not waiting for advance');
 
-  assertBrokerTransition(load.brokerStatus, BrokerBookingStatus.BOOKING_LOCKED);
-  return await prisma.brokerLoad.update({
-    where: { id: loadId },
-    data: {
-      brokerStatus: BrokerBookingStatus.BOOKING_LOCKED,
-      isAdvanceCollected: true,
-      advanceAmount: data.advanceAmount,
-      advanceCollectedAt: new Date(),
-      advancePaymentRef: data.advancePaymentRef,
-      auditLog: {
-        create: {
-          action: 'ADVANCE_CONFIRMED',
-          actorId: opsUserId,
-          actorRole: 'ADMIN',
+    assertBrokerTransition(load.brokerStatus, BrokerBookingStatus.BOOKING_LOCKED);
+    return await tx.brokerLoad.update({
+      where: { id: loadId },
+      data: {
+        brokerStatus: BrokerBookingStatus.BOOKING_LOCKED,
+        isAdvanceCollected: true,
+        advanceAmount: data.advanceAmount,
+        advanceCollectedAt: new Date(),
+        advancePaymentRef: data.advancePaymentRef,
+        auditLog: {
+          create: {
+            action: 'ADVANCE_CONFIRMED',
+            actorId: opsUserId,
+            actorRole: 'ADMIN',
+          }
         }
       }
-    }
+    });
   });
 }
 
 export async function confirmPhysicalLoading(loadId: string, driverPhone: string, data: VerifyLoadingOtpInput) {
-  const load = await prisma.brokerLoad.findUnique({
-    where: { id: loadId }
-  });
-  if (!load) throw AppError.notFound('Load not found');
-  if (load.brokerStatus !== BrokerBookingStatus.BOOKING_LOCKED) throw AppError.badRequest('Load is not ready for loading');
-
-  if (load.loadingOtp !== data.loadingOtp) throw AppError.badRequest('Invalid loading OTP', 'INVALID_LOADING_OTP');
-  if (load.loadingOtpExpiry && load.loadingOtpExpiry < new Date()) throw AppError.badRequest('Loading OTP expired', 'LOADING_OTP_EXPIRED');
-
-  if (!load.selectedQuoteId) throw AppError.badRequest('No selected quote');
-
-  const selectedQuote = await prisma.brokerQuote.findUnique({ where: { id: load.selectedQuoteId } });
-
-  if (selectedQuote?.driverPhone !== driverPhone) {
-    throw AppError.forbidden('Only the assigned driver can confirm loading');
-  }
-
   return await prisma.$transaction(async (tx) => {
+    const load = await tx.brokerLoad.findUnique({
+      where: { id: loadId }
+    });
+    if (!load) throw AppError.notFound('Load not found');
+    if (load.brokerStatus !== BrokerBookingStatus.BOOKING_LOCKED) throw AppError.badRequest('Load is not ready for loading');
+
+    if (load.loadingOtp !== data.loadingOtp) throw AppError.badRequest('Invalid loading OTP', 'INVALID_LOADING_OTP');
+    if (load.loadingOtpExpiry && load.loadingOtpExpiry < new Date()) throw AppError.badRequest('Loading OTP expired', 'LOADING_OTP_EXPIRED');
+
+    if (!load.selectedQuoteId) throw AppError.badRequest('No selected quote');
+
+    const selectedQuote = await tx.brokerQuote.findUnique({ where: { id: load.selectedQuoteId } });
+
+    if (selectedQuote?.driverPhone !== driverPhone) {
+      throw AppError.forbidden('Only the assigned driver can confirm loading');
+    }
     assertBrokerTransition(load.brokerStatus, BrokerBookingStatus.LOADING_CONFIRMED);
     const updatedLoad = await tx.brokerLoad.update({
       where: { id: loadId },

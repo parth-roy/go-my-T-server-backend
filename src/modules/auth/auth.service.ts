@@ -272,6 +272,9 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER' }: Ver
     updateData.fcmToken = tokenToSave;
   }
 
+  if (role === 'ADMIN' && (!existingUser || existingUser.role !== 'ADMIN')) {
+    throw AppError.forbidden('Cannot self-assign ADMIN role');
+  }
   if (role && existingUser && existingUser.role === 'CUSTOMER' && role !== 'CUSTOMER') {
     updateData.role = role as any;
   }
@@ -663,6 +666,9 @@ export async function getMe(userId: string) {
 // SWITCH ROLE (Multi-Persona Context Switcher)
 // ─────────────────────────────────────────────
 export async function switchRole(userId: string, targetRole: UserRole) {
+  if (targetRole === 'ADMIN') {
+    throw AppError.forbidden('Cannot switch to ADMIN role');
+  }
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: {
@@ -767,6 +773,9 @@ export async function socialLogin(input: SocialLoginInput) {
   });
 
   let isNewUser = false;
+  if (input.role === 'ADMIN' && (!user || user.role !== 'ADMIN')) {
+    throw AppError.forbidden('Cannot self-assign ADMIN role');
+  }
   if (!user) {
     isNewUser = true;
     user = await prisma.user.create({

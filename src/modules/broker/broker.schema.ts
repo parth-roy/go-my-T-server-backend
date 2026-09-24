@@ -60,8 +60,8 @@ export const settleBountySchema = z.object({
 });
 
 export const brokerLoadsQuerySchema = z.object({
-  page: z.string().default('1').transform(Number),
-  limit: z.string().default('10').transform(Number),
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).default(10),
   status: z.string().optional(),
   city: z.string().optional(),
 });
@@ -72,8 +72,8 @@ export const updateAgentKycSchema = z.object({
 });
 
 export const adminAgentsQuerySchema = z.object({
-  page: z.string().default('1').transform(Number),
-  limit: z.string().default('20').transform(Number),
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).default(20),
   search: z.string().optional(),
   isKycVerified: z.string().optional(),
   city: z.string().optional(),
