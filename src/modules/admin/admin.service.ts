@@ -283,7 +283,19 @@ export async function getDashboardAlerts() {
 
 export async function getBookings(q: BookingsQuery) {
   const where: any = {};
-  if (q.status) where.status = q.status;
+  if (q.hasAgentDriver || q.status === 'AGENT_SOURCED') {
+    const activeLoads = await prisma.brokerLoad.findMany({
+      where: {
+        sourceBookingId: { not: null },
+        quotes: { some: {} },
+      },
+      select: { sourceBookingId: true },
+    });
+    const sourcedBookingIds = activeLoads.map(l => l.sourceBookingId!).filter(Boolean);
+    where.id = { in: sourcedBookingIds };
+  } else if (q.status) {
+    where.status = q.status;
+  }
   if (q.vehicleType) where.vehicleType = q.vehicleType;
   if (q.paymentStatus) where.paymentStatus = q.paymentStatus;
   if (q.unassigned) where.driverId = null;
@@ -291,6 +303,7 @@ export async function getBookings(q: BookingsQuery) {
     where.OR = [
       { bookingNumber: { contains: q.search, mode: 'insensitive' } },
       { customer: { phone: { contains: q.search } } },
+      { customer: { name: { contains: q.search, mode: 'insensitive' } } },
     ];
   }
   if (q.from || q.to) {

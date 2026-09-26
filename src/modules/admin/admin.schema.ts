@@ -43,6 +43,7 @@ export const bookingsQuerySchema = paginationSchema.extend({
   unassigned:    z.string().optional().transform(v => v === 'true'),
   from:          z.string().optional(),
   to:            z.string().optional(),
+  hasAgentDriver: z.string().optional().transform(v => v === 'true' ? true : v === 'false' ? false : undefined),
 });
 
 export const usersQuerySchema = paginationSchema.extend({

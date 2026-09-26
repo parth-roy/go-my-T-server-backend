@@ -15,9 +15,9 @@ export const postBrokerLoadSchema = z.object({
 });
 
 export const submitBrokerQuoteSchema = z.object({
-  // Driver Details
-  driverPhone: z.string().regex(/^[6-9]\d{9}$/, 'Invalid phone number'),
-  driverName: z.string().optional(),
+  // Driver Details (all optional)
+  driverPhone: z.string().optional().default(''),
+  driverName: z.string().optional().default('Driver Partner'),
   driverAltPhone: z.string().optional(),
   driverLicenseNo: z.string().optional(),
   driverLicensePhotoUrl: z.string().optional(),
@@ -28,18 +28,18 @@ export const submitBrokerQuoteSchema = z.object({
   ownerName: z.string().optional(),
   ownerPhone: z.string().optional(),
 
-  // Truck / Vehicle Details
-  vehicleRegNo: z.string().min(5).max(20),
+  // Truck / Vehicle Details (all optional)
+  vehicleRegNo: z.string().optional().default(''),
   vehicleType: z.string().optional(),
   vehicleBodyType: z.string().optional(),
-  vehicleRcPhotoUrl: z.string().min(1, 'RC Photo is required'),
+  vehicleRcPhotoUrl: z.string().optional().default(''),
   vehiclePhotoUrl: z.string().optional(),
   vehiclePermitType: z.string().optional(),
   vehicleFitnessValidTill: z.string().optional(),
   vehicleInsuranceValidTill: z.string().optional(),
 
-  // Logistics & Terms
-  negotiatedAmount: z.number().positive('Agreed rate must be greater than 0'),
+  // Logistics & Terms (all optional)
+  negotiatedAmount: z.number().optional().default(0),
   advanceRequired: z.number().optional().default(0),
   readyToLoadAt: z.string().optional(),
   agentNotes: z.string().optional(),

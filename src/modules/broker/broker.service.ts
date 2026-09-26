@@ -239,25 +239,32 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
       });
 
       if (booking) {
-        const pCity = extractCityFromAddress(booking.pickupAddress);
-        const dAddress = booking.stops && booking.stops.length > 0 ? booking.stops[booking.stops.length - 1].address : booking.pickupAddress;
-        const dCity = extractCityFromAddress(dAddress);
-
-        load = await tx.brokerLoad.create({
-          data: {
-            sourceBookingId: booking.id,
-            pickupCity: pCity,
-            pickupAddress: booking.pickupAddress,
-            dropCity: dCity,
-            dropAddress: dAddress,
-            vehicleType: booking.vehicleType,
-            goodsType: booking.goodsType || 'General Goods',
-            goodsWeightKg: booking.goodsWeightKg,
-            customerBudget: booking.grandTotal || booking.totalFare || booking.baseFare || 1200,
-            targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
-            brokerStatus: BrokerBookingStatus.SOURCING,
-          }
+        // Check if a BrokerLoad already exists for this booking
+        load = await tx.brokerLoad.findFirst({
+          where: { sourceBookingId: booking.id }
         });
+
+        if (!load) {
+          const pCity = extractCityFromAddress(booking.pickupAddress);
+          const dAddress = booking.stops && booking.stops.length > 0 ? booking.stops[booking.stops.length - 1].address : booking.pickupAddress;
+          const dCity = extractCityFromAddress(dAddress);
+
+          load = await tx.brokerLoad.create({
+            data: {
+              sourceBookingId: booking.id,
+              pickupCity: pCity,
+              pickupAddress: booking.pickupAddress,
+              dropCity: dCity,
+              dropAddress: dAddress,
+              vehicleType: booking.vehicleType,
+              goodsType: booking.goodsType || 'General Goods',
+              goodsWeightKg: booking.goodsWeightKg,
+              customerBudget: booking.grandTotal || booking.totalFare || booking.baseFare || 1200,
+              targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
+              brokerStatus: BrokerBookingStatus.SOURCING,
+            }
+          });
+        }
       }
     }
 
@@ -267,26 +274,35 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
       throw AppError.badRequest('Load is not open for quoting');
     }
 
-    const actualLoadId = load.id;
-    const existingQuote = await tx.brokerQuote.findFirst({
-      where: { loadId: actualLoadId, brokerId, status: { not: BrokerQuoteStatus.REJECTED } }
+    const profile = await tx.brokerProfile.findUnique({
+      where: { userId: brokerId },
+      include: { user: true }
     });
-    if (existingQuote) throw AppError.badRequest('You have already submitted a quote for this load', 'DUPLICATE_QUOTE');
-
-    const profile = await tx.brokerProfile.findUnique({ where: { userId: brokerId } });
     if (!profile || !profile.isKycVerified) {
       throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before submitting quotes.');
     }
+
+    const actualLoadId = load.id;
+    const existingQuote = await tx.brokerQuote.findFirst({
+      where: { loadId: actualLoadId, brokerId: profile.id, status: { not: BrokerQuoteStatus.REJECTED } }
+    });
+    if (existingQuote) throw AppError.badRequest('You have already submitted a quote for this load', 'DUPLICATE_QUOTE');
+
+    const effectivePhone = data.driverPhone?.trim() || profile.user?.phone || '0000000000';
+    const effectiveRegNo = data.vehicleRegNo?.trim() ? data.vehicleRegNo.trim().toUpperCase() : 'PENDING_REG';
+    const effectiveRcPhoto = data.vehicleRcPhotoUrl?.trim() || 'https://gomytruck-public.s3.ap-south-1.amazonaws.com/placeholder-rc.webp';
+    const effectiveAmount = Number(data.negotiatedAmount) || 0;
+
     const created = await tx.brokerQuote.create({
       data: {
         loadId: actualLoadId,
         brokerId: profile.id,
-        driverPhone: data.driverPhone,
-        driverName: data.driverName || 'Driver Partner',
-        vehicleRegNo: data.vehicleRegNo.toUpperCase(),
-        vehicleRcPhotoUrl: data.vehicleRcPhotoUrl,
+        driverPhone: effectivePhone,
+        driverName: data.driverName?.trim() || 'Driver Partner',
+        vehicleRegNo: effectiveRegNo,
+        vehicleRcPhotoUrl: effectiveRcPhoto,
         vehiclePhotoUrl: data.vehiclePhotoUrl || null,
-        negotiatedAmount: data.negotiatedAmount,
+        negotiatedAmount: effectiveAmount,
         flatFeeBounty: data.flatFeeBounty || 100,
         status: BrokerQuoteStatus.PENDING,
       }
@@ -305,8 +321,8 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
             metadata: {
               quoteId: created.id,
               // Driver Details
-              driverName: data.driverName || 'Driver Partner',
-              driverPhone: data.driverPhone,
+              driverName: data.driverName?.trim() || 'Driver Partner',
+              driverPhone: effectivePhone,
               driverAltPhone: (data as any).driverAltPhone || null,
               driverLicenseNo: (data as any).driverLicenseNo || null,
               driverLicensePhotoUrl: (data as any).driverLicensePhotoUrl || null,
@@ -318,17 +334,17 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
               ownerPhone: (data as any).ownerPhone || null,
 
               // Truck Details
-              vehicleRegNo: data.vehicleRegNo.toUpperCase(),
+              vehicleRegNo: effectiveRegNo,
               vehicleType: (data as any).vehicleType || load.vehicleType,
               vehicleBodyType: (data as any).vehicleBodyType || 'Standard Commercial Body',
-              vehicleRcPhotoUrl: data.vehicleRcPhotoUrl,
+              vehicleRcPhotoUrl: effectiveRcPhoto,
               vehiclePhotoUrl: data.vehiclePhotoUrl || null,
               vehiclePermitType: (data as any).vehiclePermitType || 'All India / State Permit',
               vehicleFitnessValidTill: (data as any).vehicleFitnessValidTill || null,
               vehicleInsuranceValidTill: (data as any).vehicleInsuranceValidTill || null,
 
               // Logistics & Terms
-              negotiatedAmount: data.negotiatedAmount,
+              negotiatedAmount: effectiveAmount,
               advanceRequired: (data as any).advanceRequired || 0,
               readyToLoadAt: (data as any).readyToLoadAt || 'Immediate',
               agentNotes: (data as any).agentNotes || '',
