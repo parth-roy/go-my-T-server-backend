@@ -66,16 +66,115 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
   return load;
 }
 
+// Master registry of Indian States and Union Territories (lowercased)
+export const INDIAN_STATES = new Set([
+  'andhra pradesh', 'arunachal pradesh', 'assam', 'bihar', 'chhattisgarh',
+  'goa', 'gujarat', 'haryana', 'himachal pradesh', 'jharkhand', 'karnataka',
+  'kerala', 'madhya pradesh', 'maharashtra', 'manipur', 'meghalaya', 'mizoram',
+  'nagaland', 'odisha', 'orissa', 'punjab', 'rajasthan', 'sikkim', 'tamil nadu',
+  'telangana', 'tripura', 'uttar pradesh', 'uttarakhand', 'uttaranchal', 'west bengal',
+  'andaman and nicobar islands', 'andaman & nicobar', 'chandigarh',
+  'dadra and nagar haveli', 'daman and diu', 'dadra & nagar haveli',
+  'dadra and nagar haveli and daman and diu', 'delhi', 'new delhi',
+  'jammu and kashmir', 'jammu & kashmir', 'ladakh', 'lakshadweep',
+  'puducherry', 'pondicherry',
+]);
+
+// Bidirectional aliases for cities with colonial/vernacular/census variations
+export const CITY_ALIASES: Record<string, string[]> = {
+  barrackpur: ['barrackpur', 'barrackpore', 'north barrackpur', 'north barrackpore'],
+  barrackpore: ['barrackpur', 'barrackpore', 'north barrackpur', 'north barrackpore'],
+  'north barrackpur': ['barrackpur', 'barrackpore', 'north barrackpur', 'north barrackpore'],
+  'north barrackpore': ['barrackpur', 'barrackpore', 'north barrackpur', 'north barrackpore'],
+  kolkata: ['kolkata', 'calcutta'],
+  calcutta: ['kolkata', 'calcutta'],
+  bengaluru: ['bengaluru', 'bangalore'],
+  bangalore: ['bengaluru', 'bangalore'],
+  mumbai: ['mumbai', 'bombay'],
+  bombay: ['mumbai', 'bombay'],
+  gurugram: ['gurugram', 'gurgaon'],
+  gurgaon: ['gurugram', 'gurgaon'],
+  prayagraj: ['prayagraj', 'allahabad'],
+  allahabad: ['prayagraj', 'allahabad'],
+  varanasi: ['varanasi', 'banaras', 'benares', 'kashi'],
+  banaras: ['varanasi', 'banaras', 'benares', 'kashi'],
+  benares: ['varanasi', 'banaras', 'benares', 'kashi'],
+  chennai: ['chennai', 'madras'],
+  madras: ['chennai', 'madras'],
+  puducherry: ['puducherry', 'pondicherry'],
+  pondicherry: ['puducherry', 'pondicherry'],
+  thiruvananthapuram: ['thiruvananthapuram', 'trivandrum'],
+  trivandrum: ['thiruvananthapuram', 'trivandrum'],
+  kozhikode: ['kozhikode', 'calicut'],
+  calicut: ['kozhikode', 'calicut'],
+  vadodara: ['vadodara', 'baroda'],
+  baroda: ['vadodara', 'baroda'],
+  belagavi: ['belagavi', 'belgaum'],
+  belgaum: ['belagavi', 'belgaum'],
+  visakhapatnam: ['visakhapatnam', 'vizag', 'waltair'],
+  vizag: ['visakhapatnam', 'vizag', 'waltair'],
+  aurangabad: ['aurangabad', 'chhatrapati sambhajinagar', 'sambhajinagar'],
+  'chhatrapati sambhajinagar': ['aurangabad', 'chhatrapati sambhajinagar', 'sambhajinagar'],
+  mysuru: ['mysuru', 'mysore'],
+  mysore: ['mysuru', 'mysore'],
+  shivamogga: ['shivamogga', 'shimoga'],
+  shimoga: ['shivamogga', 'shimoga'],
+  vijayapura: ['vijayapura', 'bijapur'],
+  bijapur: ['vijayapura', 'bijapur'],
+  kalaburagi: ['kalaburagi', 'gulbarga'],
+  gulbarga: ['kalaburagi', 'gulbarga'],
+  jalandhar: ['jalandhar', 'jullundur'],
+  jullundur: ['jalandhar', 'jullundur'],
+  kanpur: ['kanpur', 'cawnpore'],
+  cawnpore: ['kanpur', 'cawnpore'],
+};
+
+export function getCityAliases(cityName?: string | null): string[] {
+  if (!cityName) return [];
+  // Strip parentheses e.g. "Barrackpore (Barrackpur)"
+  const clean = cityName.replace(/[()]/g, ' ').trim().toLowerCase();
+  const direct = CITY_ALIASES[clean];
+  if (direct && direct.length > 0) return direct;
+
+  // Check if any word inside clean has aliases
+  const words = clean.split(/\s+/).filter(Boolean);
+  for (const w of words) {
+    if (CITY_ALIASES[w]) {
+      return Array.from(new Set([clean, ...CITY_ALIASES[w]]));
+    }
+  }
+
+  return [clean];
+}
+
 export function extractCityFromAddress(address?: string | null): string {
   if (!address) return 'India';
   const parts = address.split(',').map((p) => p.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    const candidate = parts[parts.length - 2]?.replace(/\d{6}/g, '').trim();
-    if (candidate && candidate.length > 2 && candidate.length < 35) {
-      return candidate;
+  if (parts.length === 0) return 'India';
+  if (parts.length === 1) return parts[0].slice(0, 35);
+
+  // Traverse address components from right to left, skipping country and state
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const raw = parts[i];
+    // Strip 6-digit postal code (e.g. 700120, 415001)
+    const cleaned = raw.replace(/\b\d{6}\b/g, '').replace(/[\d-]/g, '').trim();
+    const lower = cleaned.toLowerCase();
+
+    // Skip empty or country
+    if (!lower || lower === 'india') continue;
+
+    // Skip state
+    if (INDIAN_STATES.has(lower)) continue;
+
+    // If candidate has valid length, this is the real city/town
+    if (cleaned.length >= 2 && cleaned.length <= 40) {
+      return cleaned;
     }
   }
-  return parts[0]?.slice(0, 35) || 'India';
+
+  // Fallback: strip pincode from the first element
+  const fallback = parts[0]?.replace(/\b\d{6}\b/g, '').trim();
+  return fallback && fallback.length > 1 ? fallback.slice(0, 35) : 'India';
 }
 
 export async function syncOpenBookingsToBrokerLoads() {
@@ -96,11 +195,16 @@ export async function syncOpenBookingsToBrokerLoads() {
       const existing = await prisma.brokerLoad.findUnique({
         where: { sourceBookingId: b.id },
       });
-      if (!existing) {
-        const pCity = extractCityFromAddress(b.pickupAddress);
-        const dAddress = b.stops && b.stops.length > 0 ? b.stops[b.stops.length - 1].address : b.pickupAddress;
-        const dCity = extractCityFromAddress(dAddress);
 
+      const pCity = extractCityFromAddress(b.pickupAddress);
+      const dAddress = b.stops && b.stops.length > 0 ? b.stops[b.stops.length - 1].address : b.pickupAddress;
+      const dCity = extractCityFromAddress(dAddress);
+      const targetCities = Array.from(new Set([
+        ...getCityAliases(pCity),
+        ...getCityAliases(dCity),
+      ]));
+
+      if (!existing) {
         await prisma.brokerLoad.create({
           data: {
             sourceBookingId: b.id,
@@ -112,7 +216,7 @@ export async function syncOpenBookingsToBrokerLoads() {
             goodsType: b.goodsType || 'General Goods',
             goodsWeightKg: b.goodsWeightKg,
             customerBudget: b.grandTotal || b.totalFare || b.baseFare || 1200,
-            targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
+            targetCities,
             brokerStatus: BrokerBookingStatus.SOURCING,
             isUrgent: b.declineCount > 0,
             // Propagate new SLA/Persona fields from source booking
@@ -122,6 +226,20 @@ export async function syncOpenBookingsToBrokerLoads() {
             slaExpiresAt: (b as any).slaExpiresAt || null,
           },
         });
+      } else {
+        // Self-heal existing broker loads where pickupCity or dropCity was mistakenly set to a State name
+        const pLower = existing.pickupCity.toLowerCase().trim();
+        const dLower = existing.dropCity.toLowerCase().trim();
+        if (INDIAN_STATES.has(pLower) || INDIAN_STATES.has(dLower) || pLower === 'india' || dLower === 'india') {
+          await prisma.brokerLoad.update({
+            where: { id: existing.id },
+            data: {
+              pickupCity: pCity,
+              dropCity: dCity,
+              targetCities,
+            },
+          });
+        }
       }
     }
   } catch (err) {
@@ -157,15 +275,16 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
     ];
   }
 
-  // Location filter: If city is provided and not 'all', filter specifically for that city
+  // Location filter: If city is provided and not 'all', filter specifically for that city and its aliases
   if (city && city.toLowerCase() !== 'all') {
     const clean = city.trim();
+    const cityVariants = getCityAliases(clean);
     where.OR = [
-      { pickupCity: { contains: clean, mode: 'insensitive' } },
-      { dropCity: { contains: clean, mode: 'insensitive' } },
-      { pickupAddress: { contains: clean, mode: 'insensitive' } },
-      { dropAddress: { contains: clean, mode: 'insensitive' } },
-      { targetCities: { has: clean.toLowerCase() } },
+      ...cityVariants.map((v) => ({ pickupCity: { contains: v, mode: 'insensitive' as const } })),
+      ...cityVariants.map((v) => ({ dropCity: { contains: v, mode: 'insensitive' as const } })),
+      ...cityVariants.map((v) => ({ pickupAddress: { contains: v, mode: 'insensitive' as const } })),
+      ...cityVariants.map((v) => ({ dropAddress: { contains: v, mode: 'insensitive' as const } })),
+      ...cityVariants.map((v) => ({ targetCities: { has: v.toLowerCase() } })),
     ];
   }
 
@@ -292,7 +411,10 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
               goodsType: booking.goodsType || 'General Goods',
               goodsWeightKg: booking.goodsWeightKg,
               customerBudget: booking.grandTotal || booking.totalFare || booking.baseFare || 1200,
-              targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
+              targetCities: Array.from(new Set([
+                ...getCityAliases(pCity),
+                ...getCityAliases(dCity),
+              ])),
               brokerStatus: BrokerBookingStatus.SOURCING,
             }
           });

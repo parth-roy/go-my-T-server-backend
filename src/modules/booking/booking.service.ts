@@ -37,6 +37,7 @@ import { env } from '@config/env';
 import * as MarketplaceService from '@modules/marketplace/marketplace.service';
 import { assertTransition } from './booking.transition';
 export { assertTransition } from './booking.transition';
+import { extractCityFromAddress, getCityAliases } from '@modules/broker/broker.service';
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // HELPERS
@@ -505,14 +506,21 @@ export async function confirmBooking(bookingId: string, customerId: string) {
 
     // Proactively create BrokerLoad for agent marketplace instant visibility
     try {
-        const pCity = (updated.pickupAddress.split(",").slice(-2)[0] || "India").replace(/\d{6}/g, "").trim() || "India";
+        const pCity = extractCityFromAddress(updated.pickupAddress);
         const stops = (updated as any).stops || [];
         const dAddress = stops.length > 0 ? stops[stops.length - 1].address : updated.pickupAddress;
-        const dCity = (dAddress.split(",").slice(-2)[0] || "India").replace(/\d{6}/g, "").trim() || "India";
+        const dCity = extractCityFromAddress(dAddress);
+        const targetCities = Array.from(new Set([
+            ...getCityAliases(pCity),
+            ...getCityAliases(dCity),
+        ]));
 
         await prisma.brokerLoad.upsert({
             where: { sourceBookingId: updated.id },
             update: {
+                pickupCity: pCity,
+                dropCity: dCity,
+                targetCities,
                 bookingPersona: (updated as any).bookingPersona || "INDIVIDUAL",
                 truckCount: (updated as any).truckCount || 1,
                 urgencyWindow: (updated as any).urgencyWindow || "FLEXIBLE",
@@ -528,7 +536,7 @@ export async function confirmBooking(bookingId: string, customerId: string) {
                 goodsType: updated.goodsType || "General Goods",
                 goodsWeightKg: updated.goodsWeightKg,
                 customerBudget: updated.grandTotal || updated.totalFare || updated.baseFare || 1200,
-                targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
+                targetCities,
                 brokerStatus: "SOURCING",
                 bookingPersona: (updated as any).bookingPersona || "INDIVIDUAL",
                 truckCount: (updated as any).truckCount || 1,
