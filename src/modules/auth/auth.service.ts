@@ -250,8 +250,8 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
 
   // Fetch existing user to check if they are deactivated
   const existingUser = await (isEmail
-    ? prisma.user.findFirst({ where: { email: normalizedIdentifier }, include: { fleetOwner: true } })
-    : prisma.user.findUnique({ where: { phone: normalizedIdentifier }, include: { fleetOwner: true } }));
+    ? prisma.user.findFirst({ where: { email: normalizedIdentifier }, include: { fleetOwner: true, brokerProfile: true } })
+    : prisma.user.findUnique({ where: { phone: normalizedIdentifier }, include: { fleetOwner: true, brokerProfile: true } }));
   
   if (existingUser) {
     if (!existingUser.isActive) {
@@ -282,9 +282,19 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
   if (role === 'ADMIN' && (!existingUser || existingUser.role !== 'ADMIN')) {
     throw AppError.forbidden('Cannot self-assign ADMIN role');
   }
-  if (role && existingUser && existingUser.role !== 'ADMIN' && role !== 'ADMIN') {
-    if (existingUser.role === 'CUSTOMER' || role === 'MIDDLEMAN') {
+
+  // Preserve MIDDLEMAN role for admin-registered agents even if logging in via generic phone
+  let effectiveRole = role as any;
+  if (existingUser?.role === 'MIDDLEMAN' || existingUser?.brokerProfile) {
+    effectiveRole = 'MIDDLEMAN';
+    updateData.role = 'MIDDLEMAN';
+  } else if (role === 'MIDDLEMAN') {
+    effectiveRole = 'MIDDLEMAN';
+    updateData.role = 'MIDDLEMAN';
+  } else if (role && existingUser && existingUser.role !== 'ADMIN' && role !== 'ADMIN') {
+    if (existingUser.role === 'CUSTOMER') {
       updateData.role = role as any;
+      effectiveRole = role;
     }
   }
 
@@ -396,8 +406,9 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
     }
   }
 
-  // Issue token pair
-  const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, role);
+  // Issue token pair with effective role
+  const tokenRole = user.role || effectiveRole || 'CUSTOMER';
+  const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, tokenRole);
 
   const isNewUser = !user.name;
 
@@ -440,6 +451,10 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
     }
   }
 
+  const brokerProfile = await prisma.brokerProfile.findUnique({
+    where: { userId: user.id },
+  });
+
   return {
     accessToken,
     refreshToken,
@@ -449,7 +464,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
       name: user.name,
       email: user.email,
       profileImageUrl: user.profileImageUrl,
-      role: role,
+      role: tokenRole,
       usageType: user.usageType,
       whatsappOptIn: user.whatsappOptIn,
       profileComplete: user.profileComplete,
@@ -457,6 +472,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
       isDriver,
       isPremiumDriver,
       driverMembership,
+      brokerProfile: brokerProfile || null,
     },
   };
 }
@@ -632,6 +648,36 @@ export async function getMe(userId: string) {
           isVerified: true,
         },
       },
+      brokerProfile: {
+        select: {
+          id: true,
+          primaryCity: true,
+          primaryState: true,
+          operatingCities: true,
+          isKycVerified: true,
+          kycVerifiedAt: true,
+          profilePhotoUrl: true,
+          aadhaarLast4: true,
+          aadhaarDocUrl: true,
+          panNumber: true,
+          panDocUrl: true,
+          age: true,
+          gender: true,
+          educationLevel: true,
+          fullAddress: true,
+          bankAccountNumber: true,
+          bankIfsc: true,
+          bankName: true,
+          bankAccountHolderName: true,
+          bankUpiId: true,
+          totalQuotesSubmitted: true,
+          totalLoadsFulfilled: true,
+          totalBountiesEarned: true,
+          successRate: true,
+          referralCode: true,
+          isActive: true,
+        },
+      },
     },
   });
 
@@ -643,6 +689,7 @@ export async function getMe(userId: string) {
   if (user.worker) availableRoles.push('WORKER');
   if (user.driver) availableRoles.push('DRIVER');
   if (user.fleetOwner) availableRoles.push('FLEET_OWNER');
+  if (user.brokerProfile || user.role === 'MIDDLEMAN') availableRoles.push('MIDDLEMAN');
 
   const sub = user.driver?.subscription;
   const now = new Date();

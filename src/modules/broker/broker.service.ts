@@ -20,6 +20,14 @@ import {
 } from './broker.schema';
 
 export async function createBrokerLoad(customerId: string, data: PostBrokerLoadInput) {
+  const user = await prisma.user.findUnique({
+    where: { id: customerId },
+    include: { brokerProfile: true },
+  });
+  if (user?.role === UserRole.MIDDLEMAN && !user.brokerProfile?.isKycVerified) {
+    throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before posting freight loads.');
+  }
+
   const load = await prisma.brokerLoad.create({
     data: {
       vehicleType: data.vehicleType,
@@ -37,7 +45,7 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
         create: {
           action: 'LOAD_POSTED',
           actorId: customerId,
-          actorRole: 'CUSTOMER',
+          actorRole: (user?.role as any) || 'CUSTOMER',
         }
       }
     }
@@ -104,7 +112,7 @@ export async function syncOpenBookingsToBrokerLoads() {
 }
 
 export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string, isAdmin?: boolean) {
-  const { page, limit, status, city } = query;
+  const { page, limit, status, city, search, vehicleType, minBudget, maxBudget, isUrgent, sortBy, sortOrder } = query;
   const skip = (page - 1) * limit;
 
   // 1. Auto-sync open customer bookings from App and Web to broker_loads
@@ -117,16 +125,9 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
     where.brokerStatus = { in: [BrokerBookingStatus.SOURCING, BrokerBookingStatus.RE_SOURCING] };
   }
 
-  let targetCity = city;
-  if (!targetCity && !isAdmin && brokerId) {
-    const profile = await prisma.brokerProfile.findUnique({ where: { userId: brokerId } });
-    if (profile?.primaryCity) {
-      targetCity = profile.primaryCity;
-    }
-  }
-
-  if (targetCity && targetCity.toLowerCase() !== 'all') {
-    const clean = targetCity.trim();
+  // Location filter: If city is provided and not 'all', filter specifically for that city
+  if (city && city.toLowerCase() !== 'all') {
+    const clean = city.trim();
     where.OR = [
       { pickupCity: { contains: clean, mode: 'insensitive' } },
       { dropCity: { contains: clean, mode: 'insensitive' } },
@@ -136,7 +137,51 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
     ];
   }
 
-  let [loads, total] = await prisma.$transaction([
+  // Vehicle type filter
+  if (vehicleType && vehicleType !== 'all') {
+    where.vehicleType = vehicleType;
+  }
+
+  // Budget range filter
+  if (minBudget !== undefined || maxBudget !== undefined) {
+    where.customerBudget = {};
+    if (minBudget !== undefined) where.customerBudget.gte = minBudget;
+    if (maxBudget !== undefined) where.customerBudget.lte = maxBudget;
+  }
+
+  // Urgency filter
+  if (isUrgent !== undefined) {
+    where.isUrgent = isUrgent;
+  }
+
+  // Search filter
+  if (search && search.trim()) {
+    const s = search.trim();
+    where.AND = [
+      ...(where.AND || []),
+      {
+        OR: [
+          { pickupCity: { contains: s, mode: 'insensitive' } },
+          { dropCity: { contains: s, mode: 'insensitive' } },
+          { pickupAddress: { contains: s, mode: 'insensitive' } },
+          { dropAddress: { contains: s, mode: 'insensitive' } },
+          { goodsType: { contains: s, mode: 'insensitive' } },
+          { id: { contains: s, mode: 'insensitive' } },
+        ]
+      }
+    ];
+  }
+
+  let orderBy: any = { createdAt: 'desc' };
+  if (sortBy === 'customerBudget') {
+    orderBy = { customerBudget: sortOrder || 'desc' };
+  } else if (sortBy === 'isUrgent') {
+    orderBy = { isUrgent: 'desc' };
+  } else if (sortBy === 'createdAt') {
+    orderBy = { createdAt: sortOrder || 'desc' };
+  }
+
+  const [loads, total] = await prisma.$transaction([
     prisma.brokerLoad.findMany({
       where,
       skip,
@@ -144,31 +189,10 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
       include: {
         _count: { select: { quotes: true } }
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy,
     }),
     prisma.brokerLoad.count({ where })
   ]);
-
-  // Fallback: If filtered city has 0 loads, gracefully display open loads so agent is never blocked
-  if (loads.length === 0 && targetCity && targetCity.toLowerCase() !== 'all' && !status) {
-    const fallbackWhere: any = {
-      brokerStatus: { in: [BrokerBookingStatus.SOURCING, BrokerBookingStatus.RE_SOURCING] },
-    };
-    const [allLoads, allTotal] = await prisma.$transaction([
-      prisma.brokerLoad.findMany({
-        where: fallbackWhere,
-        skip,
-        take: limit,
-        include: {
-          _count: { select: { quotes: true } }
-        },
-        orderBy: { createdAt: 'desc' }
-      }),
-      prisma.brokerLoad.count({ where: fallbackWhere })
-    ]);
-    loads = allLoads;
-    total = allTotal;
-  }
 
   return {
     loads,
@@ -201,16 +225,9 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
     });
     if (existingQuote) throw AppError.badRequest('You have already submitted a quote for this load', 'DUPLICATE_QUOTE');
 
-    let profile = await tx.brokerProfile.findUnique({ where: { userId: brokerId } });
-    if (!profile) {
-      profile = await tx.brokerProfile.create({
-        data: { userId: brokerId, isActive: true, isKycVerified: true, kycVerifiedAt: new Date() }
-      });
-    } else if (!profile.isKycVerified) {
-      profile = await tx.brokerProfile.update({
-        where: { id: profile.id },
-        data: { isKycVerified: true, kycVerifiedAt: new Date() }
-      });
+    const profile = await tx.brokerProfile.findUnique({ where: { userId: brokerId } });
+    if (!profile || !profile.isKycVerified) {
+      throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before submitting quotes.');
     }
     const created = await tx.brokerQuote.create({
       data: {
@@ -594,7 +611,7 @@ export async function getAdminAgents(query: AdminAgentsQuery) {
       skip,
       take: limit,
       include: {
-        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, isActive: true } },
+        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, isActive: true, profileImageUrl: true } },
         _count: { select: { quotes: true, driverRetentions: true } },
       },
       orderBy,
@@ -604,9 +621,11 @@ export async function getAdminAgents(query: AdminAgentsQuery) {
 
   const formattedAgents = agents.map((agent) => ({
     ...agent,
+    profilePhotoUrl: agent.profilePhotoUrl || agent.user?.profileImageUrl || null,
     user: {
       ...agent.user,
       name: agent.user?.name || (agent.user?.phone ? `Agent (${agent.user.phone.slice(-4)})` : 'GMT Agent'),
+      profileImageUrl: agent.user?.profileImageUrl || agent.profilePhotoUrl || null,
     },
   }));
 
@@ -688,6 +707,7 @@ export async function adminCreateAgent(adminUserId: string, data: AdminCreateAge
           name: data.name,
           email: data.email || null,
           role: UserRole.MIDDLEMAN,
+          profileImageUrl: data.profilePhotoUrl || null,
           profileComplete: true,
           isActive: data.isActive !== false,
         },
@@ -699,6 +719,7 @@ export async function adminCreateAgent(adminUserId: string, data: AdminCreateAge
         data: {
           name: data.name || user.name,
           email: data.email || user.email,
+          profileImageUrl: data.profilePhotoUrl || user.profileImageUrl,
           role: UserRole.MIDDLEMAN,
           profileComplete: true,
           isActive: data.isActive !== false,
@@ -762,7 +783,7 @@ export async function adminUpdateAgent(agentId: string, adminUserId: string, dat
     });
     if (!existing) throw AppError.notFound('Agent profile not found');
 
-    if (data.name !== undefined || data.email !== undefined) {
+    if (data.name !== undefined || data.email !== undefined || data.profilePhotoUrl !== undefined || data.isActive !== undefined) {
       if (data.email && data.email !== existing.user.email) {
         const emailUser = await tx.user.findUnique({ where: { email: data.email } });
         if (emailUser && emailUser.id !== existing.userId) {
@@ -774,6 +795,7 @@ export async function adminUpdateAgent(agentId: string, adminUserId: string, dat
         data: {
           name: data.name ?? existing.user.name,
           email: data.email ?? existing.user.email,
+          profileImageUrl: data.profilePhotoUrl !== undefined ? data.profilePhotoUrl : existing.user.profileImageUrl,
           isActive: data.isActive !== undefined ? data.isActive : existing.user.isActive,
         },
       });
@@ -933,7 +955,7 @@ export async function getAgentProfile(userId: string) {
   let profile = await prisma.brokerProfile.findUnique({
     where: { userId },
     include: {
-      user: { select: { id: true, name: true, phone: true, email: true, createdAt: true } },
+      user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, profileImageUrl: true } },
       _count: { select: { quotes: true, driverRetentions: true } },
     }
   });
@@ -943,10 +965,10 @@ export async function getAgentProfile(userId: string) {
       data: {
         userId,
         isActive: true,
-        isKycVerified: true,
+        isKycVerified: false,
       },
       include: {
-        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true } },
+        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, profileImageUrl: true } },
         _count: { select: { quotes: true, driverRetentions: true } },
       }
     });
@@ -956,34 +978,82 @@ export async function getAgentProfile(userId: string) {
 }
 
 export async function updateAgentProfile(userId: string, data: {
+  name?: string;
+  email?: string;
   primaryCity?: string;
   primaryState?: string;
+  operatingCities?: string[];
+  age?: number;
+  gender?: string;
+  educationLevel?: string;
+  fullAddress?: string;
+  profilePhotoUrl?: string;
+  aadhaarNumber?: string;
   aadhaarLast4?: string;
+  aadhaarDocUrl?: string;
   panNumber?: string;
+  panDocUrl?: string;
+  bankAccountNumber?: string;
+  bankIfsc?: string;
+  bankName?: string;
+  bankAccountHolderName?: string;
+  bankUpiId?: string;
+  isKycVerified?: boolean;
 }) {
-  const profile = await prisma.brokerProfile.upsert({
-    where: { userId },
-    update: {
-      ...(data.primaryCity && { primaryCity: data.primaryCity }),
-      ...(data.primaryState && { primaryState: data.primaryState }),
-      ...(data.aadhaarLast4 && { aadhaarLast4: data.aadhaarLast4 }),
-      ...(data.panNumber && { panNumber: data.panNumber }),
-      isKycVerified: true,
-    },
-    create: {
-      userId,
-      isActive: true,
-      isKycVerified: true,
-      primaryCity: data.primaryCity,
-      primaryState: data.primaryState,
-      aadhaarLast4: data.aadhaarLast4,
-      panNumber: data.panNumber,
-    },
-    include: {
-      user: { select: { id: true, name: true, phone: true, email: true } },
+  return await prisma.$transaction(async (tx) => {
+    // 1. Sync User profile fields if provided
+    if (data.name || data.email || data.profilePhotoUrl) {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          ...(data.name && { name: data.name }),
+          ...(data.email && { email: data.email }),
+          ...(data.profilePhotoUrl && { profileImageUrl: data.profilePhotoUrl }),
+        },
+      });
     }
+
+    const aadhaarLast4 = data.aadhaarLast4 || (data.aadhaarNumber && data.aadhaarNumber.length >= 4 ? data.aadhaarNumber.slice(-4) : undefined);
+
+    const updateFields: any = {
+      ...(data.primaryCity !== undefined && { primaryCity: data.primaryCity }),
+      ...(data.primaryState !== undefined && { primaryState: data.primaryState }),
+      ...(data.operatingCities !== undefined && { operatingCities: data.operatingCities }),
+      ...(data.age !== undefined && { age: Number(data.age) || null }),
+      ...(data.gender !== undefined && { gender: data.gender }),
+      ...(data.educationLevel !== undefined && { educationLevel: data.educationLevel }),
+      ...(data.fullAddress !== undefined && { fullAddress: data.fullAddress }),
+      ...(data.profilePhotoUrl !== undefined && { profilePhotoUrl: data.profilePhotoUrl }),
+      ...(data.aadhaarNumber !== undefined && { aadhaarNumber: data.aadhaarNumber }),
+      ...(aadhaarLast4 !== undefined && { aadhaarLast4 }),
+      ...(data.aadhaarDocUrl !== undefined && { aadhaarDocUrl: data.aadhaarDocUrl }),
+      ...(data.panNumber !== undefined && { panNumber: data.panNumber.toUpperCase() }),
+      ...(data.panDocUrl !== undefined && { panDocUrl: data.panDocUrl }),
+      ...(data.bankAccountNumber !== undefined && { bankAccountNumber: data.bankAccountNumber }),
+      ...(data.bankIfsc !== undefined && { bankIfsc: data.bankIfsc.toUpperCase() }),
+      ...(data.bankName !== undefined && { bankName: data.bankName }),
+      ...(data.bankAccountHolderName !== undefined && { bankAccountHolderName: data.bankAccountHolderName }),
+      ...(data.bankUpiId !== undefined && { bankUpiId: data.bankUpiId }),
+      ...(data.isKycVerified !== undefined && { isKycVerified: data.isKycVerified }),
+    };
+
+    const profile = await tx.brokerProfile.upsert({
+      where: { userId },
+      update: updateFields,
+      create: {
+        userId,
+        isActive: true,
+        isKycVerified: false,
+        ...updateFields,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true, profileImageUrl: true } },
+        _count: { select: { quotes: true, driverRetentions: true } },
+      }
+    });
+
+    return profile;
   });
-  return profile;
 }
 
 export async function getAgentWallet(userId: string) {

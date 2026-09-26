@@ -18,6 +18,7 @@ import {
   adminBulkDeleteAgentsSchema,
   updateAgentKycSchema,
   updateBrokerConfigSchema,
+  updateAgentProfileSchema,
 } from './broker.schema';
 
 export const brokerRouter = Router();
@@ -62,6 +63,7 @@ brokerRouter.get(
 brokerRouter.put(
   '/profile',
   requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN),
+  validate(updateAgentProfileSchema),
   BrokerController.updateAgentProfile
 );
 

@@ -61,9 +61,39 @@ export const settleBountySchema = z.object({
 
 export const brokerLoadsQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).default(10),
+  limit: z.coerce.number().min(1).default(20),
   status: z.string().optional(),
   city: z.string().optional(),
+  search: z.string().optional(),
+  vehicleType: z.string().optional(),
+  minBudget: z.coerce.number().optional(),
+  maxBudget: z.coerce.number().optional(),
+  isUrgent: z.preprocess((val) => val === 'true' || val === true, z.boolean()).optional(),
+  sortBy: z.string().optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
+});
+
+export const updateAgentProfileSchema = z.object({
+  name: z.string().optional(),
+  email: z.string().email().optional().or(z.literal('')),
+  primaryCity: z.string().optional(),
+  primaryState: z.string().optional(),
+  operatingCities: z.array(z.string()).optional(),
+  age: z.coerce.number().optional(),
+  gender: z.string().optional(),
+  educationLevel: z.string().optional(),
+  fullAddress: z.string().optional(),
+  profilePhotoUrl: z.string().optional(),
+  aadhaarNumber: z.string().optional(),
+  aadhaarLast4: z.string().optional(),
+  aadhaarDocUrl: z.string().optional(),
+  panNumber: z.string().optional(),
+  panDocUrl: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankIfsc: z.string().optional(),
+  bankName: z.string().optional(),
+  bankAccountHolderName: z.string().optional(),
+  bankUpiId: z.string().optional(),
 });
 
 export const updateAgentKycSchema = z.object({
