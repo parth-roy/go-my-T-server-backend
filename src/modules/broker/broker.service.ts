@@ -213,15 +213,63 @@ export async function getBrokerLoad(loadId: string, requesterId: string, request
 
 export async function submitBrokerQuote(loadId: string, brokerId: string, data: SubmitBrokerQuoteInput) {
   return await prisma.$transaction(async (tx) => {
-    const load = await tx.brokerLoad.findUnique({ where: { id: loadId } });
-    if (!load) throw AppError.notFound('Load not found');
+    // 1. Resolve load by loadId, sourceBookingId, or bookingNumber/id
+    let load = await tx.brokerLoad.findUnique({ where: { id: loadId } });
+    if (!load) {
+      load = await tx.brokerLoad.findFirst({
+        where: {
+          OR: [
+            { sourceBookingId: loadId },
+            { id: loadId },
+          ]
+        }
+      });
+    }
+
+    if (!load) {
+      // Check if it's a booking by bookingNumber or id
+      const booking = await tx.booking.findFirst({
+        where: {
+          OR: [
+            { id: loadId },
+            { bookingNumber: loadId },
+          ]
+        },
+        include: { stops: { orderBy: { sequence: 'asc' } } }
+      });
+
+      if (booking) {
+        const pCity = extractCityFromAddress(booking.pickupAddress);
+        const dAddress = booking.stops && booking.stops.length > 0 ? booking.stops[booking.stops.length - 1].address : booking.pickupAddress;
+        const dCity = extractCityFromAddress(dAddress);
+
+        load = await tx.brokerLoad.create({
+          data: {
+            sourceBookingId: booking.id,
+            pickupCity: pCity,
+            pickupAddress: booking.pickupAddress,
+            dropCity: dCity,
+            dropAddress: dAddress,
+            vehicleType: booking.vehicleType,
+            goodsType: booking.goodsType || 'General Goods',
+            goodsWeightKg: booking.goodsWeightKg,
+            customerBudget: booking.grandTotal || booking.totalFare || booking.baseFare || 1200,
+            targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
+            brokerStatus: BrokerBookingStatus.SOURCING,
+          }
+        });
+      }
+    }
+
+    if (!load) throw AppError.notFound('Load or Booking requirement not found');
     
     if (load.brokerStatus !== BrokerBookingStatus.SOURCING && load.brokerStatus !== BrokerBookingStatus.RE_SOURCING) {
       throw AppError.badRequest('Load is not open for quoting');
     }
 
+    const actualLoadId = load.id;
     const existingQuote = await tx.brokerQuote.findFirst({
-      where: { loadId, brokerId, status: { not: BrokerQuoteStatus.REJECTED } }
+      where: { loadId: actualLoadId, brokerId, status: { not: BrokerQuoteStatus.REJECTED } }
     });
     if (existingQuote) throw AppError.badRequest('You have already submitted a quote for this load', 'DUPLICATE_QUOTE');
 
@@ -231,22 +279,22 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
     }
     const created = await tx.brokerQuote.create({
       data: {
-        loadId,
+        loadId: actualLoadId,
         brokerId: profile.id,
         driverPhone: data.driverPhone,
-        driverName: data.driverName,
-        vehicleRegNo: data.vehicleRegNo,
+        driverName: data.driverName || 'Driver Partner',
+        vehicleRegNo: data.vehicleRegNo.toUpperCase(),
         vehicleRcPhotoUrl: data.vehicleRcPhotoUrl,
-        vehiclePhotoUrl: data.vehiclePhotoUrl,
+        vehiclePhotoUrl: data.vehiclePhotoUrl || null,
         negotiatedAmount: data.negotiatedAmount,
-        flatFeeBounty: data.flatFeeBounty,
+        flatFeeBounty: data.flatFeeBounty || 100,
         status: BrokerQuoteStatus.PENDING,
       }
     });
 
     assertBrokerTransition(load.brokerStatus, BrokerBookingStatus.PENDING_REVIEW);
     await tx.brokerLoad.update({
-      where: { id: loadId },
+      where: { id: actualLoadId },
       data: {
         brokerStatus: BrokerBookingStatus.PENDING_REVIEW,
         auditLog: {
@@ -254,7 +302,42 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
             action: 'QUOTE_SUBMITTED',
             actorId: brokerId,
             actorRole: 'MIDDLEMAN',
-            metadata: { quoteId: created.id, vehicleRegNo: data.vehicleRegNo, negotiatedAmount: data.negotiatedAmount }
+            metadata: {
+              quoteId: created.id,
+              // Driver Details
+              driverName: data.driverName || 'Driver Partner',
+              driverPhone: data.driverPhone,
+              driverAltPhone: (data as any).driverAltPhone || null,
+              driverLicenseNo: (data as any).driverLicenseNo || null,
+              driverLicensePhotoUrl: (data as any).driverLicensePhotoUrl || null,
+              driverAadhaarNo: (data as any).driverAadhaarNo || null,
+              driverAadhaarPhotoUrl: (data as any).driverAadhaarPhotoUrl || null,
+              driverCity: (data as any).driverCity || null,
+              isOwnerDriver: (data as any).isOwnerDriver ?? true,
+              ownerName: (data as any).ownerName || null,
+              ownerPhone: (data as any).ownerPhone || null,
+
+              // Truck Details
+              vehicleRegNo: data.vehicleRegNo.toUpperCase(),
+              vehicleType: (data as any).vehicleType || load.vehicleType,
+              vehicleBodyType: (data as any).vehicleBodyType || 'Standard Commercial Body',
+              vehicleRcPhotoUrl: data.vehicleRcPhotoUrl,
+              vehiclePhotoUrl: data.vehiclePhotoUrl || null,
+              vehiclePermitType: (data as any).vehiclePermitType || 'All India / State Permit',
+              vehicleFitnessValidTill: (data as any).vehicleFitnessValidTill || null,
+              vehicleInsuranceValidTill: (data as any).vehicleInsuranceValidTill || null,
+
+              // Logistics & Terms
+              negotiatedAmount: data.negotiatedAmount,
+              advanceRequired: (data as any).advanceRequired || 0,
+              readyToLoadAt: (data as any).readyToLoadAt || 'Immediate',
+              agentNotes: (data as any).agentNotes || '',
+              flatFeeBounty: data.flatFeeBounty || 100,
+
+              // Agent info
+              brokerId: profile.id,
+              brokerUserId: brokerId,
+            }
           }
         }
       }

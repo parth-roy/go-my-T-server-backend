@@ -15,12 +15,34 @@ export const postBrokerLoadSchema = z.object({
 });
 
 export const submitBrokerQuoteSchema = z.object({
+  // Driver Details
   driverPhone: z.string().regex(/^[6-9]\d{9}$/, 'Invalid phone number'),
   driverName: z.string().optional(),
-  vehicleRegNo: z.string().min(5).max(15),
-  vehicleRcPhotoUrl: z.string().url(),
-  vehiclePhotoUrl: z.string().url().optional(),
-  negotiatedAmount: z.number().positive(),
+  driverAltPhone: z.string().optional(),
+  driverLicenseNo: z.string().optional(),
+  driverLicensePhotoUrl: z.string().optional(),
+  driverAadhaarNo: z.string().optional(),
+  driverAadhaarPhotoUrl: z.string().optional(),
+  driverCity: z.string().optional(),
+  isOwnerDriver: z.boolean().optional().default(true),
+  ownerName: z.string().optional(),
+  ownerPhone: z.string().optional(),
+
+  // Truck / Vehicle Details
+  vehicleRegNo: z.string().min(5).max(20),
+  vehicleType: z.string().optional(),
+  vehicleBodyType: z.string().optional(),
+  vehicleRcPhotoUrl: z.string().min(1, 'RC Photo is required'),
+  vehiclePhotoUrl: z.string().optional(),
+  vehiclePermitType: z.string().optional(),
+  vehicleFitnessValidTill: z.string().optional(),
+  vehicleInsuranceValidTill: z.string().optional(),
+
+  // Logistics & Terms
+  negotiatedAmount: z.number().positive('Agreed rate must be greater than 0'),
+  advanceRequired: z.number().optional().default(0),
+  readyToLoadAt: z.string().optional(),
+  agentNotes: z.string().optional(),
   flatFeeBounty: z.number().positive().default(100),
 });
 

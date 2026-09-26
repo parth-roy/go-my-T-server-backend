@@ -113,6 +113,13 @@ export const assignDriver = async (req: Request, res: Response, next: NextFuncti
   } catch (e) { next(e); }
 };
 
+export const assignAgentDriver = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { quoteId } = req.body || {};
+    ok(res, await adminService.adminAssignAgentDriver(p(req.params.id), quoteId));
+  } catch (e) { next(e); }
+};
+
 export const cancelBooking = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const input = cancelBookingSchema.parse(req.body);

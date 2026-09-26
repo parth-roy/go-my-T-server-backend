@@ -8,7 +8,7 @@ import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { sendPasswordResetEmail } from '@shared/services/email.service';
 import { notificationService } from '@modules/notifications/notification.service';
-import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus } from '@prisma/client';
+import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus, BrokerQuoteStatus, BrokerBookingStatus, DriverStatus } from '@prisma/client';
 import type {
   LoginInput, ForgotPasswordInput, ResetPasswordInput, RefreshInput,
   BookingsQuery, UsersQuery, DriversQuery, FleetQuery, FinanceQuery,
@@ -313,7 +313,95 @@ export async function getBookings(q: BookingsQuery) {
     }),
   ]);
 
-  return { total, page: q.page, limit: q.limit, data: bookings };
+  // Batch query broker loads & quotes submitted by agents for these bookings
+  const bookingIds = bookings.map(b => b.id);
+  const brokerLoads = await prisma.brokerLoad.findMany({
+    where: { sourceBookingId: { in: bookingIds } },
+    include: {
+      quotes: {
+        include: {
+          broker: {
+            include: {
+              user: { select: { name: true, phone: true, email: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      },
+      auditLog: {
+        where: { action: { in: ['QUOTE_SUBMITTED', 'DRIVER_ASSIGNED_BY_AGENT'] } },
+        orderBy: { timestamp: 'desc' },
+      },
+    },
+  });
+
+  const loadMap = new Map(brokerLoads.map(bl => [bl.sourceBookingId, bl]));
+  const enrichedBookings = bookings.map(b => {
+    const bl = loadMap.get(b.id);
+    const quotes = bl?.quotes || [];
+    const latestQuote = quotes[0] || null;
+    const dossier = (bl?.auditLog?.[0]?.metadata as any) || null;
+
+    return {
+      ...b,
+      hasAgentDriver: quotes.length > 0,
+      agentDriverCount: quotes.length,
+      agentDriverDetails: latestQuote ? {
+        quoteId: latestQuote.id,
+        status: latestQuote.status,
+        negotiatedAmount: latestQuote.negotiatedAmount,
+        flatFeeBounty: latestQuote.flatFeeBounty,
+        isDriverVerified: latestQuote.isDriverVerified,
+        createdAt: latestQuote.createdAt,
+        agent: {
+          id: latestQuote.broker.id,
+          name: latestQuote.broker.user?.name || 'Agent Partner',
+          phone: latestQuote.broker.user?.phone || '',
+          primaryCity: latestQuote.broker.primaryCity || '',
+          isKycVerified: latestQuote.broker.isKycVerified,
+        },
+        driver: {
+          name: dossier?.driverName || latestQuote.driverName || 'Driver Partner',
+          phone: dossier?.driverPhone || latestQuote.driverPhone,
+          altPhone: dossier?.driverAltPhone || null,
+          licenseNo: dossier?.driverLicenseNo || null,
+          licensePhotoUrl: dossier?.driverLicensePhotoUrl || null,
+          aadhaarNo: dossier?.driverAadhaarNo || null,
+          aadhaarPhotoUrl: dossier?.driverAadhaarPhotoUrl || null,
+          city: dossier?.driverCity || null,
+          isOwnerDriver: dossier?.isOwnerDriver ?? true,
+          ownerName: dossier?.ownerName || null,
+          ownerPhone: dossier?.ownerPhone || null,
+        },
+        truck: {
+          vehicleRegNo: dossier?.vehicleRegNo || latestQuote.vehicleRegNo,
+          vehicleType: dossier?.vehicleType || bl?.vehicleType || b.vehicleType,
+          vehicleBodyType: dossier?.vehicleBodyType || 'Standard Commercial Body',
+          vehicleRcPhotoUrl: dossier?.vehicleRcPhotoUrl || latestQuote.vehicleRcPhotoUrl,
+          vehiclePhotoUrl: dossier?.vehiclePhotoUrl || latestQuote.vehiclePhotoUrl || null,
+          permitType: dossier?.vehiclePermitType || 'State / National Commercial Permit',
+          fitnessValidTill: dossier?.vehicleFitnessValidTill || null,
+          insuranceValidTill: dossier?.vehicleInsuranceValidTill || null,
+        },
+        terms: {
+          negotiatedAmount: latestQuote.negotiatedAmount,
+          advanceRequired: dossier?.advanceRequired || 0,
+          readyToLoadAt: dossier?.readyToLoadAt || 'Immediate',
+          agentNotes: dossier?.agentNotes || '',
+        },
+        load: {
+          loadId: bl?.id,
+          pickupCity: bl?.pickupCity,
+          dropCity: bl?.dropCity,
+          pickupAddress: bl?.pickupAddress,
+          dropAddress: bl?.dropAddress,
+          customerBudget: bl?.customerBudget,
+        }
+      } : null,
+    };
+  });
+
+  return { total, page: q.page, limit: q.limit, data: enrichedBookings };
 }
 
 export async function getBookingById(id: string) {
@@ -335,9 +423,77 @@ export async function getBookingById(id: string) {
     orderBy: { calculatedAt: 'desc' }
   });
 
+  // Query agent driver details if exists
+  const bl = await prisma.brokerLoad.findFirst({
+    where: { sourceBookingId: booking.id },
+    include: {
+      quotes: {
+        include: {
+          broker: { include: { user: { select: { name: true, phone: true, email: true } } } },
+        },
+        orderBy: { createdAt: 'desc' },
+      },
+      auditLog: {
+        where: { action: { in: ['QUOTE_SUBMITTED', 'DRIVER_ASSIGNED_BY_AGENT'] } },
+        orderBy: { timestamp: 'desc' },
+      },
+    },
+  });
+
+  const quotes = bl?.quotes || [];
+  const latestQuote = quotes[0] || null;
+  const dossier = (bl?.auditLog?.[0]?.metadata as any) || null;
+
+  const agentDriverDetails = latestQuote ? {
+    quoteId: latestQuote.id,
+    status: latestQuote.status,
+    negotiatedAmount: latestQuote.negotiatedAmount,
+    flatFeeBounty: latestQuote.flatFeeBounty,
+    isDriverVerified: latestQuote.isDriverVerified,
+    createdAt: latestQuote.createdAt,
+    agent: {
+      id: latestQuote.broker.id,
+      name: latestQuote.broker.user?.name || 'Agent Partner',
+      phone: latestQuote.broker.user?.phone || '',
+      primaryCity: latestQuote.broker.primaryCity || '',
+      isKycVerified: latestQuote.broker.isKycVerified,
+    },
+    driver: {
+      name: dossier?.driverName || latestQuote.driverName || 'Driver Partner',
+      phone: dossier?.driverPhone || latestQuote.driverPhone,
+      altPhone: dossier?.driverAltPhone || null,
+      licenseNo: dossier?.driverLicenseNo || null,
+      licensePhotoUrl: dossier?.driverLicensePhotoUrl || null,
+      aadhaarNo: dossier?.driverAadhaarNo || null,
+      aadhaarPhotoUrl: dossier?.driverAadhaarPhotoUrl || null,
+      city: dossier?.driverCity || null,
+      isOwnerDriver: dossier?.isOwnerDriver ?? true,
+      ownerName: dossier?.ownerName || null,
+      ownerPhone: dossier?.ownerPhone || null,
+    },
+    truck: {
+      vehicleRegNo: dossier?.vehicleRegNo || latestQuote.vehicleRegNo,
+      vehicleType: dossier?.vehicleType || bl?.vehicleType || booking.vehicleType,
+      vehicleBodyType: dossier?.vehicleBodyType || 'Standard Commercial Body',
+      vehicleRcPhotoUrl: dossier?.vehicleRcPhotoUrl || latestQuote.vehicleRcPhotoUrl,
+      vehiclePhotoUrl: dossier?.vehiclePhotoUrl || latestQuote.vehiclePhotoUrl || null,
+      permitType: dossier?.vehiclePermitType || 'State / National Commercial Permit',
+      fitnessValidTill: dossier?.vehicleFitnessValidTill || null,
+      insuranceValidTill: dossier?.vehicleInsuranceValidTill || null,
+    },
+    terms: {
+      negotiatedAmount: latestQuote.negotiatedAmount,
+      advanceRequired: dossier?.advanceRequired || 0,
+      readyToLoadAt: dossier?.readyToLoadAt || 'Immediate',
+      agentNotes: dossier?.agentNotes || '',
+    },
+  } : null;
+
   return {
     ...booking,
-    pricingAuditLog: pricingLog ? [pricingLog] : []
+    pricingAuditLog: pricingLog ? [pricingLog] : [],
+    hasAgentDriver: quotes.length > 0,
+    agentDriverDetails,
   };
 }
 
@@ -367,6 +523,116 @@ export async function adminAssignDriver(bookingId: string, input: AssignDriverIn
   }
 
   return updated;
+}
+
+export async function adminAssignAgentDriver(bookingId: string, quoteId?: string) {
+  const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+  if (!booking) throw AppError.notFound('Booking not found');
+
+  // Find the BrokerLoad for this booking
+  const load = await prisma.brokerLoad.findFirst({
+    where: { sourceBookingId: bookingId },
+    include: {
+      quotes: {
+        where: quoteId ? { id: quoteId } : { status: { in: [BrokerQuoteStatus.PENDING, BrokerQuoteStatus.OPS_REVIEW] } },
+        include: { broker: { include: { user: true } } },
+        orderBy: { createdAt: 'desc' },
+      },
+      auditLog: {
+        where: { action: { in: ['QUOTE_SUBMITTED', 'DRIVER_ASSIGNED_BY_AGENT'] } },
+        orderBy: { timestamp: 'desc' },
+      }
+    }
+  });
+
+  if (!load || !load.quotes.length) {
+    throw AppError.notFound('No agent driver submission found for this booking');
+  }
+
+  const quote = load.quotes[0];
+  const dossier = (load.auditLog[0]?.metadata as any) || {};
+
+  // Find or create driver in the system
+  let user = await prisma.user.findUnique({ where: { phone: quote.driverPhone } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        phone: quote.driverPhone,
+        name: quote.driverName || dossier.driverName || 'Driver Partner',
+        role: UserRole.DRIVER,
+        profileComplete: true,
+      }
+    });
+  }
+
+  let driver = await prisma.driver.findUnique({ where: { userId: user.id } });
+  if (!driver) {
+    let vehicle = await prisma.vehicle.findUnique({ where: { registrationNo: quote.vehicleRegNo } });
+    if (!vehicle) {
+      vehicle = await prisma.vehicle.create({
+        data: {
+          registrationNo: quote.vehicleRegNo,
+          type: booking.vehicleType,
+          make: 'Commercial',
+          model: dossier.vehicleBodyType || 'Commercial Truck',
+          year: new Date().getFullYear(),
+          capacityKg: 1000,
+          imageUrl: quote.vehiclePhotoUrl || null,
+        }
+      });
+    }
+
+    driver = await prisma.driver.create({
+      data: {
+        userId: user.id,
+        licenseNumber: dossier.driverLicenseNo || `DL-${quote.driverPhone}`,
+        vehicleId: vehicle.id,
+        status: DriverStatus.AVAILABLE,
+        isDocVerified: true,
+      }
+    });
+  } else {
+    driver = await prisma.driver.update({
+      where: { id: driver.id },
+      data: {
+        status: DriverStatus.AVAILABLE,
+        isDocVerified: true,
+      }
+    });
+  }
+
+  // Update booking
+  const updatedBooking = await prisma.booking.update({
+    where: { id: bookingId },
+    data: {
+      driverId: driver.id,
+      status: BookingStatus.DRIVER_ASSIGNED,
+    }
+  });
+
+  // Update quote & load
+  await prisma.brokerQuote.update({
+    where: { id: quote.id },
+    data: {
+      status: BrokerQuoteStatus.ACCEPTED,
+      isDriverVerified: true,
+    }
+  });
+
+  await prisma.brokerLoad.update({
+    where: { id: load.id },
+    data: {
+      selectedQuoteId: quote.id,
+      brokerStatus: BrokerBookingStatus.BOOKING_LOCKED,
+    }
+  });
+
+  return {
+    booking: updatedBooking,
+    driver,
+    quote,
+    message: 'Agent driver successfully assigned to booking',
+  };
 }
 
 export async function adminCancelBooking(bookingId: string, input: CancelBookingInput) {
