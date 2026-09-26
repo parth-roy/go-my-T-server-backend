@@ -12,6 +12,10 @@ import {
   BrokerLoadsQuery,
   UpdateAgentKycInput,
   AdminAgentsQuery,
+  AdminCreateAgentInput,
+  AdminUpdateAgentInput,
+  AdminAgentStatusInput,
+  AdminBulkDeleteAgentsInput,
   UpdateBrokerConfigInput,
 } from './broker.schema';
 
@@ -542,24 +546,46 @@ export async function getAdminBountyDashboard(query: { status?: string, page: nu
 }
 
 export async function getAdminAgents(query: AdminAgentsQuery) {
-  const { page, limit, search, isKycVerified, city } = query;
+  const { page, limit, search, isKycVerified, isActive, city, sortBy, sortOrder } = query;
   const skip = (page - 1) * limit;
 
   const where: any = {};
   if (isKycVerified !== undefined && isKycVerified !== 'all' && isKycVerified !== '') {
     where.isKycVerified = isKycVerified === 'true' || isKycVerified === 'verified';
   }
+  if (isActive !== undefined && isActive !== 'all' && isActive !== '') {
+    where.isActive = isActive === 'true' || isActive === 'active';
+  }
   if (city) {
     where.primaryCity = { contains: city, mode: 'insensitive' };
   }
   if (search) {
-    where.user = {
-      OR: [
-        { name: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-      ],
-    };
+    where.OR = [
+      { primaryCity: { contains: search, mode: 'insensitive' } },
+      { primaryState: { contains: search, mode: 'insensitive' } },
+      { panNumber: { contains: search, mode: 'insensitive' } },
+      { referralCode: { contains: search, mode: 'insensitive' } },
+      {
+        user: {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { phone: { contains: search, mode: 'insensitive' } },
+            { email: { contains: search, mode: 'insensitive' } },
+          ],
+        },
+      },
+    ];
+  }
+
+  let orderBy: any = { createdAt: sortOrder || 'desc' };
+  if (sortBy === 'totalLoadsFulfilled') {
+    orderBy = { totalLoadsFulfilled: sortOrder || 'desc' };
+  } else if (sortBy === 'totalBountiesEarned') {
+    orderBy = { totalBountiesEarned: sortOrder || 'desc' };
+  } else if (sortBy === 'successRate') {
+    orderBy = { successRate: sortOrder || 'desc' };
+  } else if (sortBy === 'name') {
+    orderBy = { user: { name: sortOrder || 'asc' } };
   }
 
   const [agents, total] = await prisma.$transaction([
@@ -571,7 +597,7 @@ export async function getAdminAgents(query: AdminAgentsQuery) {
         user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, isActive: true } },
         _count: { select: { quotes: true, driverRetentions: true } },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy,
     }),
     prisma.brokerProfile.count({ where }),
   ]);
@@ -587,6 +613,278 @@ export async function getAdminAgents(query: AdminAgentsQuery) {
   return { agents: formattedAgents, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
 }
 
+export async function getAdminAgentById(agentId: string) {
+  const agent = await prisma.brokerProfile.findUnique({
+    where: { id: agentId },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          createdAt: true,
+          isActive: true,
+          profileImageUrl: true,
+        },
+      },
+      quotes: {
+        take: 15,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          load: {
+            select: {
+              id: true,
+              pickupCity: true,
+              dropCity: true,
+              vehicleType: true,
+              brokerStatus: true,
+              customerBudget: true,
+            },
+          },
+          bountyLedger: true,
+        },
+      },
+      driverRetentions: {
+        take: 15,
+        orderBy: { createdAt: 'desc' },
+      },
+      _count: {
+        select: {
+          quotes: true,
+          driverRetentions: true,
+        },
+      },
+    },
+  });
+
+  if (!agent) throw AppError.notFound('Agent profile not found');
+  return agent;
+}
+
+export async function adminCreateAgent(adminUserId: string, data: AdminCreateAgentInput) {
+  return await prisma.$transaction(async (tx) => {
+    // 1. Check if user with phone already exists
+    let user = await tx.user.findUnique({
+      where: { phone: data.phone },
+      include: { brokerProfile: true },
+    });
+
+    if (user?.brokerProfile) {
+      throw AppError.badRequest('A transport agent profile is already registered with this phone number', 'AGENT_ALREADY_EXISTS');
+    }
+
+    if (data.email) {
+      const emailUser = await tx.user.findUnique({ where: { email: data.email } });
+      if (emailUser && emailUser.id !== user?.id) {
+        throw AppError.badRequest('This email is already in use by another account', 'EMAIL_TAKEN');
+      }
+    }
+
+    if (!user) {
+      user = await tx.user.create({
+        data: {
+          phone: data.phone,
+          name: data.name,
+          email: data.email || null,
+          role: UserRole.MIDDLEMAN,
+          profileComplete: true,
+          isActive: data.isActive !== false,
+        },
+        include: { brokerProfile: true },
+      });
+    } else {
+      user = await tx.user.update({
+        where: { id: user.id },
+        data: {
+          name: data.name || user.name,
+          email: data.email || user.email,
+          role: UserRole.MIDDLEMAN,
+          profileComplete: true,
+          isActive: data.isActive !== false,
+        },
+        include: { brokerProfile: true },
+      });
+    }
+
+    const aadhaarLast4 = data.aadhaarNumber && data.aadhaarNumber.length >= 4
+      ? data.aadhaarNumber.slice(-4)
+      : null;
+
+    const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const referralCode = `AGT-${randomSuffix}`;
+
+    const profile = await tx.brokerProfile.create({
+      data: {
+        userId: user.id,
+        primaryCity: data.primaryCity,
+        primaryState: data.primaryState || null,
+        operatingCities: data.operatingCities && data.operatingCities.length > 0 ? data.operatingCities : [data.primaryCity],
+        
+        age: data.age ?? null,
+        gender: data.gender || null,
+        educationLevel: data.educationLevel || null,
+        fullAddress: data.fullAddress || null,
+        profilePhotoUrl: data.profilePhotoUrl || null,
+
+        aadhaarNumber: data.aadhaarNumber || null,
+        aadhaarLast4,
+        aadhaarDocUrl: data.aadhaarDocUrl || null,
+        panNumber: data.panNumber || null,
+        panDocUrl: data.panDocUrl || null,
+
+        bankAccountNumber: data.bankAccountNumber || null,
+        bankIfsc: data.bankIfsc || null,
+        bankName: data.bankName || null,
+        bankAccountHolderName: data.bankAccountHolderName || null,
+        bankUpiId: data.bankUpiId || null,
+
+        isKycVerified: Boolean(data.isKycVerified),
+        kycVerifiedAt: data.isKycVerified ? new Date() : null,
+        isActive: data.isActive !== false,
+        adminNotes: data.adminNotes || null,
+        referralCode,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, isActive: true } },
+      },
+    });
+
+    return profile;
+  });
+}
+
+export async function adminUpdateAgent(agentId: string, adminUserId: string, data: AdminUpdateAgentInput) {
+  return await prisma.$transaction(async (tx) => {
+    const existing = await tx.brokerProfile.findUnique({
+      where: { id: agentId },
+      include: { user: true },
+    });
+    if (!existing) throw AppError.notFound('Agent profile not found');
+
+    if (data.name !== undefined || data.email !== undefined) {
+      if (data.email && data.email !== existing.user.email) {
+        const emailUser = await tx.user.findUnique({ where: { email: data.email } });
+        if (emailUser && emailUser.id !== existing.userId) {
+          throw AppError.badRequest('Email is already registered with another account', 'EMAIL_TAKEN');
+        }
+      }
+      await tx.user.update({
+        where: { id: existing.userId },
+        data: {
+          name: data.name ?? existing.user.name,
+          email: data.email ?? existing.user.email,
+          isActive: data.isActive !== undefined ? data.isActive : existing.user.isActive,
+        },
+      });
+    }
+
+    const aadhaarLast4 = data.aadhaarNumber && data.aadhaarNumber.length >= 4
+      ? data.aadhaarNumber.slice(-4)
+      : (data.aadhaarNumber === '' ? null : existing.aadhaarLast4);
+
+    const updatedProfile = await tx.brokerProfile.update({
+      where: { id: agentId },
+      data: {
+        primaryCity: data.primaryCity !== undefined ? data.primaryCity : existing.primaryCity,
+        primaryState: data.primaryState !== undefined ? data.primaryState : existing.primaryState,
+        operatingCities: data.operatingCities !== undefined ? data.operatingCities : existing.operatingCities,
+        age: data.age !== undefined ? data.age : existing.age,
+        gender: data.gender !== undefined ? data.gender : existing.gender,
+        educationLevel: data.educationLevel !== undefined ? data.educationLevel : existing.educationLevel,
+        fullAddress: data.fullAddress !== undefined ? data.fullAddress : existing.fullAddress,
+        profilePhotoUrl: data.profilePhotoUrl !== undefined ? data.profilePhotoUrl : existing.profilePhotoUrl,
+        aadhaarNumber: data.aadhaarNumber !== undefined ? data.aadhaarNumber : existing.aadhaarNumber,
+        aadhaarLast4,
+        aadhaarDocUrl: data.aadhaarDocUrl !== undefined ? data.aadhaarDocUrl : existing.aadhaarDocUrl,
+        panNumber: data.panNumber !== undefined ? data.panNumber : existing.panNumber,
+        panDocUrl: data.panDocUrl !== undefined ? data.panDocUrl : existing.panDocUrl,
+        bankAccountNumber: data.bankAccountNumber !== undefined ? data.bankAccountNumber : existing.bankAccountNumber,
+        bankIfsc: data.bankIfsc !== undefined ? data.bankIfsc : existing.bankIfsc,
+        bankName: data.bankName !== undefined ? data.bankName : existing.bankName,
+        bankAccountHolderName: data.bankAccountHolderName !== undefined ? data.bankAccountHolderName : existing.bankAccountHolderName,
+        bankUpiId: data.bankUpiId !== undefined ? data.bankUpiId : existing.bankUpiId,
+        adminNotes: data.adminNotes !== undefined ? data.adminNotes : existing.adminNotes,
+        isKycVerified: data.isKycVerified !== undefined ? data.isKycVerified : existing.isKycVerified,
+        kycVerifiedAt: data.isKycVerified !== undefined
+          ? (data.isKycVerified ? (existing.kycVerifiedAt || new Date()) : null)
+          : existing.kycVerifiedAt,
+        isActive: data.isActive !== undefined ? data.isActive : existing.isActive,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, isActive: true } },
+      },
+    });
+
+    return updatedProfile;
+  });
+}
+
+export async function adminToggleAgentStatus(agentId: string, adminUserId: string, data: AdminAgentStatusInput) {
+  return await prisma.$transaction(async (tx) => {
+    const existing = await tx.brokerProfile.findUnique({ where: { id: agentId } });
+    if (!existing) throw AppError.notFound('Agent profile not found');
+
+    const updated = await tx.brokerProfile.update({
+      where: { id: agentId },
+      data: {
+        isActive: data.isActive,
+        adminNotes: data.reason ? `${existing.adminNotes || ''}\n[Status Change]: ${data.reason}`.trim() : existing.adminNotes,
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, isActive: true } },
+      },
+    });
+
+    await tx.user.update({
+      where: { id: existing.userId },
+      data: { isActive: data.isActive },
+    });
+
+    return updated;
+  });
+}
+
+export async function adminDeleteAgent(agentId: string, adminUserId: string) {
+  return await prisma.$transaction(async (tx) => {
+    const existing = await tx.brokerProfile.findUnique({
+      where: { id: agentId },
+      include: {
+        quotes: {
+          where: {
+            status: { in: [BrokerQuoteStatus.PENDING, BrokerQuoteStatus.OPS_REVIEW, BrokerQuoteStatus.ACCEPTED] },
+          },
+        },
+      },
+    });
+    if (!existing) throw AppError.notFound('Agent profile not found');
+
+    if (existing.quotes && existing.quotes.length > 0) {
+      throw AppError.badRequest('Cannot delete agent with active or accepted quotes. Mark the agent inactive instead.', 'AGENT_HAS_ACTIVE_QUOTES');
+    }
+
+    await tx.brokerProfile.delete({ where: { id: agentId } });
+    return { success: true, message: 'Agent deleted successfully' };
+  });
+}
+
+export async function adminBulkDeleteAgents(adminUserId: string, data: AdminBulkDeleteAgentsInput) {
+  const { ids } = data;
+  let deletedCount = 0;
+  let skippedCount = 0;
+
+  for (const agentId of ids) {
+    try {
+      await adminDeleteAgent(agentId, adminUserId);
+      deletedCount++;
+    } catch {
+      skippedCount++;
+    }
+  }
+
+  return { deletedCount, skippedCount, totalProcessed: ids.length };
+}
+
 export async function updateAgentKyc(agentId: string, opsUserId: string, data: UpdateAgentKycInput) {
   const profile = await prisma.brokerProfile.findUnique({ where: { id: agentId }, include: { user: true } });
   if (!profile) throw AppError.notFound('Agent profile not found');
@@ -596,6 +894,7 @@ export async function updateAgentKyc(agentId: string, opsUserId: string, data: U
     data: {
       isKycVerified: data.isKycVerified,
       kycVerifiedAt: data.isKycVerified ? new Date() : null,
+      adminNotes: data.notes ? `${profile.adminNotes || ''}\n[KYC Update]: ${data.notes}`.trim() : profile.adminNotes,
     },
     include: {
       user: { select: { name: true, phone: true, email: true } },

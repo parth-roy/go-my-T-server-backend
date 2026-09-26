@@ -1,0 +1,15 @@
+-- AlterTable broker_profiles to add demographic, document, and banking fields
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "age" INTEGER;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "gender" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "educationLevel" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "fullAddress" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "profilePhotoUrl" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "aadhaarNumber" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "aadhaarDocUrl" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "panDocUrl" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "bankAccountNumber" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "bankIfsc" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "bankName" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "bankAccountHolderName" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "bankUpiId" TEXT;
+ALTER TABLE "broker_profiles" ADD COLUMN IF NOT EXISTS "adminNotes" TEXT;

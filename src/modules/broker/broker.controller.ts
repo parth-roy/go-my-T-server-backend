@@ -175,3 +175,57 @@ export async function getAgentTracking(req: Request, res: Response, next: NextFu
   }
 }
 
+export async function adminCreateAgent(req: Request, res: Response, next: NextFunction) {
+  try {
+    const agent = await BrokerService.adminCreateAgent(req.user!.id, req.body);
+    sendCreated(res, agent, 'Transport Agent registered successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getAdminAgentById(req: Request, res: Response, next: NextFunction) {
+  try {
+    const agent = await BrokerService.getAdminAgentById(req.params.agentId as string);
+    sendSuccess(res, agent, 'Agent details fetched');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function adminUpdateAgent(req: Request, res: Response, next: NextFunction) {
+  try {
+    const agent = await BrokerService.adminUpdateAgent(req.params.agentId as string, req.user!.id, req.body);
+    sendSuccess(res, agent, 'Agent profile updated');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function adminToggleAgentStatus(req: Request, res: Response, next: NextFunction) {
+  try {
+    const agent = await BrokerService.adminToggleAgentStatus(req.params.agentId as string, req.user!.id, req.body);
+    sendSuccess(res, agent, 'Agent status updated');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function adminDeleteAgent(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await BrokerService.adminDeleteAgent(req.params.agentId as string, req.user!.id);
+    sendSuccess(res, result, 'Agent deleted successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function adminBulkDeleteAgents(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await BrokerService.adminBulkDeleteAgents(req.user!.id, req.body);
+    sendSuccess(res, result, 'Bulk delete processed');
+  } catch (err) {
+    next(err);
+  }
+}
+

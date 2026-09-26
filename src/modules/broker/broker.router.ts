@@ -12,6 +12,10 @@ import {
   settleBountySchema,
   brokerLoadsQuerySchema,
   adminAgentsQuerySchema,
+  adminCreateAgentSchema,
+  adminUpdateAgentSchema,
+  adminAgentStatusSchema,
+  adminBulkDeleteAgentsSchema,
   updateAgentKycSchema,
   updateBrokerConfigSchema,
 } from './broker.schema';
@@ -120,6 +124,46 @@ brokerRouter.get(
   requireRole(UserRole.ADMIN),
   validate(adminAgentsQuerySchema, 'query'),
   BrokerController.getAdminAgents
+);
+
+brokerRouter.post(
+  '/admin/agents',
+  requireRole(UserRole.ADMIN),
+  validate(adminCreateAgentSchema),
+  BrokerController.adminCreateAgent
+);
+
+brokerRouter.post(
+  '/admin/agents/bulk-delete',
+  requireRole(UserRole.ADMIN),
+  validate(adminBulkDeleteAgentsSchema),
+  BrokerController.adminBulkDeleteAgents
+);
+
+brokerRouter.get(
+  '/admin/agents/:agentId',
+  requireRole(UserRole.ADMIN),
+  BrokerController.getAdminAgentById
+);
+
+brokerRouter.patch(
+  '/admin/agents/:agentId',
+  requireRole(UserRole.ADMIN),
+  validate(adminUpdateAgentSchema),
+  BrokerController.adminUpdateAgent
+);
+
+brokerRouter.patch(
+  '/admin/agents/:agentId/status',
+  requireRole(UserRole.ADMIN),
+  validate(adminAgentStatusSchema),
+  BrokerController.adminToggleAgentStatus
+);
+
+brokerRouter.delete(
+  '/admin/agents/:agentId',
+  requireRole(UserRole.ADMIN),
+  BrokerController.adminDeleteAgent
 );
 
 brokerRouter.patch(

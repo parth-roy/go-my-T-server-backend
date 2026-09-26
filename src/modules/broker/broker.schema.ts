@@ -73,10 +73,59 @@ export const updateAgentKycSchema = z.object({
 
 export const adminAgentsQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).default(20),
+  limit: z.coerce.number().min(1).default(25),
   search: z.string().optional(),
   isKycVerified: z.string().optional(),
+  isActive: z.string().optional(),
   city: z.string().optional(),
+  sortBy: z.enum(['createdAt', 'name', 'totalLoadsFulfilled', 'totalBountiesEarned', 'successRate']).optional().default('createdAt'),
+  sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
+});
+
+export const adminCreateAgentSchema = z.object({
+  name: z.string().min(2, 'Name must be at least 2 characters').max(100),
+  phone: z.string().regex(/^[6-9]\d{9}$/, 'Must be a valid 10-digit Indian mobile number'),
+  email: z.string().email('Invalid email address').optional().or(z.literal('')),
+  primaryCity: z.string().min(2, 'Primary city is required'),
+  primaryState: z.string().optional().or(z.literal('')),
+  operatingCities: z.array(z.string()).optional().default([]),
+  
+  // Demographics (optional)
+  age: z.coerce.number().min(18).max(100).optional().nullable(),
+  gender: z.string().optional().or(z.literal('')),
+  educationLevel: z.string().optional().or(z.literal('')),
+  fullAddress: z.string().optional().or(z.literal('')),
+  profilePhotoUrl: z.string().url().optional().or(z.literal('')),
+
+  // Documents (optional)
+  aadhaarNumber: z.string().optional().or(z.literal('')),
+  aadhaarDocUrl: z.string().url().optional().or(z.literal('')),
+  panNumber: z.string().optional().or(z.literal('')),
+  panDocUrl: z.string().url().optional().or(z.literal('')),
+
+  // Banking Details (optional)
+  bankAccountNumber: z.string().optional().or(z.literal('')),
+  bankIfsc: z.string().optional().or(z.literal('')),
+  bankName: z.string().optional().or(z.literal('')),
+  bankAccountHolderName: z.string().optional().or(z.literal('')),
+  bankUpiId: z.string().optional().or(z.literal('')),
+
+  // Admin Verification & Flags
+  isKycVerified: z.boolean().optional().default(false),
+  isActive: z.boolean().optional().default(true),
+  adminNotes: z.string().optional().or(z.literal('')),
+});
+
+export const adminUpdateAgentSchema = adminCreateAgentSchema.partial();
+
+export const adminAgentStatusSchema = z.object({
+  isActive: z.boolean(),
+  reason: z.string().optional(),
+});
+
+export const adminBulkDeleteAgentsSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1, 'At least one agent ID is required'),
+  reason: z.string().optional(),
 });
 
 export const updateBrokerConfigSchema = z.object({
@@ -96,5 +145,9 @@ export type SettleBountyInput = z.infer<typeof settleBountySchema>;
 export type BrokerLoadsQuery = z.infer<typeof brokerLoadsQuerySchema>;
 export type UpdateAgentKycInput = z.infer<typeof updateAgentKycSchema>;
 export type AdminAgentsQuery = z.infer<typeof adminAgentsQuerySchema>;
+export type AdminCreateAgentInput = z.infer<typeof adminCreateAgentSchema>;
+export type AdminUpdateAgentInput = z.infer<typeof adminUpdateAgentSchema>;
+export type AdminAgentStatusInput = z.infer<typeof adminAgentStatusSchema>;
+export type AdminBulkDeleteAgentsInput = z.infer<typeof adminBulkDeleteAgentsSchema>;
 export type UpdateBrokerConfigInput = z.infer<typeof updateBrokerConfigSchema>;
 

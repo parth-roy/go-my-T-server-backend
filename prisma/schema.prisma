@@ -2440,6 +2440,28 @@ model BrokerProfile {
   referredByBrokerId    String?  // Self-referral chain for network growth
   referralCode          String?  @unique // Unique code for the broker to share
   
+  // Demographics & Profile (Optional - Admin registration & enhanced KYC)
+  age                   Int?
+  gender                String?  // MALE, FEMALE, OTHER
+  educationLevel        String?  // 10th, 12th, Graduate, Post Graduate, Other
+  fullAddress           String?
+  profilePhotoUrl       String?
+
+  // Identification Documents (Optional)
+  aadhaarNumber         String?  // Full 12-digit Aadhaar (optional)
+  aadhaarDocUrl         String?  // Aadhaar card document URL
+  panDocUrl             String?  // PAN card document URL
+
+  // Bank & Settlement Details (Optional - Manual bounty payouts)
+  bankAccountNumber     String?
+  bankIfsc              String?
+  bankName              String?
+  bankAccountHolderName String?
+  bankUpiId             String?
+
+  // Admin notes / remarks
+  adminNotes            String?
+
   isActive              Boolean  @default(true)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
