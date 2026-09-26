@@ -51,6 +51,12 @@ export const createBookingSchema = z.object({
     // Fare from the pricing engine — stored as totalFare until Pricing Engine is fully server-side
     estimatedFare: z.number().positive().optional(),
     estimatedDistanceKm: z.number().positive().optional(),
+    // Booking Persona & Urgency Timer
+    bookingPersona: z.enum(["INDIVIDUAL", "ENTERPRISE", "CONTRACTUAL"]).optional().default("INDIVIDUAL"),
+    truckCount: z.number().int().min(1).max(50).optional().default(1),
+    contractDuration: z.string().max(100).optional(),
+    urgencyWindow: z.enum(["UNDER_2_HOURS", "UNDER_4_HOURS", "UNDER_24_HOURS", "TWO_DAYS", "FLEXIBLE"]).optional().default("FLEXIBLE"),
+    slaExpiresAt: z.string().datetime().optional().nullable(),
     // Extra fields sent by app but not stored — accepted to avoid validation errors
     dropLat: z.number().optional(),
     dropLng: z.number().optional(),

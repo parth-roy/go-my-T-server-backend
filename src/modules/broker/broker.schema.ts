@@ -12,6 +12,12 @@ export const postBrokerLoadSchema = z.object({
   estimatedDistanceKm: z.number().positive().optional(),
   customerBudget: z.number().positive().min(100).max(10_000_000),
   targetCities: z.array(z.string()).default([]),
+  // New SLA/Persona fields (optional — posted from web booking flow)
+  bookingPersona: z.enum(['INDIVIDUAL', 'ENTERPRISE', 'CONTRACTUAL']).optional().default('INDIVIDUAL'),
+  truckCount: z.number().int().min(1).optional().default(1),
+  contractDuration: z.string().optional(),
+  urgencyWindow: z.enum(['UNDER_2_HOURS', 'UNDER_4_HOURS', 'UNDER_24_HOURS', 'TWO_DAYS', 'FLEXIBLE']).optional().default('FLEXIBLE'),
+  slaExpiresAt: z.string().datetime().optional(), // ISO string; service will convert to Date
 });
 
 export const submitBrokerQuoteSchema = z.object({

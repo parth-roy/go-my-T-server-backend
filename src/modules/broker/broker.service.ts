@@ -28,6 +28,14 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
     throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before posting freight loads.');
   }
 
+  // Compute slaExpiresAt from urgencyWindow if provided
+  let slaExpiresAt: Date | null = null;
+  if (data.urgencyWindow && data.urgencyWindow !== 'FLEXIBLE' && data.slaExpiresAt) {
+    slaExpiresAt = new Date(data.slaExpiresAt);
+  } else if (data.slaExpiresAt) {
+    slaExpiresAt = new Date(data.slaExpiresAt);
+  }
+
   const load = await prisma.brokerLoad.create({
     data: {
       vehicleType: data.vehicleType,
@@ -41,6 +49,11 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
       customerBudget: data.customerBudget,
       targetCities: data.targetCities,
       brokerStatus: BrokerBookingStatus.SOURCING,
+      // New SLA/Persona fields
+      bookingPersona: (data.bookingPersona as any) || 'INDIVIDUAL',
+      truckCount: data.truckCount || 1,
+      urgencyWindow: (data.urgencyWindow as any) || 'FLEXIBLE',
+      slaExpiresAt,
       auditLog: {
         create: {
           action: 'LOAD_POSTED',
@@ -102,6 +115,11 @@ export async function syncOpenBookingsToBrokerLoads() {
             targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
             brokerStatus: BrokerBookingStatus.SOURCING,
             isUrgent: b.declineCount > 0,
+            // Propagate new SLA/Persona fields from source booking
+            bookingPersona: (b as any).bookingPersona || 'INDIVIDUAL',
+            truckCount: (b as any).truckCount || 1,
+            urgencyWindow: (b as any).urgencyWindow || 'FLEXIBLE',
+            slaExpiresAt: (b as any).slaExpiresAt || null,
           },
         });
       }
@@ -123,6 +141,20 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
     where.brokerStatus = status;
   } else if (!isAdmin) {
     where.brokerStatus = { in: [BrokerBookingStatus.SOURCING, BrokerBookingStatus.RE_SOURCING] };
+  }
+
+  // SLA expiry filter: Non-admins only see loads that are not yet expired.
+  // Admin always sees everything (admin can set slaExpiresAt to null for no-timer loads).
+  if (!isAdmin) {
+    where.AND = [
+      ...(where.AND || []),
+      {
+        OR: [
+          { slaExpiresAt: null },           // No timer set = always visible
+          { slaExpiresAt: { gt: new Date() } }, // Timer not yet expired
+        ],
+      },
+    ];
   }
 
   // Location filter: If city is provided and not 'all', filter specifically for that city

@@ -170,6 +170,20 @@ enum BountySettlementStatus {
   PARTIAL          // Cancellation post-arrival — 50% dry-run bounty
 }
 
+enum BookingPersona {
+  INDIVIDUAL    // Single customer, 1 truck, one-off
+  ENTERPRISE    // Business owner, may need multiple trucks
+  CONTRACTUAL   // Long-term / recurring / daily basis
+}
+
+enum UrgencyWindow {
+  UNDER_2_HOURS
+  UNDER_4_HOURS
+  UNDER_24_HOURS
+  TWO_DAYS
+  FLEXIBLE        // Used for CONTRACTUAL bookings
+}
+
 enum CoinTransactionType {
   EARN
   REDEEM
@@ -856,7 +870,15 @@ model Booking {
   laborersCount Int? // How many workers are needed (e.g., 3)
   laborType     LaborType? // LOADING | UNLOADING | BOTH
   laborCharge   Float? // Platform-calculated total labour charge; each assignment receives total / count
-  ScratchCard   ScratchCard?
+
+  // ── New Booking Persona & Urgency Timer Fields ─────────────────────────
+  // All optional/defaulted — zero impact on existing Flutter Customer App bookings.
+  bookingPersona   BookingPersona  @default(INDIVIDUAL)
+  truckCount       Int             @default(1)    // How many trucks needed (Enterprise/Contract)
+  contractDuration String?                        // e.g. "30 days", "Monthly", "Weekly"
+  urgencyWindow    UrgencyWindow   @default(FLEXIBLE)
+  slaExpiresAt     DateTime?                      // UTC expiry — null means no timer set
+  ScratchCard      ScratchCard?
 
   @@index([status])
   @@index([customerId, status])
@@ -866,6 +888,7 @@ model Booking {
   @@index([bookingMode, status])
   @@index([awardedFleetOwnerId, status])
   @@index([laborRequired, status]) // Speeds up workforce job-feed queries
+  @@index([slaExpiresAt])
   @@map("bookings")
 }
 
@@ -2525,6 +2548,12 @@ model BrokerLoad {
   cancelledAt           DateTime?
   cancellationReason    String?
   
+  // ── Persona & SLA propagated from source booking ───────────────────────
+  bookingPersona  BookingPersona  @default(INDIVIDUAL)
+  truckCount      Int             @default(1)
+  urgencyWindow   UrgencyWindow   @default(FLEXIBLE)
+  slaExpiresAt    DateTime?                       // Copied from Booking.slaExpiresAt
+
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
   
@@ -2535,6 +2564,7 @@ model BrokerLoad {
   @@index([pickupCity, brokerStatus])
   @@index([isUrgent, brokerStatus])
   @@index([createdAt])
+  @@index([slaExpiresAt, brokerStatus])
   @@map("broker_loads")
 }
 

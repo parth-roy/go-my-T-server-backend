@@ -118,6 +118,11 @@ const bookingDetailSelect = {
     insuranceOpted: true,
     insuranceProvider: true,
     insuranceAmount: true,
+    bookingPersona: true,
+    truckCount: true,
+    contractDuration: true,
+    urgencyWindow: true,
+    slaExpiresAt: true,
     createdAt: true,
     updatedAt: true,
     driver: {
@@ -281,6 +286,11 @@ export async function createBooking(customerId: string, data: CreateBookingInput
             booking = await prisma.booking.create({
                 data: {
                     ...bookingData,
+                    bookingPersona: (bookingData.bookingPersona as any) || "INDIVIDUAL",
+                    truckCount: bookingData.truckCount || 1,
+                    contractDuration: bookingData.contractDuration || null,
+                    urgencyWindow: (bookingData.urgencyWindow as any) || "FLEXIBLE",
+                    slaExpiresAt: bookingData.slaExpiresAt ? new Date(bookingData.slaExpiresAt) : null,
                     hasLoadingService: data.laborRequired || data.hasLoadingService,
                     laborRequired: data.laborRequired,
                     laborersCount: data.laborRequired ? data.laborersCount : null,
@@ -492,6 +502,43 @@ export async function confirmBooking(bookingId: string, customerId: string) {
         customerId,
         vehicleType: updated.vehicleType,
     });
+
+    // Proactively create BrokerLoad for agent marketplace instant visibility
+    try {
+        const pCity = (updated.pickupAddress.split(",").slice(-2)[0] || "India").replace(/\d{6}/g, "").trim() || "India";
+        const stops = (updated as any).stops || [];
+        const dAddress = stops.length > 0 ? stops[stops.length - 1].address : updated.pickupAddress;
+        const dCity = (dAddress.split(",").slice(-2)[0] || "India").replace(/\d{6}/g, "").trim() || "India";
+
+        await prisma.brokerLoad.upsert({
+            where: { sourceBookingId: updated.id },
+            update: {
+                bookingPersona: (updated as any).bookingPersona || "INDIVIDUAL",
+                truckCount: (updated as any).truckCount || 1,
+                urgencyWindow: (updated as any).urgencyWindow || "FLEXIBLE",
+                slaExpiresAt: (updated as any).slaExpiresAt || null,
+            },
+            create: {
+                sourceBookingId: updated.id,
+                pickupCity: pCity,
+                pickupAddress: updated.pickupAddress,
+                dropCity: dCity,
+                dropAddress: dAddress,
+                vehicleType: updated.vehicleType,
+                goodsType: updated.goodsType || "General Goods",
+                goodsWeightKg: updated.goodsWeightKg,
+                customerBudget: updated.grandTotal || updated.totalFare || updated.baseFare || 1200,
+                targetCities: [pCity.toLowerCase(), dCity.toLowerCase()],
+                brokerStatus: "SOURCING",
+                bookingPersona: (updated as any).bookingPersona || "INDIVIDUAL",
+                truckCount: (updated as any).truckCount || 1,
+                urgencyWindow: (updated as any).urgencyWindow || "FLEXIBLE",
+                slaExpiresAt: (updated as any).slaExpiresAt || null,
+            }
+        });
+    } catch (e) {
+        logger.warn(`Failed to proactively create broker load for booking ${updated.id}: ${e}`);
+    }
 
     logger.info(`Booking confirmed: ${updated.bookingNumber}`);
     return updated;
