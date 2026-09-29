@@ -17,6 +17,7 @@ import {
   BookingMode,
   BookingStatus,
   DriverStatus,
+  NotificationType,
   Prisma,
   UserRole,
 } from '@prisma/client';
@@ -24,6 +25,7 @@ import { assertTransition } from '@modules/booking/booking.transition';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
+import { createNotification } from '@modules/notifications/inapp.notification.service';
 import type {
   RegisterFleetOwnerInput,
   AddFleetTruckInput,
@@ -309,13 +311,19 @@ export async function addFleetDriver(
     },
   });
 
-  // Notify driver via FCM
+  // Notify driver via FCM & in-app
   if (targetUser.fcmToken) {
     await notificationService.sendToDevice(targetUser.fcmToken, {
       title: '🚛 Fleet Invitation',
       body: `${fleetOwner.companyName ?? 'A fleet owner'} has added you to their fleet on Parther.`,
     });
   }
+  await createNotification(
+    targetUser.id,
+    '🚛 Fleet Invitation',
+    `${fleetOwner.companyName ?? 'A fleet owner'} has added you to their fleet on Parther.`,
+    NotificationType.SYSTEM,
+  );
 
   logger.info('[FleetOwner] Driver added to fleet', {
     fleetOwnerId: fleetOwner.id,
@@ -705,7 +713,7 @@ export async function assignTruckToBooking(
     return { assignment };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
-  // Notify the driver via FCM (outside transaction — non-blocking)
+  // Notify the driver via FCM & in-app (outside transaction — non-blocking)
   if (fleetDriver.driver.user.fcmToken) {
     notificationService.sendToDevice(fleetDriver.driver.user.fcmToken, {
       title: '📦 New Trip Assigned',
@@ -713,6 +721,13 @@ export async function assignTruckToBooking(
       data: { bookingId: input.bookingId, type: 'BOOKING_ASSIGNED' },
     }).catch((err) => logger.error('[FleetOwner] FCM notification failed', err));
   }
+  createNotification(
+    fleetDriver.driver.user.id,
+    '📦 New Trip Assigned',
+    'You have been assigned a new delivery. Check your Parther app for details.',
+    NotificationType.BOOKING_STATUS,
+    input.bookingId,
+  ).catch((err) => logger.error('[FleetOwner] In-app notification creation failed', err));
 
   logger.info('[FleetOwner] Truck assigned to booking', {
     fleetOwnerId: fleetOwner.id,

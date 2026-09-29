@@ -29,17 +29,21 @@ export async function createNotification(
 // LIST USER NOTIFICATIONS (paginated)
 // ─────────────────────────────────────────────
 
-export async function listNotifications(userId: string, page: number, limit: number) {
+export async function listNotifications(userId: string, page: number, limit: number, type?: string) {
     const skip = (page - 1) * limit;
+    const where: any = { userId };
+    if (type && type !== 'ALL') {
+        where.type = type;
+    }
 
     const [notifications, total, unreadCount] = await prisma.$transaction([
         prisma.userNotification.findMany({
-            where: { userId },
+            where,
             orderBy: { createdAt: 'desc' },
             skip,
             take: limit,
         }),
-        prisma.userNotification.count({ where: { userId } }),
+        prisma.userNotification.count({ where }),
         prisma.userNotification.count({ where: { userId, isRead: false } }),
     ]);
 

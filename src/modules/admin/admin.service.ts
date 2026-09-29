@@ -8,7 +8,8 @@ import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { sendPasswordResetEmail } from '@shared/services/email.service';
 import { notificationService } from '@modules/notifications/notification.service';
-import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus, BrokerQuoteStatus, BrokerBookingStatus, DriverStatus } from '@prisma/client';
+import { createNotification } from '@modules/notifications/inapp.notification.service';
+import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus, BrokerQuoteStatus, BrokerBookingStatus, DriverStatus, NotificationType } from '@prisma/client';
 import type {
   LoginInput, ForgotPasswordInput, ResetPasswordInput, RefreshInput,
   BookingsQuery, UsersQuery, DriversQuery, FleetQuery, FinanceQuery,
@@ -526,7 +527,7 @@ export async function adminAssignDriver(bookingId: string, input: AssignDriverIn
     data: { driverId: input.driverId, status: 'DRIVER_ASSIGNED' },
   });
 
-  // Notify driver via FCM
+  // Notify driver via FCM & in-app
   if (driver.user.fcmToken) {
     await notificationService.sendToDevice(driver.user.fcmToken, {
       title: 'New Booking Assigned',
@@ -534,6 +535,13 @@ export async function adminAssignDriver(bookingId: string, input: AssignDriverIn
       data: { bookingId, type: 'BOOKING_ASSIGNED' },
     });
   }
+  await createNotification(
+    driver.user.id,
+    'New Booking Assigned',
+    `Booking ${booking.bookingNumber} has been assigned to you by admin.`,
+    NotificationType.BOOKING_STATUS,
+    bookingId,
+  );
 
   return updated;
 }
@@ -917,12 +925,20 @@ export async function setDriverDocVerified(driverId: string, input: DocVerifiedI
     ] : [])
   ]);
 
-  if (input.isDocVerified && driver.user.fcmToken) {
-    await notificationService.sendToDevice(driver.user.fcmToken, {
-      title: '🎉 Account Verified!',
-      body: 'Your documents have been verified. You can now go online and accept bookings.',
-      data: { type: 'ACCOUNT_VERIFIED' },
-    });
+  if (input.isDocVerified) {
+    if (driver.user.fcmToken) {
+      await notificationService.sendToDevice(driver.user.fcmToken, {
+        title: '🎉 Account Verified!',
+        body: 'Your documents have been verified. You can now go online and accept bookings.',
+        data: { type: 'ACCOUNT_VERIFIED' },
+      });
+    }
+    await createNotification(
+      driver.user.id,
+      '🎉 Account Verified!',
+      'Your documents have been verified. You can now go online and accept bookings.',
+      NotificationType.SYSTEM,
+    );
   }
 
   return { success: true, driverId, isDocVerified: input.isDocVerified };
@@ -1356,16 +1372,26 @@ export async function broadcastNotification(adminId: string, input: BroadcastInp
   }
 
   let sent = 0;
+  const notifType = input.type === 'PROMO' ? NotificationType.PROMO : NotificationType.SYSTEM;
   for (const user of users) {
-    if (!user.fcmToken) continue;
-    try {
-      await notificationService.sendToDevice(user.fcmToken, {
-        title: input.title,
-        body: input.body,
-        data: { type: input.type, referenceId: input.referenceId ?? '' },
-      });
-      sent++;
-    } catch { /* skip failed tokens */ }
+    if (user.fcmToken) {
+      try {
+        await notificationService.sendToDevice(user.fcmToken, {
+          title: input.title,
+          body: input.body,
+          data: { type: input.type, referenceId: input.referenceId ?? '' },
+        });
+        sent++;
+      } catch { /* skip failed tokens */ }
+    }
+    // Also record in-app notification for user
+    await createNotification(
+      user.id,
+      input.title,
+      input.body,
+      notifType,
+      input.referenceId ?? undefined,
+    );
   }
 
   return { success: true, targeted: users.length, sent };

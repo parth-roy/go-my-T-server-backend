@@ -7,8 +7,9 @@ export async function listNotifications(req: Request, res: Response, next: NextF
     try {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
         const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+        const type = req.query.type as string | undefined;
 
-        const result = await InAppService.listNotifications(req.user!.id, page, limit);
+        const result = await InAppService.listNotifications(req.user!.id, page, limit, type);
         sendSuccess(res, result.notifications, 'Notifications fetched', 200, {
             ...result.meta,
             unreadCount: result.unreadCount,
