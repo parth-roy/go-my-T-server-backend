@@ -809,6 +809,19 @@ export async function uploadOnboardingDocuments(
           where: { registrationNo: regNo },
         });
         if (existingVehicle) {
+          const assignedDriver = await prisma.driver.findFirst({
+            where: { vehicleId: existingVehicle.id, id: { not: driver.id } },
+            include: { user: true },
+          });
+          if (assignedDriver) {
+            const maskedPhone = assignedDriver.user?.phone
+              ? `ending in ${assignedDriver.user.phone.slice(-4)}`
+              : 'another account';
+            throw AppError.conflict(
+              `Vehicle "${regNo}" is already registered to ${maskedPhone}. If this is your vehicle, please contact support.`,
+              'VEHICLE_ALREADY_REGISTERED'
+            );
+          }
           await prisma.driver.update({
             where: { id: driver.id },
             data: { vehicleId: existingVehicle.id },
