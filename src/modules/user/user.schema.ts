@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const updateProfileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100).optional(),
   email: z.string().email('Invalid email address').optional(),
+  phone: z.string().optional(),
   profileImageUrl: z.string().url('Invalid image URL').optional(),
   language: z.enum(['en', 'hi', 'bn']).optional(),
   fcmToken: z.string().min(1).optional(),
@@ -10,6 +11,7 @@ export const updateProfileSchema = z.object({
   whatsappOptIn: z.boolean().optional(),
   profileComplete: z.boolean().optional(),
   consentToLinkEmail: z.boolean().optional(),
+  customerConsent: z.boolean().optional(),
 });
 
 export const addAddressSchema = z.object({
