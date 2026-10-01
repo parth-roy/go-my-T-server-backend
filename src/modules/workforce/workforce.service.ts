@@ -126,7 +126,15 @@ export async function sendOtp(input: SendOtpInput): Promise<{ message: string; o
     }
   }
 
-  return { message: 'OTP sent successfully', otp, _devOtp: '123456' };
+  const returnValue: { message: string; otp?: string; _devOtp?: string } = {
+    message: 'OTP sent successfully',
+  };
+  if (env.NODE_ENV !== 'production') {
+    // Only expose OTP in non-production so it can be shown in UI / auto-filled
+    returnValue.otp = otp;
+    returnValue._devOtp = otp; // same real OTP — not a fake '123456'
+  }
+  return returnValue;
 }
 
 // ─────────────────────────────────────────────
@@ -144,7 +152,7 @@ export async function verifyOtp(input: VerifyOtpInput) {
     logger.info(`[Workforce OTP] Demo account ${input.phone} verified`);
   } else {
     const storedOtp = await getOtp(input.phone);
-    if (!storedOtp || (storedOtp !== input.otp && input.otp !== '123456')) {
+    if (!storedOtp || storedOtp !== input.otp) {
       throw AppError.badRequest('Invalid or expired OTP', 'INVALID_OTP');
     }
     await deleteOtp(input.phone); // Single-use
