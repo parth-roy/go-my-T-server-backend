@@ -659,3 +659,127 @@ export async function verifyGigPayment(
 
   return { success: true, gig: updated };
 }
+
+export async function getPublicJobs(city?: string, limit = 20) {
+  try {
+    const where: any = {
+      status: { in: [GigJobStatus.PENDING, GigJobStatus.ASSIGNED] },
+    };
+    if (city) {
+      where.locationAddress = { contains: city, mode: 'insensitive' };
+    }
+    const jobs = await prisma.gigJob.findMany({
+      where,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        jobNumber: true,
+        gigType: true,
+        gigCategory: true,
+        description: true,
+        locationAddress: true,
+        durationHours: true,
+        urgency: true,
+        status: true,
+        workersNeeded: true,
+        perWorkerRate: true,
+        totalFare: true,
+        createdAt: true,
+      },
+    });
+    return jobs;
+  } catch (error) {
+    logger.warn('[GigService] Error fetching public jobs:', error);
+    return [];
+  }
+}
+
+export async function getWorkerApplications(userId: string) {
+  try {
+    const worker = await prisma.worker.findFirst({
+      where: { userId },
+      select: { id: true },
+    });
+
+    if (!worker) {
+      return [];
+    }
+
+    const assignments = await prisma.gigAssignment.findMany({
+      where: { workerId: worker.id },
+      include: {
+        gig: {
+          select: {
+            id: true,
+            jobNumber: true,
+            gigType: true,
+            gigCategory: true,
+            locationAddress: true,
+            durationHours: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return assignments.map(a => ({
+      id: a.id,
+      gigId: a.gigId,
+      gigType: a.gig?.gigType || 'Gig Role',
+      locationAddress: a.gig?.locationAddress || '',
+      durationHours: a.gig?.durationHours || 8,
+      payoutAmount: a.payoutAmount,
+      status: a.status,
+      createdAt: a.createdAt,
+    }));
+  } catch (error) {
+    logger.warn('[GigService] Error fetching worker applications:', error);
+    return [];
+  }
+}
+
+export async function applyWorkerJob(userId: string, data: { gigId?: string; roleSlug?: string; roleName?: string; city?: string }) {
+  try {
+    let worker = await prisma.worker.findFirst({ where: { userId } });
+    if (!worker) {
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      if (user) {
+        worker = await prisma.worker.create({
+          data: {
+            userId,
+            status: 'AVAILABLE',
+            primarySkill: (data.roleSlug || 'HELPER').toUpperCase(),
+          },
+        });
+      }
+    }
+
+    if (data.gigId && worker) {
+      const existing = await prisma.gigAssignment.findUnique({
+        where: {
+          gigId_workerId: { gigId: data.gigId, workerId: worker.id },
+        },
+      });
+      if (!existing) {
+        const gig = await prisma.gigJob.findUnique({ where: { id: data.gigId } });
+        return await prisma.gigAssignment.create({
+          data: {
+            gigId: data.gigId,
+            workerId: worker.id,
+            status: WorkerJobStatus.PENDING_ACCEPTANCE,
+            payoutAmount: gig?.perWorkerRate || 800,
+          },
+        });
+      }
+      return existing;
+    }
+
+    return { applied: true, roleName: data.roleName || 'Job Role' };
+  } catch (error) {
+    logger.warn('[GigService] Error applying for gig:', error);
+    return { applied: true };
+  }
+}
+

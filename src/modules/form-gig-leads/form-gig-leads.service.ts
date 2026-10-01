@@ -38,12 +38,14 @@ const toNullableFloat = (val: any): number | null => {
 };
 
 export const FormGigLeadService = {
-  createLead: async (data: any, files: { [fieldname: string]: Express.Multer.File[] } = {}) => {
+  createLead: async (data: any, files: { [fieldname: string]: Express.Multer.File[] } = {}, authUser?: { id?: string; phone?: string }) => {
     const firstName = toStr(data.firstName);
     const lastName = toStr(data.lastName);
     const email = toNullableStr(data.email);
-    const phone = toStr(data.phone);
-    const jobType = toStr(data.jobType);
+    const rawPhone = toStr(data.phone || authUser?.phone);
+    const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
+    const phone = cleanPhone || rawPhone;
+    const jobType = toStr(data.jobType) || 'general-helper';
     const rawCity = toStr(data.city);
     const givenDistrict = toNullableStr(data.givenDistrict);
     const givenState = toNullableStr(data.givenState);
@@ -63,6 +65,34 @@ export const FormGigLeadService = {
     const givenLat = toNullableFloat(data.givenLat);
     const givenLng = toNullableFloat(data.givenLng);
     const notes = toNullableStr(data.notes);
+
+    // Dynamic onboarding fields
+    const experience = toNullableStr(data.experience);
+    const secondarySkills = toNullableStr(data.skills) || toNullableStr(data.secondarySkills);
+    const dailyRate = toNullableStr(data.currentSalary) || toNullableStr(data.dailyRate);
+    const certification = toNullableStr(data.documents) || toNullableStr(data.certification);
+    const assets = toNullableStr(data.assets);
+    const gender = toNullableStr(data.gender);
+    const education = toNullableStr(data.education);
+    const whatsappOptIn = data.whatsappOptIn === true || data.whatsappOptIn === 'true';
+    const sourcePlatform = toNullableStr(data.sourcePlatform) || 'WORKFORCE_WEB';
+    const sourceUrl = toNullableStr(data.sourceUrl);
+
+    // Build structured metadata JSON to store extra profile fields safely in notes
+    const metadataObj: Record<string, any> = {
+      gender: gender || undefined,
+      education: education || undefined,
+      currentSalary: dailyRate || undefined,
+      assets: assets || undefined,
+      documents: certification || undefined,
+      skills: secondarySkills || undefined,
+      experience: experience || undefined,
+      whatsappOptIn,
+    };
+    if (notes) {
+      metadataObj.customNotes = notes;
+    }
+    const combinedNotes = JSON.stringify(metadataObj);
     
     // Upload files to S3 sequentially
     const uploadedUrls: Record<string, string> = {};
@@ -96,15 +126,21 @@ export const FormGigLeadService = {
         email: email || null,
         phone: phone || '',
         jobType: jobType || 'general-helper',
+        secondarySkills: secondarySkills || null,
+        experience: experience || null,
+        dailyRate: dailyRate || null,
+        certification: certification || null,
         city: city || 'India',
         area: area || null,
-        vehicleType: vehicleType || null,
+        vehicleType: vehicleType || assets || null,
         vehicleMake: vehicleMake || null,
         aadharNumber: aadharNumber || '',
         panNumber: panNumber || '',
         dlNumber: dlNumber || null,
         rcNumber: rcNumber || null,
         insuranceDetails: insuranceDetails || null,
+        sourcePlatform,
+        sourceUrl,
         
         givenAddress,
         givenStreet,
@@ -113,11 +149,52 @@ export const FormGigLeadService = {
         givenPincode, 
         givenLat, 
         givenLng,
-        notes,
+        notes: combinedNotes,
 
         ...uploadedUrls
       }
     });
+
+    // Ensure User and Worker records are synced in DB
+    if (cleanPhone && cleanPhone.length === 10) {
+      try {
+        const fullName = `${firstName} ${lastName}`.trim() || 'Worker Partner';
+        const user = await prisma.user.upsert({
+          where: { phone: cleanPhone },
+          create: {
+            phone: cleanPhone,
+            name: fullName,
+            email: email || null,
+            role: UserRole.WORKER,
+            profileComplete: true,
+            whatsappOptIn,
+          },
+          update: {
+            name: fullName,
+            email: email || undefined,
+            role: UserRole.WORKER,
+            profileComplete: true,
+            whatsappOptIn,
+          },
+        });
+
+        await prisma.worker.upsert({
+          where: { userId: user.id },
+          create: {
+            userId: user.id,
+            status: 'OFFLINE',
+            preferredWork: jobType,
+            vehicleAccess: Boolean(assets && (assets.toLowerCase().includes('bike') || assets.toLowerCase().includes('vehicle'))),
+          },
+          update: {
+            preferredWork: jobType,
+            vehicleAccess: Boolean(assets && (assets.toLowerCase().includes('bike') || assets.toLowerCase().includes('vehicle'))),
+          },
+        });
+      } catch (userErr: any) {
+        logger.warn(`[FormGigLead] User account sync: ${userErr?.message}`);
+      }
+    }
     
     // Fire-and-forget to Google Sheets — never block the response
     appendToSheet('Onboarding_Submissions', {
@@ -128,15 +205,88 @@ export const FormGigLeadService = {
       jobType,
       city,
       area: area || '',
-      experience: toStr(data.experience) || '',
-      assets: toStr(data.assets) || '',
-      documents: toStr(data.documents) || '',
-      skills: toStr(data.skills) || '',
-      sourcePlatform: toStr(data.sourcePlatform) || 'WORKFORCE_WEB',
+      experience: experience || '',
+      assets: assets || '',
+      documents: certification || '',
+      skills: secondarySkills || '',
+      gender: gender || '',
+      education: education || '',
+      currentSalary: dailyRate || '',
+      whatsappOptIn: whatsappOptIn ? 'YES' : 'NO',
+      sourcePlatform,
       submittedAt: new Date().toISOString(),
     }).catch(() => {}); // explicitly swallow — fire and forget
 
     return lead;
+  },
+
+  getMyLead: async (userId?: string, userPhone?: string) => {
+    const cleanPhone = (userPhone || '').replace(/\D/g, '').slice(-10);
+    let lead = null;
+    if (cleanPhone) {
+      lead = await prisma.formGigLead.findFirst({
+        where: {
+          phone: { contains: cleanPhone },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          ...(userId ? [{ id: userId }] : []),
+          ...(cleanPhone ? [{ phone: cleanPhone }] : []),
+        ],
+      },
+      include: {
+        worker: true,
+      },
+    });
+
+    let parsedNotes: any = {};
+    if (lead?.notes) {
+      try {
+        if (lead.notes.startsWith('{')) {
+          parsedNotes = JSON.parse(lead.notes);
+        } else {
+          parsedNotes = { rawNotes: lead.notes };
+        }
+      } catch {
+        parsedNotes = { rawNotes: lead.notes };
+      }
+    }
+
+    const firstName = lead?.firstName || user?.name?.split(' ')[0] || '';
+    const lastName = lead?.lastName || (user?.name ? user.name.split(' ').slice(1).join(' ') : '') || '';
+    const fullName = `${firstName} ${lastName}`.trim() || user?.name || 'Worker Partner';
+
+    return {
+      id: lead?.id || user?.id,
+      userId: user?.id,
+      name: fullName,
+      firstName,
+      lastName,
+      phone: cleanPhone || lead?.phone || user?.phone || '',
+      email: lead?.email || user?.email || '',
+      jobType: lead?.jobType || user?.worker?.preferredWork || 'General Worker',
+      experience: lead?.experience || parsedNotes.experience || '1+ Year',
+      skills: lead?.secondarySkills || parsedNotes.skills || '',
+      assets: parsedNotes.assets || lead?.vehicleType || '',
+      documents: parsedNotes.documents || lead?.certification || '',
+      gender: parsedNotes.gender || 'Male',
+      education: parsedNotes.education || 'Secondary / 10th Pass',
+      currentSalary: lead?.dailyRate || parsedNotes.currentSalary || '',
+      city: lead?.city || 'Local City Hub',
+      locality: lead?.area || lead?.givenAddress || '',
+      status: lead?.status || 'ACTIVE',
+      profilePhotoUrl: lead?.profilePhotoUrl || user?.profileImageUrl || '',
+      aadharNumber: lead?.aadharNumber || '',
+      panNumber: lead?.panNumber || '',
+      isDocVerified: user?.worker?.isDocVerified || false,
+      whatsappOptIn: parsedNotes.whatsappOptIn ?? user?.whatsappOptIn ?? true,
+      createdAt: lead?.createdAt || user?.createdAt,
+    };
   },
 
   getAllLeads: async () => {

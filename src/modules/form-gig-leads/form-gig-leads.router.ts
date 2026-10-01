@@ -1,14 +1,15 @@
 import { Router } from 'express';
-import { authenticate, requireRole } from '@shared/middleware/auth.middleware';
+import { authenticate, requireRole, optionalAuth } from '@shared/middleware/auth.middleware';
 import { UserRole } from '@prisma/client';
 import { FormGigLeadController } from './form-gig-leads.controller';
 import { upload } from '../upload/upload.controller';
 
 export const formGigLeadRouter = Router();
 
-// POST /api/v1/form-gig-leads - Public route for the driver form
+// POST /api/v1/form-gig-leads - Public route for the worker/driver form with optional auth
 formGigLeadRouter.post(
   '/',
+  optionalAuth,
   upload.fields([
     { name: 'profilePhoto', maxCount: 1 },
     { name: 'aadharFront', maxCount: 1 },
@@ -43,6 +44,9 @@ formGigLeadRouter.post(
 
 // GET /api/v1/form-gig-leads/direct-preview?service=&city= - Public preview for Direct Contact
 formGigLeadRouter.get('/direct-preview', FormGigLeadController.getDirectWorkersPreview);
+
+// GET /api/v1/form-gig-leads/my-lead - Current authenticated worker's onboarding lead data
+formGigLeadRouter.get('/my-lead', authenticate, FormGigLeadController.getMyLead);
 
 // Admin routes
 formGigLeadRouter.use(authenticate, requireRole(UserRole.ADMIN));

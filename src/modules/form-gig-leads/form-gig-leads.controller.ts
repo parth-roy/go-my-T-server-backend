@@ -7,12 +7,26 @@ export const FormGigLeadController = {
     try {
       // Body has text fields, files are in req.files
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
-      const lead = await FormGigLeadService.createLead(req.body, files || {});
+      const lead = await FormGigLeadService.createLead(req.body, files || {}, (req as any).user);
       
       return res.status(201).json({
         success: true,
         data: lead,
         message: 'Gig Lead created successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getMyLead: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userPhone = (req as any).user?.phone;
+      const userId = (req as any).user?.id;
+      const lead = await FormGigLeadService.getMyLead(userId, userPhone);
+      return res.status(200).json({
+        success: true,
+        data: lead,
       });
     } catch (error) {
       next(error);

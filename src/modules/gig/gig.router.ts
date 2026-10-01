@@ -13,6 +13,9 @@ export const gigRouter = Router();
 /** GET /gig/catalog — skill categories, zone rates, urgency options (no auth needed) */
 gigRouter.get('/catalog', ctrl.getGigCatalog);
 
+/** GET /gig/public/jobs — public active gig openings (with optional city & limit query) */
+gigRouter.get('/public/jobs', ctrl.getPublicJobs);
+
 /** POST /gig/estimate — fare preview before booking (no auth needed) */
 gigRouter.post(
   '/estimate',
@@ -89,6 +92,20 @@ gigRouter.post(
   authenticate,
   requireRole(UserRole.WORKER),
   ctrl.acceptGig,
+);
+
+/** GET /gig/worker/applications — worker's applications list */
+gigRouter.get(
+  '/worker/applications',
+  authenticate,
+  ctrl.getWorkerApplications,
+);
+
+/** POST /gig/worker/apply — worker 1-click apply */
+gigRouter.post(
+  '/worker/apply',
+  authenticate,
+  ctrl.applyWorkerJob,
 );
 
 // ── Admin ─────────────────────────────────────────────────────────────────────

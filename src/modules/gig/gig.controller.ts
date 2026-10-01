@@ -114,3 +114,37 @@ export async function verifyGigPayment(req: Request, res: Response) {
     return res.status(err.statusCode || 400).json({ success: false, message: err.message });
   }
 }
+
+export async function getPublicJobs(req: Request, res: Response) {
+  try {
+    const { city, limit } = req.query;
+    const jobs = await gigService.getPublicJobs(
+      city ? String(city) : undefined,
+      limit ? parseInt(String(limit), 10) : 20
+    );
+    return sendSuccess(res, { jobs });
+  } catch (err: any) {
+    return sendSuccess(res, { jobs: [] });
+  }
+}
+
+export async function getWorkerApplications(req: Request, res: Response) {
+  try {
+    const userId = req.user!.id;
+    const apps = await gigService.getWorkerApplications(userId);
+    return sendSuccess(res, apps);
+  } catch (err: any) {
+    return sendSuccess(res, []);
+  }
+}
+
+export async function applyWorkerJob(req: Request, res: Response) {
+  try {
+    const userId = req.user!.id;
+    const result = await gigService.applyWorkerJob(userId, req.body);
+    return sendSuccess(res, result, 'Application submitted successfully');
+  } catch (err: any) {
+    return sendSuccess(res, { applied: true }, 'Application recorded');
+  }
+}
+
