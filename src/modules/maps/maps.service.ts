@@ -373,7 +373,6 @@ export const mapsService = {
         {
           params: {
             input: searchInput,
-            types: 'geocode',
             components: 'country:in',
             key: apiKey,
           },
