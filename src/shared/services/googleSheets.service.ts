@@ -1,54 +1,24 @@
-import { google } from 'googleapis';
-import { env } from '@config/env';
+import axios from 'axios';
+import { logger } from '@shared/logger';
 
-const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
+const SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
 
-class GoogleSheetsService {
-  private sheets: any;
-  private spreadsheetId: string;
-  private isConfigured: boolean = false;
+type SheetName = 'Post_Jobs' | 'Get_Job_Applicants' | 'Onboarding_Submissions';
 
-  constructor() {
-    this.spreadsheetId = env.GOOGLE_SPREADSHEET_ID || '';
-    
-    if (this.spreadsheetId && env.GOOGLE_CLIENT_EMAIL && env.GOOGLE_PRIVATE_KEY) {
-      try {
-        const auth = new google.auth.GoogleAuth({
-          credentials: {
-            client_email: env.GOOGLE_CLIENT_EMAIL,
-            private_key: env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-          },
-          scopes: SCOPES,
-        });
-
-        this.sheets = google.sheets({ version: 'v4', auth });
-        this.isConfigured = true;
-        console.log('✅ Google Sheets API configured successfully.');
-      } catch (error) {
-        console.error('❌ Failed to configure Google Sheets API:', error);
-      }
-    } else {
-      console.warn('⚠️ Google Sheets API credentials missing. Skipping sheet integration.');
-    }
+export async function appendToSheet(sheet: SheetName, rowData: Record<string, any>): Promise<void> {
+  if (!SHEETS_WEBHOOK_URL) {
+    logger.warn('[GoogleSheets] GOOGLE_SHEETS_WEBHOOK_URL not set, skipping sheet append');
+    return;
   }
-
-  public async appendLead(leadData: any[]) {
-    if (!this.isConfigured) return;
-
-    try {
-      await this.sheets.spreadsheets.values.append({
-        spreadsheetId: this.spreadsheetId,
-        range: 'Sheet1!A1',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [leadData],
-        },
-      });
-      console.log('✅ Successfully appended lead to Google Sheets');
-    } catch (error) {
-      console.error('❌ Error appending to Google Sheets:', error);
-    }
+  try {
+    await axios.post(SHEETS_WEBHOOK_URL, {
+      sheet,
+      timestamp: new Date().toISOString(),
+      ...rowData,
+    }, { timeout: 8000 });
+    logger.info(`[GoogleSheets] Appended to sheet: ${sheet}`);
+  } catch (err: any) {
+    // Non-blocking — never let sheet failures break the main flow
+    logger.error(`[GoogleSheets] Failed to append to ${sheet}: ${err.message}`);
   }
 }
-
-export const googleSheetsService = new GoogleSheetsService();

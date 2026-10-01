@@ -11,6 +11,7 @@ import { getSocketInstance } from '@shared/socket/socket.instance';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
+import { appendToSheet } from '@shared/services/googleSheets.service';
 import { calculateGigFare, classifyZone } from './gig.pricing';
 import type { GigFareRequest, GigSkill, GigUrgency } from './gig.pricing.types';
 import { razorpay } from '../payment/razorpay.client';
@@ -241,6 +242,19 @@ export async function createGig(customerId: string, data: any) {
       },
     });
   }
+
+  appendToSheet('Post_Jobs', {
+    jobId: gig.id,
+    jobNumber: gig.jobNumber,
+    gigType: gig.gigType,
+    city: gig.locationAddress,
+    workersNeeded: gig.workersNeeded,
+    durationHours: gig.durationHours,
+    urgency: gig.urgency,
+    totalFare: gig.totalFare,
+    source: gig.source,
+    postedAt: new Date().toISOString(),
+  }).catch(() => {});
 
   // Notify nearby workforce via Socket.IO
   const io = getSocketInstance();

@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { s3Service, UploadFolder } from '../upload/upload.service';
 import { logger } from '@shared/logger';
+import { appendToSheet } from '@shared/services/googleSheets.service';
 import { razorpay } from '@modules/payment/razorpay.client';
 import { cashfreeClient } from '@modules/payment/cashfree.client';
 import crypto from 'crypto';
@@ -118,6 +119,23 @@ export const FormGigLeadService = {
       }
     });
     
+    // Fire-and-forget to Google Sheets — never block the response
+    appendToSheet('Onboarding_Submissions', {
+      id: lead.id,
+      name: `${firstName} ${lastName}`.trim(),
+      phone,
+      email: email || '',
+      jobType,
+      city,
+      area: area || '',
+      experience: toStr(data.experience) || '',
+      assets: toStr(data.assets) || '',
+      documents: toStr(data.documents) || '',
+      skills: toStr(data.skills) || '',
+      sourcePlatform: toStr(data.sourcePlatform) || 'WORKFORCE_WEB',
+      submittedAt: new Date().toISOString(),
+    }).catch(() => {}); // explicitly swallow — fire and forget
+
     return lead;
   },
 
@@ -770,6 +788,18 @@ export const FormGigLeadService = {
           amount: amountPaid,
         },
       });
+      
+      appendToSheet('Onboarding_Submissions', {
+        id: lead.id,
+        name: fullName,
+        phone: cleanPhone,
+        jobType,
+        paymentStatus: 'SUCCESS',
+        paymentMethod: method,
+        amountPaid,
+        paymentRef,
+        submittedAt: new Date().toISOString(),
+      }).catch(() => {});
     } catch (txErr: any) {
       logger.warn(`[WorkerOnboarding] Failed to record PaymentTransaction: ${txErr?.message}`);
     }
