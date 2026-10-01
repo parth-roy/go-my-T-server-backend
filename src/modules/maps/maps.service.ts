@@ -341,5 +341,63 @@ export const mapsService = {
       );
     }
   },
+
+  /**
+   * Search Indian localities/areas for a specific city using Google Places Autocomplete API.
+   * Results are cached in Redis for 24 hours to minimize API billing costs.
+   */
+  searchLocalities: async (city: string, query?: string): Promise<any[]> => {
+    const q = (query || '').trim();
+    const c = (city || '').trim();
+    if (!q || q.length < 2) {
+      return [];
+    }
+
+    const cacheKey = `google:localities:${c.toLowerCase()}:${q.toLowerCase()}`;
+    const cached = await cacheGet<any[]>(cacheKey);
+    if (cached) {
+      logger.debug(`[Maps] Localities search cache HIT for "${c} - ${q}"`);
+      return cached;
+    }
+
+    const apiKey = GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      logger.warn('[Maps] GOOGLE_MAPS_API_KEY not set');
+      return [];
+    }
+
+    try {
+      const searchInput = c ? `${q}, ${c}` : q;
+      const response = await axios.get(
+        'https://maps.googleapis.com/maps/api/place/autocomplete/json',
+        {
+          params: {
+            input: searchInput,
+            types: 'geocode',
+            components: 'country:in',
+            key: apiKey,
+          },
+          timeout: 4500,
+        }
+      );
+
+      if (response.data.status === 'OK' && Array.isArray(response.data.predictions)) {
+        const results = response.data.predictions.map((p: any) => ({
+          placeId: p.place_id,
+          description: p.description,
+          mainText: p.structured_formatting?.main_text || p.description.split(',')[0].trim(),
+          secondaryText: p.structured_formatting?.secondary_text || '',
+        }));
+
+        await cacheSet(cacheKey, results, AUTOCOMPLETE_TTL);
+        return results;
+      }
+
+      return [];
+    } catch (error: any) {
+      logger.error('Google Places Localities Search Error:', error.response?.data || error.message);
+      return [];
+    }
+  },
 };
 

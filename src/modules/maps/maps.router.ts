@@ -5,6 +5,7 @@ export const mapsRouter = Router();
 
 // Place search
 mapsRouter.get('/cities', mapsController.searchCities);
+mapsRouter.get('/localities', mapsController.searchLocalities);
 mapsRouter.get('/autocomplete', mapsController.autocomplete);
 mapsRouter.get('/place-details', mapsController.placeDetails);
 

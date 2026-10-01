@@ -11,6 +11,15 @@ export const mapsController = {
     } catch (error) { next(error); }
   },
 
+  searchLocalities: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const city = (req.query.city || '') as string;
+      const query = (req.query.query || req.query.q || req.query.input || '') as string;
+      const localities = await mapsService.searchLocalities(city, query);
+      res.status(200).json({ success: true, data: localities });
+    } catch (error) { next(error); }
+  },
+
   autocomplete: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const input = req.query.input as string | undefined;
