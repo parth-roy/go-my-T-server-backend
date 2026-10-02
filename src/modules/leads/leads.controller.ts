@@ -299,3 +299,20 @@ export const logWhatsAppMessage = async (req: Request, res: Response, next: Next
     next(error);
   }
 };
+
+export const logGMTWhatsAppMessage = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { intent, name, phone, email, ...rest } = req.body;
+    res.status(200).json({ success: true, message: 'Logged' });
+    // Fire-and-forget to GoMyTruck WhatsApp_Enquiries sheet
+    appendToGMTSheet('WhatsApp_Enquiries', {
+      intent: intent || '',
+      name: name || '',
+      phone: phone || '',
+      email: email || '',
+      ...rest,
+    }).catch(() => {});
+  } catch (err) {
+    next(err);
+  }
+};

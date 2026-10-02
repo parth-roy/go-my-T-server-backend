@@ -43,7 +43,8 @@ type GmtSheetName =
   | 'Truck_Bookings'
   | 'Driver_Onboarding'
   | 'Agent_KYC_Submissions'
-  | 'Agent_Load_Quotes';
+  | 'Agent_Load_Quotes'
+  | 'WhatsApp_Enquiries';
 
 export async function appendToGMTSheet(sheet: GmtSheetName, rowData: Record<string, any>): Promise<void> {
   const GMT_WEBHOOK_URL = process.env.GMT_SHEETS_WEBHOOK_URL;

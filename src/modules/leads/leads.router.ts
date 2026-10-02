@@ -26,6 +26,7 @@ publicLeadsRouter.post(
 
 // Log WhatsApp modal submission → Google Sheets (no auth, no files)
 publicLeadsRouter.post('/whatsapp-log', ctrl.logWhatsAppMessage);
+publicLeadsRouter.post('/gmt-whatsapp-log', ctrl.logGMTWhatsAppMessage);
 
 // ── Admin Routes (Protected) ──
 adminLeadsRouter.use(authenticate, requireRole(UserRole.ADMIN));
