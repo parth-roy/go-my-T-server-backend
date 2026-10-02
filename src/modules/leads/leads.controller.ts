@@ -86,11 +86,15 @@ export const createLead = async (req: Request, res: Response, next: NextFunction
     const roleStr = (lead.role || '').toLowerCase();
     if (roleStr.includes('estimate')) {
       appendToGMTSheet('Estimate_Requests', {
-        id:       lead.id,
-        name:     lead.name,
-        phone:    lead.phone,
-        city:     lead.city,
-        notes:    req.body.notes || '',
+        id:          lead.id,
+        name:        lead.name,
+        phone:       lead.phone,
+        city:        lead.city,                      // pickup city
+        dropCity:    req.body.dropCity    || '',
+        serviceType: req.body.serviceType || '',
+        vehicleType: req.body.vehicleType || lead.vehicleType || '',
+        weight:      req.body.weight      || '',
+        notes:       req.body.notes       || '',
       }).catch(() => {});
     } else if (roleStr.includes('enterprise')) {
       appendToGMTSheet('Enterprise_Enquiries', {

@@ -169,21 +169,20 @@ export class FormDriverLeadService {
 
     // Fire and forget to GoMyTruck Driver_Onboarding sheet (Apps Script webhook)
     import('@shared/services/googleSheets.service').then(({ appendToGMTSheet }) => {
-      const l = lead as any;
       appendToGMTSheet('Driver_Onboarding', {
-        id:           lead.id,
-        name:         lead.name          || '',
-        phone:        lead.phone         || '',
-        email:        lead.email         || '',
-        city:         lead.city          || '',
-        area:         l.area             || '',
-        state:        lead.state         || '',
-        vehicleType:  lead.vehicleType   || '',
-        vehicleNumber:lead.vehicleNumber || '',
-        dlNumber:     lead.dlNumber      || '',
-        experience:   l.experience       || '',
-        status:       'PENDING',
-        submittedAt:  new Date().toISOString(),
+        id:            lead.id,
+        name:          lead.name           || '',
+        phone:         lead.phone          || '',
+        email:         lead.email          || '',
+        city:          lead.city           || '',
+        area:          toStr(data.area)    || '',   // read from raw request data
+        state:         lead.state          || '',
+        vehicleType:   lead.vehicleType    || '',
+        vehicleNumber: lead.vehicleNumber  || '',
+        dlNumber:      lead.dlNumber       || '',
+        experience:    toStr(data.experience) || '', // read from raw request data
+        status:        'PENDING',
+        submittedAt:   new Date().toISOString(),
       });
     }).catch(() => {});
 
