@@ -756,6 +756,8 @@ export async function applyWorkerJob(userId: string, data: { gigId?: string; rol
       }
     }
 
+    let result: any = { applied: true, roleName: data.roleName || 'Job Role' };
+
     if (data.gigId && worker) {
       const existing = await prisma.gigAssignment.findUnique({
         where: {
@@ -764,7 +766,7 @@ export async function applyWorkerJob(userId: string, data: { gigId?: string; rol
       });
       if (!existing) {
         const gig = await prisma.gigJob.findUnique({ where: { id: data.gigId } });
-        return await prisma.gigAssignment.create({
+        result = await prisma.gigAssignment.create({
           data: {
             gigId: data.gigId,
             workerId: worker.id,
@@ -772,11 +774,38 @@ export async function applyWorkerJob(userId: string, data: { gigId?: string; rol
             payoutAmount: gig?.perWorkerRate || 800,
           },
         });
+      } else {
+        result = existing;
       }
-      return existing;
     }
 
-    return { applied: true, roleName: data.roleName || 'Job Role' };
+    // ── Fire-and-forget: log application to Google Sheets ──
+    prisma.user.findUnique({ where: { id: userId }, select: { name: true, phone: true } })
+      .then((user) => {
+        appendToSheet('Get_Job_Applicants', {
+          id:           userId,
+          date:         new Date().toISOString().split('T')[0],
+          name:         user?.name  || '',
+          phone:        user?.phone || '',
+          email:        '',
+          altPhone:     '',
+          city:         data.city  || '',
+          state:        '',
+          transportHub: '',
+          vehicleType:  '',
+          vehicleNumber:'',
+          dlNumber:     '',
+          aadharNumber: '',
+          jobRole:      data.roleName || data.roleSlug || '',
+          gigId:        data.gigId   || '',
+          status:       'APPLIED',
+          lastContact:  '',
+          notes:        `Applied via MetroMitra worker dashboard`,
+        });
+      })
+      .catch(() => {}); // never block
+
+    return result;
   } catch (error) {
     logger.warn('[GigService] Error applying for gig:', error);
     return { applied: true };
