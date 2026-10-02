@@ -1,6 +1,7 @@
 import { prisma } from '@shared/db/prisma';
 import { generateScratchCard } from '@modules/rewards/rewards.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
+import { appendToGMTSheet } from '@shared/services/googleSheets.service';
 import { NotificationType } from '@prisma/client';
 import {
     BidAwardStatus,

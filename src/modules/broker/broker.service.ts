@@ -1,4 +1,5 @@
 import { prisma } from '@shared/db/prisma';
+import { appendToGMTSheet } from '@shared/services/googleSheets.service';
 import { AppError } from '@shared/errors/AppError';
 import { UserRole, BrokerBookingStatus, BrokerQuoteStatus, BountySettlementStatus } from '@prisma/client';
 import { assertBrokerTransition } from '../booking/booking.transition';

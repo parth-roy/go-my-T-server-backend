@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
-import { appendToSheet } from '@shared/services/googleSheets.service';
+import { appendToSheet, appendToGMTSheet } from '@shared/services/googleSheets.service';
 import { s3Service, UploadFolder } from '../upload/upload.service';
 
 export const createLead = async (req: Request, res: Response, next: NextFunction) => {
@@ -81,6 +81,39 @@ export const createLead = async (req: Request, res: Response, next: NextFunction
       rcBook: lead.rcBook || '',
       insurance: lead.insurance || ''
     }).catch((err: any) => console.error('Sheet append error:', err));
+
+    // ── GoMyTruck sheet routing by role ──────────────────────────────────────
+    const roleStr = (lead.role || '').toLowerCase();
+    if (roleStr.includes('estimate')) {
+      appendToGMTSheet('Estimate_Requests', {
+        id:       lead.id,
+        name:     lead.name,
+        phone:    lead.phone,
+        city:     lead.city,
+        notes:    req.body.notes || '',
+      }).catch(() => {});
+    } else if (roleStr.includes('enterprise')) {
+      appendToGMTSheet('Enterprise_Enquiries', {
+        id:          lead.id,
+        name:        lead.name,
+        phone:       lead.phone,
+        email:       lead.email || '',
+        companyName: lead.companyName || '',
+        city:        lead.city,
+        notes:       req.body.notes || '',
+      }).catch(() => {});
+    } else {
+      // Fleet Owner / Driver Partner / any other GoMyTruck lead
+      appendToGMTSheet('Fleet_Partner_Leads', {
+        id:          lead.id,
+        name:        lead.name,
+        phone:       lead.phone,
+        city:        lead.city,
+        role:        lead.role || '',
+        vehicleType: lead.vehicleType || '',
+        state:       lead.state || '',
+      }).catch(() => {});
+    }
 
     res.status(201).json({
       success: true,

@@ -164,8 +164,28 @@ export class FormDriverLeadService {
       }
     });
 
-    // Fire and forget Google Sheets sync
+    // Fire and forget Google Sheets sync (legacy Sheets API)
     this.syncToGoogleSheets(lead).catch(e => logger.error("Google Sheets Sync failed", e));
+
+    // Fire and forget to GoMyTruck Driver_Onboarding sheet (Apps Script webhook)
+    import('@shared/services/googleSheets.service').then(({ appendToGMTSheet }) => {
+      const l = lead as any;
+      appendToGMTSheet('Driver_Onboarding', {
+        id:           lead.id,
+        name:         lead.name          || '',
+        phone:        lead.phone         || '',
+        email:        lead.email         || '',
+        city:         lead.city          || '',
+        area:         l.area             || '',
+        state:        lead.state         || '',
+        vehicleType:  lead.vehicleType   || '',
+        vehicleNumber:lead.vehicleNumber || '',
+        dlNumber:     lead.dlNumber      || '',
+        experience:   l.experience       || '',
+        status:       'PENDING',
+        submittedAt:  new Date().toISOString(),
+      });
+    }).catch(() => {});
 
     return lead;
   }
