@@ -5,7 +5,7 @@ import { logger } from '@shared/logger';
 // TypeScript modules are evaluated at import time — before dotenv/config runs in server.ts.
 // Always read process.env inside the function body so it picks up the loaded value.
 
-type SheetName = 'Post_Jobs' | 'Get_Job_Applicants' | 'Onboarding_Submissions';
+type SheetName = 'Post_Jobs' | 'Get_Job_Applicants' | 'Onboarding_Submissions' | 'WhatsApp_Messages';
 
 export async function appendToSheet(sheet: SheetName, rowData: Record<string, any>): Promise<void> {
   // Read fresh on every call — guaranteed to see dotenv-loaded value

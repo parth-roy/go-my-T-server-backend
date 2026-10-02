@@ -229,3 +229,36 @@ export const updateLeadStatus = async (req: Request, res: Response, next: NextFu
     next(error);
   }
 };
+
+// ── Log WhatsApp Modal submission to Google Sheets ───────────────────────────
+// Called from the frontend browser when user clicks "Open WhatsApp Chat".
+// Runs server-side to avoid CORS issues with direct browser→Apps Script calls.
+export const logWhatsAppMessage = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const {
+      name, phone, city, intent,
+      service, location, timing, count,
+      message, sourceUrl
+    } = req.body;
+
+    // Respond immediately — don't make browser wait for the sheet append
+    res.status(200).json({ success: true, message: 'Logged' });
+
+    // Fire-and-forget after response sent
+    appendToSheet('WhatsApp_Messages', {
+      name:      name      || '',
+      phone:     phone     || '',
+      city:      city      || '',
+      intent:    intent    || '',
+      service:   service   || '',
+      location:  location  || '',
+      timing:    timing    || '',
+      count:     count     || '',
+      message:   message   || '',
+      sourceUrl: sourceUrl || '',
+    }).catch(() => {});
+
+  } catch (error) {
+    next(error);
+  }
+};
