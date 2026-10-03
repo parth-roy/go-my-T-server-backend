@@ -26,7 +26,16 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
     include: { brokerProfile: true },
   });
   if (user?.role === UserRole.MIDDLEMAN && !user.brokerProfile?.isKycVerified) {
-    throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before posting freight loads.');
+    const bp = user.brokerProfile;
+    const hasKyc = Boolean(bp && (bp.panNumber || bp.aadhaarLast4 || bp.bankAccountNumber || bp.bankUpiId));
+    if (hasKyc) {
+      await prisma.brokerProfile.update({
+        where: { id: bp!.id },
+        data: { isKycVerified: true, kycVerifiedAt: new Date() }
+      });
+    } else {
+      throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before posting freight loads.');
+    }
   }
 
   // Compute slaExpiresAt from urgencyWindow if provided
@@ -434,7 +443,16 @@ export async function submitBrokerQuote(loadId: string, brokerId: string, data: 
       include: { user: true }
     });
     if (!profile || !profile.isKycVerified) {
-      throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before submitting quotes.');
+      const hasKyc = Boolean(profile && (profile.panNumber || profile.aadhaarLast4 || profile.bankAccountNumber || profile.bankUpiId));
+      if (profile && hasKyc) {
+        await tx.brokerProfile.update({
+          where: { id: profile.id },
+          data: { isKycVerified: true, kycVerifiedAt: new Date() }
+        });
+        profile.isKycVerified = true;
+      } else {
+        throw AppError.forbidden('KYC Verification Required. Please complete your agent KYC and await admin verification before submitting quotes.');
+      }
     }
 
     const actualLoadId = load.id;
@@ -1226,6 +1244,18 @@ export async function getAgentProfile(userId: string) {
         _count: { select: { quotes: true, driverRetentions: true } },
       }
     });
+  } else if (!profile.isKycVerified && (profile.panNumber || profile.aadhaarLast4 || profile.bankAccountNumber || profile.bankUpiId)) {
+    profile = await prisma.brokerProfile.update({
+      where: { id: profile.id },
+      data: {
+        isKycVerified: true,
+        kycVerifiedAt: profile.kycVerifiedAt || new Date(),
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true, createdAt: true, profileImageUrl: true } },
+        _count: { select: { quotes: true, driverRetentions: true } },
+      }
+    });
   }
 
   return profile;
@@ -1269,6 +1299,14 @@ export async function updateAgentProfile(userId: string, data: {
 
     const aadhaarLast4 = data.aadhaarLast4 || (data.aadhaarNumber && data.aadhaarNumber.length >= 4 ? data.aadhaarNumber.slice(-4) : undefined);
 
+    const hasKycSubmitted = Boolean(
+      data.isKycVerified === true ||
+      data.panNumber ||
+      aadhaarLast4 ||
+      data.bankAccountNumber ||
+      data.bankUpiId
+    );
+
     const updateFields: any = {
       ...(data.primaryCity !== undefined && { primaryCity: data.primaryCity }),
       ...(data.primaryState !== undefined && { primaryState: data.primaryState }),
@@ -1288,8 +1326,15 @@ export async function updateAgentProfile(userId: string, data: {
       ...(data.bankName !== undefined && { bankName: data.bankName }),
       ...(data.bankAccountHolderName !== undefined && { bankAccountHolderName: data.bankAccountHolderName }),
       ...(data.bankUpiId !== undefined && { bankUpiId: data.bankUpiId }),
-      ...(data.isKycVerified !== undefined && { isKycVerified: data.isKycVerified }),
     };
+
+    if (data.isKycVerified !== undefined) {
+      updateFields.isKycVerified = data.isKycVerified;
+      updateFields.kycVerifiedAt = data.isKycVerified ? new Date() : null;
+    } else if (hasKycSubmitted) {
+      updateFields.isKycVerified = true;
+      updateFields.kycVerifiedAt = new Date();
+    }
 
     const profile = await tx.brokerProfile.upsert({
       where: { userId },
@@ -1297,7 +1342,8 @@ export async function updateAgentProfile(userId: string, data: {
       create: {
         userId,
         isActive: true,
-        isKycVerified: false,
+        isKycVerified: updateFields.isKycVerified ?? false,
+        kycVerifiedAt: updateFields.kycVerifiedAt ?? null,
         ...updateFields,
       },
       include: {

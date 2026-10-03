@@ -122,6 +122,7 @@ export const updateAgentProfileSchema = z.object({
   bankName: z.string().optional(),
   bankAccountHolderName: z.string().optional(),
   bankUpiId: z.string().optional(),
+  isKycVerified: z.boolean().optional(),
 });
 
 export const updateAgentKycSchema = z.object({
