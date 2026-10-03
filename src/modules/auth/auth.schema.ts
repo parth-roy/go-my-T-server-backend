@@ -38,12 +38,12 @@ export const logoutSchema = z.object({
 export const socialLoginSchema = z.object({
   idToken: z.string().min(10, 'Firebase ID token is required'),
   provider: z.enum(['GOOGLE', 'FACEBOOK', 'LINKEDIN']).default('GOOGLE'),
-  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']).optional().default('WORKER'),
+  role: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER', 'MIDDLEMAN', 'B2B_OWNER']).optional().default('WORKER'),
   fcmToken: z.string().optional(),
 });
 
 export const switchRoleSchema = z.object({
-  targetRole: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER']),
+  targetRole: z.enum(['CUSTOMER', 'DRIVER', 'ADMIN', 'FLEET_OWNER', 'WORKER', 'MIDDLEMAN', 'B2B_OWNER']),
 });
 
 export type SendOtpInput = z.infer<typeof sendOtpSchema>;

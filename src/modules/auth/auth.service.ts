@@ -760,6 +760,18 @@ export async function switchRole(userId: string, targetRole: UserRole) {
     });
   }
 
+  // If switching to MIDDLEMAN (Agent), ensure baseline broker profile exists
+  if (targetRole === 'MIDDLEMAN') {
+    await prisma.brokerProfile.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        isActive: true,
+      },
+    });
+  }
+
   // Update user's active role in DB
   const updatedUser = await prisma.user.update({
     where: { id: user.id },
@@ -784,6 +796,7 @@ export async function switchRole(userId: string, targetRole: UserRole) {
   if (user.worker || targetRole === 'WORKER') availableRoles.push('WORKER');
   if (user.driver) availableRoles.push('DRIVER');
   if (user.fleetOwner) availableRoles.push('FLEET_OWNER');
+  if (targetRole === 'MIDDLEMAN') availableRoles.push('MIDDLEMAN');
 
   return {
     ...tokens,
