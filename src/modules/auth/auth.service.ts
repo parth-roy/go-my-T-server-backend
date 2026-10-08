@@ -410,9 +410,9 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
   const tokenRole = user.role || effectiveRole || 'CUSTOMER';
   const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, tokenRole);
 
-  const isNewUser = !user.name;
+  const isNewUser = !existingUser;
 
-  // Fire welcome notification for brand new users
+  // Fire welcome notification only for genuinely new user registrations
   if (isNewUser) {
     eventBus.emit('user.registered', { userId: user.id, fcmToken: tokenToSave ?? undefined });
   }

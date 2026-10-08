@@ -36,6 +36,20 @@ export async function listNotifications(userId: string, page: number, limit: num
         where.type = type;
     }
 
+    // Clean up any legacy duplicate welcome notifications for this user
+    try {
+        const welcomeNotifs = await prisma.userNotification.findMany({
+            where: { userId, type: NotificationType.SYSTEM, title: { contains: 'Welcome' } },
+            orderBy: { createdAt: 'desc' },
+        });
+        if (welcomeNotifs.length > 1) {
+            const idsToDelete = welcomeNotifs.slice(1).map(n => n.id);
+            await prisma.userNotification.deleteMany({
+                where: { id: { in: idsToDelete } },
+            });
+        }
+    } catch (_) {}
+
     const [notifications, total, unreadCount] = await prisma.$transaction([
         prisma.userNotification.findMany({
             where,

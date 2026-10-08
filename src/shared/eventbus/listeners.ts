@@ -32,15 +32,48 @@ export function registerEventListeners(): void {
     // ─── 1. NEW USER WELCOME ─────────────────────────────────────────────────
     eventBus.on('user.registered', async ({ userId, fcmToken }: { userId: string; fcmToken?: string }) => {
         try {
-            const token = fcmToken ?? (await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } }))?.fcmToken;
+            // Idempotency: Prevent duplicate welcome notifications for the same user
+            const existingWelcome = await prisma.userNotification.findFirst({
+                where: {
+                    userId,
+                    type: NotificationType.SYSTEM,
+                    title: { contains: 'Welcome' },
+                },
+            });
+            if (existingWelcome) {
+                logger.info(`[EventBus] user.registered skipped — welcome notification already sent for ${userId}`);
+                return;
+            }
+
+            const user = await prisma.user.findUnique({
+                where: { id: userId },
+                select: { role: true, fcmToken: true },
+            });
+            const token = fcmToken ?? user?.fcmToken;
+            const role = user?.role;
+
+            let title = '🎉 Welcome to GoMyTruck!';
+            let body = 'Your goods just found their driver. Book your first trip & earn a scratch card! 🚚';
+
+            if (role === 'DRIVER') {
+                title = '🎉 Welcome to GoMyTruck Captain!';
+                body = 'Complete your profile, start accepting trips & earn daily incentives! 🚛';
+            } else if (role === 'FLEET_OWNER') {
+                title = '🎉 Welcome to GoMyTruck Fleet!';
+                body = 'Register your fleet, assign drivers & manage bookings effortlessly! 🚚';
+            } else if (role === 'WORKER') {
+                title = '🎉 Welcome to GoMyTruck Workforce!';
+                body = 'Accept daily loading/unloading tasks and get paid directly to your wallet! 🏗️';
+            }
+
             if (token) {
                 await notificationService.sendToDevice(token, {
-                    title: '🎉 Welcome to GoMyTruck!',
-                    body: 'Your goods just found their driver. Book your first trip & earn a scratch card! 🚚',
+                    title,
+                    body,
                     data: { type: 'WELCOME', screen: '/home' },
                 });
             }
-            await createNotification(userId, '🎉 Welcome to GoMyTruck!', 'Book your first trip & earn a scratch card!', NotificationType.SYSTEM);
+            await createNotification(userId, title, body, NotificationType.SYSTEM);
         } catch (err) {
             logger.error('[EventBus] user.registered handler failed:', err);
         }
