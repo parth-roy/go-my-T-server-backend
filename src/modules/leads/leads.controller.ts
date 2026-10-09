@@ -302,17 +302,337 @@ export const logWhatsAppMessage = async (req: Request, res: Response, next: Next
 
 export const logGMTWhatsAppMessage = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { intent, name, phone, email, ...rest } = req.body;
-    res.status(200).json({ success: true, message: 'Logged' });
-    // Fire-and-forget to GoMyTruck WhatsApp_Enquiries sheet
+    const {
+      intent,
+      name,
+      phone,
+      email,
+      pickupCity,
+      dropCity,
+      vehicleType,
+      goodsType,
+      city,
+      partnerCity,
+      enterpriseCity,
+      vehicleNumber,
+      companyName,
+      monthlyRequirement,
+      bookingNumber,
+      query,
+      sourceUrl,
+      notes,
+      ...rest
+    } = req.body;
+
+    // Generate unique human-readable WhatsApp inquiry number (e.g. WA-102938)
+    const inquiryNumber = (bookingNumber && typeof bookingNumber === 'string' && bookingNumber.startsWith('WA-'))
+      ? bookingNumber
+      : `WA-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const resolvedCity = city || partnerCity || enterpriseCity || pickupCity || null;
+
+    // 1. Save WhatsApp inquiry into PostgreSQL via Prisma
+    const inquiry = await prisma.whatsAppInquiry.create({
+      data: {
+        inquiryNumber,
+        intent: String(intent || 'WhatsApp Inquiry'),
+        name: String(name || 'Anonymous'),
+        phone: String(phone || ''),
+        email: email ? String(email) : null,
+        pickupCity: pickupCity ? String(pickupCity) : null,
+        dropCity: dropCity ? String(dropCity) : null,
+        vehicleType: vehicleType ? String(vehicleType) : null,
+        goodsType: goodsType ? String(goodsType) : null,
+        city: resolvedCity ? String(resolvedCity) : null,
+        vehicleNumber: vehicleNumber ? String(vehicleNumber) : null,
+        companyName: companyName ? String(companyName) : null,
+        monthlyRequirement: monthlyRequirement ? String(monthlyRequirement) : null,
+        bookingNumber: bookingNumber ? String(bookingNumber) : inquiryNumber,
+        query: query ? String(query) : null,
+        sourceUrl: sourceUrl ? String(sourceUrl) : null,
+        notes: notes ? String(notes) : null,
+        status: 'AVAILABLE',
+      },
+    });
+
+    // 2. Dual-save to Lead table for instant Admin visibility across legacy panels
+    try {
+      await prisma.lead.create({
+        data: {
+          name: String(name || 'Anonymous'),
+          phone: String(phone || ''),
+          email: email ? String(email) : null,
+          city: String(pickupCity || resolvedCity || 'All Cities'),
+          role: 'WHATSAPP_INQUIRY',
+          companyName: companyName ? String(companyName) : null,
+          vehicleType: vehicleType ? String(vehicleType) : null,
+          vehicleNumber: vehicleNumber ? String(vehicleNumber) : null,
+          notes: `[${inquiryNumber}] Intent: ${intent || 'N/A'}${pickupCity ? ` | Route: ${pickupCity} -> ${dropCity || ''}` : ''}${goodsType ? ` | Goods: ${goodsType}` : ''}${query ? ` | Query: ${query}` : ''}`,
+          status: 'PENDING',
+        },
+      });
+    } catch (dualErr) {
+      console.error('[leads.controller] Lead dual-save non-fatal warning:', dualErr);
+    }
+
+    // 3. Fire-and-forget to GoMyTruck WhatsApp_Enquiries sheet
     appendToGMTSheet('WhatsApp_Enquiries', {
+      inquiryNumber,
       intent: intent || '',
       name: name || '',
       phone: phone || '',
       email: email || '',
+      pickupCity: pickupCity || '',
+      dropCity: dropCity || '',
+      vehicleType: vehicleType || '',
+      goodsType: goodsType || '',
+      city: resolvedCity || '',
+      vehicleNumber: vehicleNumber || '',
+      companyName: companyName || '',
+      monthlyRequirement: monthlyRequirement || '',
+      bookingNumber: inquiryNumber,
+      query: query || '',
+      sourceUrl: sourceUrl || '',
+      notes: notes || '',
       ...rest,
-    }).catch(() => {});
+    }).catch((sheetErr) => {
+      console.error('[leads.controller] GMT Sheets append error:', sheetErr);
+    });
+
+    // Return structured response
+    res.status(200).json({
+      success: true,
+      message: 'Inquiry saved successfully to Database & Sheets',
+      data: {
+        id: inquiry.id,
+        inquiryNumber: inquiry.inquiryNumber,
+        status: inquiry.status,
+      },
+    });
   } catch (err) {
     next(err);
+  }
+};
+
+/**
+ * Driver-end API: Fetches available WhatsApp booking inquiries formatted for LoadItem in Driver App
+ */
+export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { status = 'AVAILABLE', city, vehicleType, limit = '50', page = '1' } = req.query;
+    const take = Math.min(Number(limit) || 50, 100);
+    const skip = ((Number(page) || 1) - 1) * take;
+
+    const where: any = {};
+    if (status && status !== 'ALL') {
+      where.status = String(status);
+    }
+
+    if (city && typeof city === 'string' && city.trim() !== '' && city.toLowerCase() !== 'all') {
+      where.OR = [
+        { pickupCity: { contains: city.trim(), mode: 'insensitive' } },
+        { dropCity: { contains: city.trim(), mode: 'insensitive' } },
+        { city: { contains: city.trim(), mode: 'insensitive' } },
+      ];
+    }
+
+    if (vehicleType && typeof vehicleType === 'string' && vehicleType.trim() !== '' && vehicleType.toLowerCase() !== 'all') {
+      where.vehicleType = { contains: vehicleType.trim(), mode: 'insensitive' };
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.whatsAppInquiry.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip,
+      }),
+      prisma.whatsAppInquiry.count({ where }),
+    ]);
+
+    // Format fields for direct 100% compatibility with Driver App LoadItem.fromMap
+    const formatted = items.map((item) => {
+      const pickup = item.pickupCity ? `${item.pickupCity} Hub` : (item.city || 'Hub Location');
+      const drop = item.dropCity ? `${item.dropCity} Hub` : 'Delivery Point';
+
+      return {
+        id: item.id,
+        bookingNumber: item.inquiryNumber, // Starts with WA- -> Driver LoadItem automatically flags as LoadSource.whatsApp
+        source: 'WHATSAPP',
+        bookingMode: 'WHATSAPP_LEAD',
+        pickupAddress: pickup,
+        pickup: pickup,
+        pickupCity: item.pickupCity || item.city || 'All Cities',
+        pickupArea: item.pickupCity || item.city || 'Local Area',
+        pickupDistrict: item.pickupCity || item.city || 'Local Area',
+        pickupState: 'N/A',
+        state: 'N/A',
+        dropAddress: drop,
+        dropoffAddress: drop,
+        drop: drop,
+        dropCity: item.dropCity || 'All Cities',
+        dropoffCity: item.dropCity || 'All Cities',
+        dropArea: item.dropCity || 'Local Area',
+        dropoffDistrict: item.dropCity || 'Local Area',
+        dropState: 'N/A',
+        dropoffState: 'N/A',
+        estimatedDistance: 18.5,
+        distanceKm: 18.5,
+        estimatedDistanceKm: 18.5,
+        vehicleType: item.vehicleType || 'Tata Ace',
+        truckType: item.vehicleType || 'Tata Ace',
+        goodsType: item.goodsType || 'General Cargo',
+        goodsWeightKg: 1000,
+        weightKg: 1000,
+        totalFare: 2500,
+        price: 2500,
+        customerBudget: 2500,
+        quotedAmount: 2500,
+        grandTotal: 2500,
+        status: item.status,
+        brokerStatus: item.status,
+        customerName: item.name,
+        customerPhone: item.phone,
+        receiverPhone: item.phone,
+        notes: item.query || item.notes || `WhatsApp Direct Lead: ${item.intent}`,
+        handlingInstructions: item.goodsType ? `Cargo: ${item.goodsType}` : undefined,
+        specialInstructions: item.query || item.notes || undefined,
+        pickupTime: 'Immediate Pickup',
+        isUrgent: true,
+        hasLoadingService: false,
+        laborRequired: false,
+        createdAt: item.createdAt.toISOString(),
+        intent: item.intent,
+        inquiryNumber: item.inquiryNumber,
+        assignedDriverId: item.assignedDriverId,
+        companyName: item.companyName,
+        monthlyRequirement: item.monthlyRequirement,
+        vehicleNumber: item.vehicleNumber,
+        sourceUrl: item.sourceUrl,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      count: formatted.length,
+      total,
+      page: Number(page) || 1,
+      limit: take,
+      data: formatted,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Driver-end API: Get single WhatsApp lead details
+ */
+export const getWhatsAppInquiryById = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = String(req.params.id);
+    const inquiry = await prisma.whatsAppInquiry.findUnique({
+      where: { id },
+    });
+
+    if (!inquiry) {
+      return next(AppError.notFound('WhatsApp lead not found'));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: inquiry,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Driver-end API: Accept / claim a WhatsApp lead
+ */
+export const acceptDriverWhatsAppLead = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = String(req.params.id);
+    const driverId = req.user?.id;
+
+    if (!driverId) {
+      return next(AppError.unauthorized('Driver authentication required'));
+    }
+
+    const existing = await prisma.whatsAppInquiry.findUnique({
+      where: { id },
+    });
+
+    if (!existing) {
+      return next(AppError.notFound('WhatsApp lead not found'));
+    }
+
+    if (existing.status !== 'AVAILABLE') {
+      return next(AppError.badRequest(`This lead is already ${existing.status.toLowerCase()}`));
+    }
+
+    const updated = await prisma.whatsAppInquiry.update({
+      where: { id },
+      data: {
+        status: 'ASSIGNED',
+        assignedDriverId: driverId,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Lead successfully accepted by driver',
+      data: {
+        id: updated.id,
+        inquiryNumber: updated.inquiryNumber,
+        status: updated.status,
+        assignedDriverId: updated.assignedDriverId,
+        customerName: updated.name,
+        customerPhone: updated.phone,
+        pickupCity: updated.pickupCity,
+        dropCity: updated.dropCity,
+        goodsType: updated.goodsType,
+        vehicleType: updated.vehicleType,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin API: List WhatsApp inquiries with filtering and pagination
+ */
+export const getAdminWhatsAppInquiries = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { status, limit = '50', page = '1' } = req.query;
+    const take = Math.min(Number(limit) || 50, 100);
+    const skip = ((Number(page) || 1) - 1) * take;
+
+    const where: any = {};
+    if (status && status !== 'ALL') {
+      where.status = String(status);
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.whatsAppInquiry.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take,
+        skip,
+      }),
+      prisma.whatsAppInquiry.count({ where }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      total,
+      page: Number(page) || 1,
+      limit: take,
+      data: items,
+    });
+  } catch (error) {
+    next(error);
   }
 };

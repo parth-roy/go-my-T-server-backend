@@ -35,14 +35,14 @@ brokerRouter.post(
 
 brokerRouter.get(
   '/loads',
-  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN),
+  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN, UserRole.DRIVER),
   validate(brokerLoadsQuerySchema, 'query'),
   BrokerController.listBrokerLoads
 );
 
 brokerRouter.get(
   '/loads/:loadId',
-  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN, UserRole.CUSTOMER),
+  requireRole(UserRole.MIDDLEMAN, UserRole.ADMIN, UserRole.CUSTOMER, UserRole.DRIVER),
   BrokerController.getBrokerLoad
 );
 

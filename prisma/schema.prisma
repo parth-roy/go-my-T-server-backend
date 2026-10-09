@@ -1956,6 +1956,36 @@ model Lead {
   @@map("leads")
 }
 
+model WhatsAppInquiry {
+  id                 String   @id @default(uuid())
+  inquiryNumber      String   @unique
+  intent             String
+  name               String
+  phone              String
+  email              String?
+  pickupCity         String?
+  dropCity           String?
+  vehicleType        String?
+  goodsType          String?
+  city               String?
+  vehicleNumber      String?
+  companyName        String?
+  monthlyRequirement String?
+  bookingNumber      String?
+  query              String?
+  sourceUrl          String?
+  status             String   @default("AVAILABLE")
+  assignedDriverId   String?
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status])
+  @@index([phone])
+  @@index([createdAt])
+  @@map("whatsapp_inquiries")
+}
+
 // ── Gig Workforce (Standalone Jobs) ──────────────────────────────────────────────
 
 enum GigJobStatus {

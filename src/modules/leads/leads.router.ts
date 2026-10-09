@@ -24,9 +24,20 @@ publicLeadsRouter.post(
   ctrl.createLead
 );
 
-// Log WhatsApp modal submission → Google Sheets (no auth, no files)
+// Log WhatsApp modal submission → Google Sheets & DB (no auth required for customer submissions)
 publicLeadsRouter.post('/whatsapp-log', ctrl.logWhatsAppMessage);
 publicLeadsRouter.post('/gmt-whatsapp-log', ctrl.logGMTWhatsAppMessage);
+
+// ── Driver-End WhatsApp Leads Marketplace API ──
+// Allows drivers to view available booking leads submitted via WhatsApp
+publicLeadsRouter.get('/driver/whatsapp-leads', optionalAuth, ctrl.getDriverWhatsAppLeads);
+publicLeadsRouter.get('/driver/whatsapp-leads/:id', optionalAuth, ctrl.getWhatsAppInquiryById);
+publicLeadsRouter.patch(
+  '/driver/whatsapp-leads/:id/accept',
+  authenticate,
+  requireRole(UserRole.DRIVER, UserRole.FLEET_OWNER, UserRole.ADMIN),
+  ctrl.acceptDriverWhatsAppLead
+);
 
 // ── Admin Routes (Protected) ──
 adminLeadsRouter.use(authenticate, requireRole(UserRole.ADMIN));
@@ -47,4 +58,9 @@ adminLeadsRouter.patch(
   '/:id/status',
   validate(UpdateLeadStatusSchema),
   ctrl.updateLeadStatus
+);
+
+adminLeadsRouter.get(
+  '/whatsapp-inquiries',
+  ctrl.getAdminWhatsAppInquiries
 );
