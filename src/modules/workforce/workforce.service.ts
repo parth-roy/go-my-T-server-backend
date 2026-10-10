@@ -443,27 +443,47 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   });
   if (!worker) throw AppError.notFound('Worker not found');
 
-  const { page, limit, laborType, sortBy, minPayout, maxDistance } = query;
+  const { page, limit, laborType, sortBy, minPayout, maxDistance, category, search, city, state } = query as any;
   if (worker.status !== WorkerStatus.AVAILABLE) {
     return { jobs: [], meta: { page, limit, hasMore: false, total: 0 } };
   }
   const skip = (page - 1) * limit;
 
-  // Build gigType filter based on preferredTypes if laborType isn't provided
-  let gigTypeFilter: any = {};
-  if (laborType) {
-    gigTypeFilter = { gigType: laborType };
-  } else if (worker.preferredTypes.length > 0) {
-    // Optional: could filter by worker.preferredTypes if gigType matches
+  // Build robust category & search filter
+  const rawTerm = (search || category || laborType || '').trim();
+  const isAll = !rawTerm || rawTerm.toUpperCase() === 'ALL' || rawTerm.toUpperCase() === 'ALL JOBS' || rawTerm.toUpperCase() === 'ALL_JOBS';
+
+  const gigAndConditions: any[] = [
+    { status: 'PENDING' },
+    { assignments: { none: { workerId: worker.id } } },
+  ];
+
+  if (!isAll) {
+    // Normalise term (e.g. "AC_REPAIR" -> "AC", "ELECTRICIAN" -> "ELECTRIC")
+    const cleanTerm = rawTerm.replace(/_/g, ' ');
+    gigAndConditions.push({
+      OR: [
+        { gigCategory: { contains: cleanTerm, mode: 'insensitive' } },
+        { gigCategory: { contains: rawTerm, mode: 'insensitive' } },
+        { gigType: { contains: cleanTerm, mode: 'insensitive' } },
+        { description: { contains: cleanTerm, mode: 'insensitive' } },
+      ],
+    });
+  }
+
+  if (city && typeof city === 'string' && city.trim().length > 0 && city.toLowerCase() !== 'all') {
+    gigAndConditions.push({
+      locationAddress: { contains: city.trim(), mode: 'insensitive' },
+    });
+  } else if (state && typeof state === 'string' && state.trim().length > 0 && state.toLowerCase() !== 'all') {
+    gigAndConditions.push({
+      locationAddress: { contains: state.trim(), mode: 'insensitive' },
+    });
   }
 
   // Fetch GigJobs instead of Bookings
   const gigs = await prisma.gigJob.findMany({
-    where: {
-      ...gigTypeFilter,
-      status: 'PENDING',
-      assignments: { none: { workerId: worker.id } }, // Exclude jobs already responded to
-    },
+    where: { AND: gigAndConditions },
     select: {
       id: true,
       jobNumber: true,
@@ -540,11 +560,38 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
     });
 
   // Fetch available Workforce WhatsApp Inquiries (HIRE / BULK)
+  const waAndConditions: any[] = [
+    { status: 'AVAILABLE' },
+    { intent: { in: ['HIRE', 'BULK'] } },
+  ];
+
+  if (!isAll) {
+    const cleanTerm = rawTerm.replace(/_/g, ' ');
+    waAndConditions.push({
+      OR: [
+        { service: { contains: cleanTerm, mode: 'insensitive' } },
+        { service: { contains: rawTerm, mode: 'insensitive' } },
+        { message: { contains: cleanTerm, mode: 'insensitive' } },
+      ],
+    });
+  }
+
+  if (city && typeof city === 'string' && city.trim().length > 0 && city.toLowerCase() !== 'all') {
+    waAndConditions.push({
+      city: { contains: city.trim(), mode: 'insensitive' },
+    });
+  } else if (state && typeof state === 'string' && state.trim().length > 0 && state.toLowerCase() !== 'all') {
+    waAndConditions.push({
+      OR: [
+        { city: { contains: state.trim(), mode: 'insensitive' } },
+        { location: { contains: state.trim(), mode: 'insensitive' } },
+        { message: { contains: state.trim(), mode: 'insensitive' } },
+      ],
+    });
+  }
+
   const waJobs = await prisma.workforceWhatsAppInquiry.findMany({
-    where: {
-      status: 'AVAILABLE',
-      intent: { in: ['HIRE', 'BULK'] },
-    },
+    where: { AND: waAndConditions },
     take: limit * 2,
     orderBy: { createdAt: 'desc' },
   });
@@ -597,12 +644,18 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   openBookings = [...openBookings, ...mappedWaJobs];
 
   if (minPayout != null) {
-    openBookings = openBookings.filter(b => b.payoutAmount >= minPayout);
+    const numMin = Number(minPayout);
+    if (!isNaN(numMin)) {
+      openBookings = openBookings.filter(b => b.payoutAmount >= numMin);
+    }
   }
 
   // Apply maxDistance filter after haversine
   if (maxDistance != null && worker.currentLat != null) {
-    openBookings = openBookings.filter(b => b.distanceKm == null || b.distanceKm <= maxDistance);
+    const numMaxDist = Number(maxDistance);
+    if (!isNaN(numMaxDist)) {
+      openBookings = openBookings.filter(b => b.distanceKm == null || b.distanceKm <= numMaxDist);
+    }
   }
 
   // Sort
@@ -714,6 +767,50 @@ export async function getActiveJob(userId: string) {
         goodsImageUrls: [],
         estimatedDuration: null,
         status: gigAssignment.gig.status,
+        stops: [],
+      },
+    };
+  }
+
+  // Check active WhatsApp Inquiry assigned to worker
+  const activeWa = await prisma.workforceWhatsAppInquiry.findFirst({
+    where: {
+      assignedWorkerId: worker.id,
+      status: 'ASSIGNED',
+    },
+  });
+
+  if (activeWa) {
+    return {
+      id: activeWa.id,
+      workerId: worker.id,
+      status: WorkerJobStatus.ACCEPTED,
+      payoutAmount: activeWa.payoutAmount || 500,
+      createdAt: activeWa.createdAt,
+      bookingId: activeWa.id,
+      booking: {
+        id: activeWa.id,
+        bookingNumber: activeWa.inquiryNumber,
+        pickupLat: activeWa.latitude ?? 28.6139,
+        pickupLng: activeWa.longitude ?? 77.2090,
+        pickupAddress: activeWa.location ? `${activeWa.location}, ${activeWa.city}` : activeWa.city,
+        laborType: activeWa.service || 'Service',
+        gigCategory: (activeWa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
+        laborersCount: activeWa.workersNeeded || 1,
+        vehicleType: 'WhatsApp Lead',
+        goodsType: `${activeWa.service || 'Service'}${activeWa.timing ? ` (${activeWa.timing})` : ''}`,
+        goodsDescription: activeWa.message || `Customer: ${activeWa.name}`,
+        goodsWeightKg: null,
+        goodsQuantity: 1,
+        goodsLengthCm: null,
+        goodsWidthCm: null,
+        goodsHeightCm: null,
+        handlingInstructions: activeWa.notes || null,
+        goodsImageUrls: [],
+        estimatedDuration: 120,
+        status: 'ASSIGNED',
+        customerName: activeWa.name,
+        customerPhone: activeWa.phone,
         stops: [],
       },
     };
@@ -1264,14 +1361,39 @@ export async function completeJob(userId: string, assignmentId: string, input: C
     }
   }
 
+  let isWa = false;
+  if (!assignment) {
+    const wa = await prisma.workforceWhatsAppInquiry.findFirst({
+      where: {
+        OR: [
+          { id: assignmentId },
+          { id: assignmentId, assignedWorkerId: worker.id },
+        ],
+      },
+    });
+    if (wa && wa.assignedWorkerId === worker.id) {
+      assignment = {
+        id: wa.id,
+        workerId: worker.id,
+        status: WorkerJobStatus.IN_PROGRESS,
+        bookingId: wa.id,
+        completionOtp: null,
+        payoutAmount: wa.payoutAmount || 500,
+      };
+      isWa = true;
+    }
+  }
+
   if (!assignment || assignment.workerId !== worker.id) throw AppError.notFound('Assignment not found');
-  if (assignment.status !== WorkerJobStatus.IN_PROGRESS) {
+  if (assignment.status !== WorkerJobStatus.IN_PROGRESS && !isWa) {
     throw AppError.conflict('Work must be IN_PROGRESS to complete', 'INVALID_TRANSITION');
   }
 
   const now = new Date();
 
-  if (isGig) {
+  if (isWa) {
+    await prisma.workforceWhatsAppInquiry.update({ where: { id: assignment.id }, data: { status: 'COMPLETED' } });
+  } else if (isGig) {
     await prisma.gigAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.COMPLETED, completedAt: now } });
     await prisma.gigJob.update({ where: { id: assignment.bookingId }, data: { completionOtp: null } });
   } else {

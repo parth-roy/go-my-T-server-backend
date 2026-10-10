@@ -65,12 +65,16 @@ export const UploadDocumentsSchema = z.object({
 // ─────────────────────────────────────────────
 
 export const AvailableJobsQuerySchema = z.object({
-  laborType:   z.enum(['LOADING', 'UNLOADING', 'BOTH']).optional(),
+  laborType:   z.string().optional(),
+  category:    z.string().optional(),
+  search:      z.string().optional(),
+  city:        z.string().optional(),
+  state:       z.string().optional(),
   sortBy:      z.enum(['distance', 'payout', 'recent']).optional().default('distance'),
   page:        z.coerce.number().int().min(1).default(1),
-  limit:       z.coerce.number().int().min(1).max(50).default(20),
+  limit:       z.coerce.number().int().min(1).max(100).default(20),
   minPayout:   z.coerce.number().min(0).optional(),
-  maxDistance: z.coerce.number().min(1).max(100).optional(),
+  maxDistance: z.coerce.number().min(1).max(500).optional(),
 });
 
 export const DeclineJobSchema = z.object({
