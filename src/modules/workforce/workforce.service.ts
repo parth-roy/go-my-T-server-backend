@@ -434,8 +434,136 @@ export async function getDashboardStats(userId: string) {
 }
 
 // ─────────────────────────────────────────────
-// JOBS — GET AVAILABLE JOB FEED
+// JOBS — GET AVAILABLE JOB FEED & EXPIRATION CHECK
 // ─────────────────────────────────────────────
+
+/**
+ * Determines whether a job is expired, past its scheduled slot/date, or cancelled.
+ * Returns true if the job is expired and MUST NOT be shown to workers.
+ */
+export function isJobExpiredOrPast(params: {
+  createdAt: Date | string;
+  scheduledSlot?: string | null;
+  timing?: string | null;
+  urgency?: string | null;
+  status?: string | null;
+}): boolean {
+  const { createdAt, scheduledSlot, timing, urgency, status } = params;
+
+  // 1. Status Check: Never show cancelled, completed, or in-progress jobs
+  if (status) {
+    const s = status.toUpperCase().trim();
+    if (s === 'CANCELLED' || s === 'COMPLETED' || s === 'IN_PROGRESS' || s === 'ASSIGNED') {
+      return true;
+    }
+  }
+
+  const now = new Date();
+  const created = new Date(createdAt);
+  if (isNaN(created.getTime())) return false;
+
+  const nowMs = now.getTime();
+  const createdMs = created.getTime();
+
+  // Calendar start of today (local time)
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const createdDayStart = new Date(created.getFullYear(), created.getMonth(), created.getDate()).getTime();
+
+  // 2. Scheduled Slot evaluation (e.g. "Today, 09:00 AM - 11:00 AM", "Tomorrow, 10:00 AM", or explicit date)
+  if (scheduledSlot && typeof scheduledSlot === 'string' && scheduledSlot.trim().length > 0) {
+    const slotStr = scheduledSlot.trim();
+    const lowerSlot = slotStr.toLowerCase();
+
+    // Check if slot has an explicit parseable ISO / date string
+    const directDate = Date.parse(slotStr);
+    if (!isNaN(directDate) && !lowerSlot.includes('today') && !lowerSlot.includes('tomorrow') && !lowerSlot.includes('day after')) {
+      if (directDate < nowMs) {
+        return true; // Scheduled date/time has passed!
+      }
+    }
+
+    // Relative day evaluation based on when the gig/lead was created:
+    let targetDayStart: number | null = null;
+    if (lowerSlot.includes('today')) {
+      targetDayStart = createdDayStart;
+    } else if (lowerSlot.includes('tomorrow')) {
+      targetDayStart = createdDayStart + 24 * 60 * 60 * 1000;
+    } else if (lowerSlot.includes('day after')) {
+      targetDayStart = createdDayStart + 48 * 60 * 60 * 1000;
+    }
+
+    if (targetDayStart !== null) {
+      // If the target calendar day is strictly before today (yesterday or earlier), it has expired!
+      if (targetDayStart < todayStart) {
+        return true;
+      }
+
+      // If the target day is TODAY, verify if the time window has already passed
+      if (targetDayStart === todayStart) {
+        const endMatch = slotStr.match(/-\s*(\d{1,2}):?(\d{2})?\s*(am|pm)/i);
+        const startMatch = slotStr.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)/i);
+
+        if (endMatch) {
+          let eh = parseInt(endMatch[1], 10);
+          const em = endMatch[2] ? parseInt(endMatch[2], 10) : 0;
+          const mer = endMatch[3].toLowerCase();
+          if (mer === 'pm' && eh < 12) eh += 12;
+          if (mer === 'am' && eh === 12) eh = 0;
+          const slotEndTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em).getTime();
+          if (nowMs > slotEndTime) {
+            return true; // Time window has already ended!
+          }
+        } else if (startMatch) {
+          let sh = parseInt(startMatch[1], 10);
+          const sm = startMatch[2] ? parseInt(startMatch[2], 10) : 0;
+          const mer = startMatch[3].toLowerCase();
+          if (mer === 'pm' && sh < 12) sh += 12;
+          if (mer === 'am' && sh === 12) sh = 0;
+          const slotEndTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh + 2, sm).getTime();
+          if (nowMs > slotEndTime) {
+            return true; // Time has passed!
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Timing evaluation (e.g. for WhatsApp leads with "Today (Urgent)", "Immediate", "Urgent")
+  if (timing && typeof timing === 'string' && timing.trim().length > 0) {
+    const tLower = timing.toLowerCase().trim();
+
+    if (tLower.includes('today') || tLower.includes('urgent') || tLower.includes('immediate')) {
+      // If posted on a previous calendar day, it has expired!
+      if (createdDayStart < todayStart) {
+        return true;
+      }
+      // If posted today but older than 12 hours for immediate/urgent needs:
+      if (nowMs - createdMs > 12 * 60 * 60 * 1000) {
+        return true;
+      }
+    } else if (tLower.includes('tomorrow')) {
+      const tomorrowDay = createdDayStart + 24 * 60 * 60 * 1000;
+      if (tomorrowDay < todayStart) {
+        return true; // Tomorrow has already passed
+      }
+    }
+  }
+
+  // 4. Urgency = IMMEDIATE or WITHIN_HOUR with no slot
+  if (urgency === 'IMMEDIATE' || urgency === 'WITHIN_HOUR') {
+    if (nowMs - createdMs > 24 * 60 * 60 * 1000) {
+      return true; // On-demand immediate gig older than 24h
+    }
+  }
+
+  // 5. Stale cutoff: Any pending open job older than 5 days is expired
+  if (nowMs - createdMs > 5 * 24 * 60 * 60 * 1000) {
+    return true;
+  }
+
+  return false;
+}
+
 export async function getAvailableJobs(userId: string, query: AvailableJobsQuery) {
   const worker = await prisma.worker.findUnique({
     where: { userId },
@@ -499,6 +627,8 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
       totalFare: true,
       perWorkerRate: true,
       description: true,
+      scheduledSlot: true,
+      status: true,
       createdAt: true,
       assignments: {
         where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
@@ -511,11 +641,27 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   });
 
   // Map GigJobs to the JobFeedItem structure expected by the Flutter app
-  let openBookings = gigs
+  let openBookings: any[] = gigs
     .filter(g => {
+      // 1. Availability check: slots must be open
       const acceptedCount = g.assignments.length;
       const totalSlots = g.workersNeeded ?? 1;
-      return acceptedCount < totalSlots;
+      if (acceptedCount >= totalSlots) return false;
+
+      // 2. Cancellation check
+      if (g.status !== 'PENDING') return false;
+
+      // 3. Date & Time Expiry Check: Never list expired or past-date jobs
+      if (isJobExpiredOrPast({
+        createdAt: g.createdAt,
+        scheduledSlot: g.scheduledSlot,
+        urgency: g.urgency,
+        status: g.status,
+      })) {
+        return false;
+      }
+
+      return true;
     })
     .map(g => {
       const distanceKm =
@@ -552,6 +698,8 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
         goodsImageUrls: [] as string[],
         estimatedDuration: g.durationHours != null ? g.durationHours * 60 : null,
         distanceKm,
+        scheduledSlot:  g.scheduledSlot,
+        status:         g.status,
         createdAt:      g.createdAt,
         customerName:   undefined as string | undefined,
         customerPhone:  undefined as string | undefined,
@@ -562,7 +710,14 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   // Fetch available Workforce WhatsApp Inquiries (HIRE / BULK)
   const waAndConditions: any[] = [
     { status: 'AVAILABLE' },
+    { assignedWorkerId: null },
     { intent: { in: ['HIRE', 'BULK'] } },
+    {
+      NOT: [
+        { notes: { contains: `[DECLINED:${worker.id}]` } },
+        { notes: { contains: '[CANCELLED]' } },
+      ],
+    },
   ];
 
   if (!isAll) {
@@ -596,50 +751,74 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
     orderBy: { createdAt: 'desc' },
   });
 
-  const mappedWaJobs = waJobs.map((wa) => {
-    const lat = wa.latitude ?? 28.6139;
-    const lng = wa.longitude ?? 77.2090;
-    const distanceKm =
-      worker.currentLat != null && worker.currentLng != null
-        ? Math.round(haversineKm(worker.currentLat, worker.currentLng, lat, lng) * 10) / 10
-        : null;
+  const mappedWaJobs = waJobs
+    .filter(wa => {
+      // 1. Status & assignment check
+      if (wa.status !== 'AVAILABLE' || wa.assignedWorkerId != null) return false;
 
-    const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
-    const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
+      // 2. Cancellation / decline check
+      if (wa.notes && (wa.notes.includes('[CANCELLED]') || wa.notes.includes(`[DECLINED:${worker.id}]`))) {
+        return false;
+      }
 
-    return {
-      id:             wa.id,
-      bookingNumber:  wa.inquiryNumber,
-      pickupLat:      lat,
-      pickupLng:      lng,
-      pickupAddress:  address,
-      dropAddress:    'N/A',
-      laborType:      wa.service || 'General Helper',
-      gigCategory:    (wa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
-      locationZone:   'METRO',
-      durationHours:  2,
-      urgency:        isUrgent ? 'IMMEDIATE' : 'SCHEDULED',
-      payoutAmount:   wa.payoutAmount || 500,
-      slotsRemaining: wa.workersNeeded || 1,
-      totalSlots:     wa.workersNeeded || 1,
-      vehicleType:    'WhatsApp Lead',
-      goodsType:      `${wa.service || 'Service'}${wa.timing ? ` (${wa.timing})` : ''}`,
-      goodsDescription: wa.message || `Customer ${wa.name} requested ${wa.service || 'service'} in ${wa.city}`,
-      goodsWeightKg:  null,
-      goodsQuantity:  1,
-      goodsLengthCm:  null,
-      goodsWidthCm:   null,
-      goodsHeightCm:  null,
-      handlingInstructions: wa.notes || null,
-      goodsImageUrls: [] as string[],
-      estimatedDuration: 120,
-      distanceKm,
-      createdAt:      wa.createdAt,
-      customerName:   wa.name,
-      customerPhone:  wa.phone,
-      source:         'WHATSAPP',
-    };
-  });
+      // 3. Expiration / passed date check
+      if (isJobExpiredOrPast({
+        createdAt: wa.createdAt,
+        timing: wa.timing,
+        urgency: Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent')) ? 'IMMEDIATE' : 'SCHEDULED',
+        status: wa.status,
+      })) {
+        return false;
+      }
+
+      return true;
+    })
+    .map((wa) => {
+      const lat = wa.latitude ?? 28.6139;
+      const lng = wa.longitude ?? 77.2090;
+      const distanceKm =
+        worker.currentLat != null && worker.currentLng != null
+          ? Math.round(haversineKm(worker.currentLat, worker.currentLng, lat, lng) * 10) / 10
+          : null;
+
+      const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
+      const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
+
+      return {
+        id:             wa.id,
+        bookingNumber:  wa.inquiryNumber,
+        pickupLat:      lat,
+        pickupLng:      lng,
+        pickupAddress:  address,
+        dropAddress:    'N/A',
+        laborType:      wa.service || 'General Helper',
+        gigCategory:    (wa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
+        locationZone:   'METRO',
+        durationHours:  2,
+        urgency:        isUrgent ? 'IMMEDIATE' : 'SCHEDULED',
+        payoutAmount:   wa.payoutAmount || 500,
+        slotsRemaining: wa.workersNeeded || 1,
+        totalSlots:     wa.workersNeeded || 1,
+        vehicleType:    'WhatsApp Lead',
+        goodsType:      `${wa.service || 'Service'}${wa.timing ? ` (${wa.timing})` : ''}`,
+        goodsDescription: wa.message || `Customer ${wa.name} requested ${wa.service || 'service'} in ${wa.city}`,
+        goodsWeightKg:  null,
+        goodsQuantity:  1,
+        goodsLengthCm:  null,
+        goodsWidthCm:   null,
+        goodsHeightCm:  null,
+        handlingInstructions: wa.notes || null,
+        goodsImageUrls: [] as string[],
+        estimatedDuration: 120,
+        distanceKm,
+        scheduledSlot:  wa.timing,
+        status:         wa.status,
+        createdAt:      wa.createdAt,
+        customerName:   wa.name,
+        customerPhone:  wa.phone,
+        source:         'WHATSAPP',
+      };
+    });
 
   openBookings = [...openBookings, ...mappedWaJobs];
 
@@ -1050,6 +1229,19 @@ export async function declineJob(userId: string, bookingId: string, input: Decli
       await prisma.gigAssignment.update({ where: { id: existing.id }, data: { status: WorkerJobStatus.DECLINED, declinedAt: new Date() } });
     }
   } else {
+    const waInquiry = await prisma.workforceWhatsAppInquiry.findUnique({ where: { id: bookingId } });
+    if (waInquiry) {
+      const currentNotes = waInquiry.notes || '';
+      const flag = `[DECLINED:${worker.id}]`;
+      if (!currentNotes.includes(flag)) {
+        await prisma.workforceWhatsAppInquiry.update({
+          where: { id: bookingId },
+          data: { notes: `${currentNotes} ${flag}`.trim() },
+        });
+      }
+      return { declined: true };
+    }
+
     const existing = await prisma.jobAssignment.findFirst({ where: { bookingId, workerId: worker.id } });
     if (!existing) {
       await prisma.jobAssignment.create({
@@ -1579,6 +1771,9 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       durationHours: true,
       urgency: true,
       workersNeeded: true,
+      scheduledSlot: true,
+      status: true,
+      createdAt: true,
       assignments: {
         where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
         select: { id: true },
@@ -1588,9 +1783,25 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
 
   const availablePins = jobs
     .filter(job => {
+      // 1. Slots check
       const acceptedCount = job.assignments.length;
       const totalSlots = job.workersNeeded ?? 1;
-      return acceptedCount < totalSlots;
+      if (acceptedCount >= totalSlots) return false;
+
+      // 2. Cancellation check
+      if (job.status !== 'PENDING') return false;
+
+      // 3. Expiration / passed date check
+      if (isJobExpiredOrPast({
+        createdAt: job.createdAt,
+        scheduledSlot: job.scheduledSlot,
+        urgency: job.urgency,
+        status: job.status,
+      })) {
+        return false;
+      }
+
+      return true;
     })
     .map(job => ({
       id: job.id,
@@ -1620,44 +1831,71 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
   const waInquiries = await prisma.workforceWhatsAppInquiry.findMany({
     where: {
       status: 'AVAILABLE',
+      assignedWorkerId: null,
       intent: { in: ['HIRE', 'BULK'] },
+      NOT: [
+        { notes: { contains: `[DECLINED:${userId}]` } },
+        { notes: { contains: '[CANCELLED]' } },
+      ],
     },
     take: 50,
     orderBy: { createdAt: 'desc' },
   });
 
-  const waPins = waInquiries.map((wa) => {
-    const pLat = wa.latitude ?? 28.6139;
-    const pLng = wa.longitude ?? 77.2090;
-    const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
-    const dist = haversineKm(lat, lng, pLat, pLng);
-    const workers = wa.workersNeeded || 1;
-    const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
+  const waPins = waInquiries
+    .filter(wa => {
+      // 1. Status & assignment check
+      if (wa.status !== 'AVAILABLE' || wa.assignedWorkerId != null) return false;
 
-    return {
-      id: wa.id,
-      bookingNumber: wa.inquiryNumber,
-      pickupLat: pLat,
-      pickupLng: pLng,
-      pickupAddress: address,
-      locationZone: 'METRO',
-      totalFare: (wa.payoutAmount || 500) * workers,
-      perWorkerRate: wa.payoutAmount || 500,
-      laborCharge: wa.payoutAmount || 500,
-      laborType: wa.service || 'General Helper',
-      gigCategory: (wa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
-      description: wa.message || `Direct WhatsApp Work Lead: ${wa.service} in ${wa.city}`,
-      durationHours: 2,
-      urgency: isUrgent ? 'IMMEDIATE' : 'SCHEDULED',
-      laborersCount: workers,
-      vehicleType: 'WhatsApp Lead',
-      goodsType: wa.service || 'Service',
-      goodsWeightKg: null,
-      goodsQuantity: 1,
-      distanceKm: dist,
-      source: 'WHATSAPP',
-    };
-  }).filter((job) => job.distanceKm <= radiusKm);
+      // 2. Cancellation / decline check
+      if (wa.notes && (wa.notes.includes('[CANCELLED]') || wa.notes.includes(`[DECLINED:${userId}]`))) {
+        return false;
+      }
+
+      // 3. Expiration / passed date check
+      if (isJobExpiredOrPast({
+        createdAt: wa.createdAt,
+        timing: wa.timing,
+        urgency: Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent')) ? 'IMMEDIATE' : 'SCHEDULED',
+        status: wa.status,
+      })) {
+        return false;
+      }
+
+      return true;
+    })
+    .map((wa) => {
+      const pLat = wa.latitude ?? 28.6139;
+      const pLng = wa.longitude ?? 77.2090;
+      const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
+      const dist = haversineKm(lat, lng, pLat, pLng);
+      const workers = wa.workersNeeded || 1;
+      const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
+
+      return {
+        id: wa.id,
+        bookingNumber: wa.inquiryNumber,
+        pickupLat: pLat,
+        pickupLng: pLng,
+        pickupAddress: address,
+        locationZone: 'METRO',
+        totalFare: (wa.payoutAmount || 500) * workers,
+        perWorkerRate: wa.payoutAmount || 500,
+        laborCharge: wa.payoutAmount || 500,
+        laborType: wa.service || 'General Helper',
+        gigCategory: (wa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
+        description: wa.message || `Direct WhatsApp Work Lead: ${wa.service} in ${wa.city}`,
+        durationHours: 2,
+        urgency: isUrgent ? 'IMMEDIATE' : 'SCHEDULED',
+        laborersCount: workers,
+        vehicleType: 'WhatsApp Lead',
+        goodsType: wa.service || 'Service',
+        goodsWeightKg: null,
+        goodsQuantity: 1,
+        distanceKm: dist,
+        source: 'WHATSAPP',
+      };
+    }).filter((job) => job.distanceKm <= radiusKm);
 
   return [...availablePins, ...waPins];
 }
@@ -2042,6 +2280,20 @@ export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
     where.status = 'AVAILABLE';
   }
 
+  if (where.status === 'AVAILABLE') {
+    where.assignedWorkerId = null;
+    if (userId) {
+      where.NOT = [
+        { notes: { contains: `[DECLINED:${userId}]` } },
+        { notes: { contains: '[CANCELLED]' } },
+      ];
+    } else {
+      where.NOT = [
+        { notes: { contains: '[CANCELLED]' } },
+      ];
+    }
+  }
+
   if (query?.intent) {
     where.intent = String(query.intent);
   } else {
@@ -2066,7 +2318,25 @@ export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
     prisma.workforceWhatsAppInquiry.count({ where }),
   ]);
 
-  const formatted = items.map((wa) => {
+  const formatted = items
+    .filter((wa) => {
+      if (where.status === 'AVAILABLE') {
+        if (wa.status !== 'AVAILABLE' || wa.assignedWorkerId != null) return false;
+        if (wa.notes && (wa.notes.includes('[CANCELLED]') || (userId && wa.notes.includes(`[DECLINED:${userId}]`)))) {
+          return false;
+        }
+        if (isJobExpiredOrPast({
+          createdAt: wa.createdAt,
+          timing: wa.timing,
+          urgency: Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent')) ? 'IMMEDIATE' : 'SCHEDULED',
+          status: wa.status,
+        })) {
+          return false;
+        }
+      }
+      return true;
+    })
+    .map((wa) => {
     const lat = wa.latitude ?? 28.6139;
     const lng = wa.longitude ?? 77.2090;
     const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;

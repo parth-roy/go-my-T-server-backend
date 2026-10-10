@@ -323,6 +323,9 @@ function validateParticipantEligibility(
     if (!driver.isActive) {
       throw AppError.forbidden('Driver account is inactive');
     }
+    if (!driver.isDocVerified) {
+      throw AppError.forbidden('KYC document verification is required to place bids');
+    }
     if (driver.status !== 'AVAILABLE') {
       throw AppError.conflict('You must be available before bidding', 'DRIVER_NOT_AVAILABLE');
     }
@@ -597,6 +600,14 @@ export async function listOpportunities(actor: Actor, query: OpportunitiesQuery)
         estimatedDuration: true,
         totalFare: true,
         gstAmount: true,
+        receiverName: true,
+        receiverPhone: true,
+        customer: {
+          select: {
+            name: true,
+            phone: true,
+          },
+        },
         grandTotal: true,
         createdAt: true,
         bidWindow: true,
@@ -614,10 +625,13 @@ export async function listOpportunities(actor: Actor, query: OpportunitiesQuery)
   return {
     opportunities: rows.map((row) => ({
       ...row,
+      customerName: row.customer?.name || row.receiverName || 'Verified Shipper',
+      customerPhone: row.customer?.phone || row.receiverPhone || '',
       bidCount: row._count.marketplaceBids,
       myBid: row.marketplaceBids[0] ?? null,
       _count: undefined,
       marketplaceBids: undefined,
+      customer: undefined,
     })),
     meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
@@ -628,6 +642,7 @@ export async function getOpportunity(bookingId: string, actor: Actor) {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
     include: {
+      customer: { select: { name: true, phone: true } },
       bidWindow: true,
       stops: { orderBy: { sequence: 'asc' } },
       marketplaceBids: {
@@ -645,6 +660,8 @@ export async function getOpportunity(bookingId: string, actor: Actor) {
   return {
     id: booking.id,
     bookingNumber: booking.bookingNumber,
+    customerName: booking.customer?.name || booking.receiverName || 'Verified Shipper',
+    customerPhone: booking.customer?.phone || booking.receiverPhone || '',
     pickupAddress: booking.pickupAddress,
     pickupLat: booking.pickupLat,
     pickupLng: booking.pickupLng,

@@ -393,6 +393,8 @@ export async function listBookings(userId: string, role: string, query: ListBook
         const log = auditLogs.find(a => a.bookingId === b.id);
         return {
             ...b,
+            customerName: b.customer?.name || b.receiverName || 'Verified Shipper',
+            customerPhone: b.customer?.phone || b.receiverPhone || '',
             driverPayout: log?.driverPayout ?? null,
         };
     });
