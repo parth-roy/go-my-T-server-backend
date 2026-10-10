@@ -57,6 +57,12 @@ workforceRouter.post('/jobs/:id/start',        ctrl.startJob);
 workforceRouter.post('/jobs/:id/request-otp', ctrl.requestCompletionOtp);
 workforceRouter.post('/jobs/:id/complete',     validate(CompleteJobSchema), ctrl.completeJob);
 
+// ── Worker WhatsApp Work Leads ──
+workforceRouter.get('/worker/whatsapp-jobs', ctrl.getWorkerWhatsAppJobs);
+workforceRouter.get('/worker/whatsapp-jobs/:id', ctrl.getWorkerWhatsAppJobById);
+workforceRouter.patch('/worker/whatsapp-jobs/:id/accept', ctrl.acceptWorkerWhatsAppJob);
+workforceRouter.post('/worker/whatsapp-jobs/:id/accept', ctrl.acceptWorkerWhatsAppJob);
+
 // ─────────────────────────────────────────────
 // WALLET & EARNINGS
 // ─────────────────────────────────────────────

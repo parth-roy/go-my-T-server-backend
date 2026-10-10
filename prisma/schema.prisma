@@ -1986,6 +1986,37 @@ model WhatsAppInquiry {
   @@map("whatsapp_inquiries")
 }
 
+model WorkforceWhatsAppInquiry {
+  id                 String   @id @default(uuid())
+  inquiryNumber      String   @unique
+  intent             String   // HIRE, JOIN, BULK, SUPPORT
+  name               String
+  phone              String
+  city               String
+  service            String?  // Electrician, Plumber, General Helper, etc.
+  location           String?  // Locality / landmark
+  timing             String?  // Today (Urgent), Flexible, etc.
+  count              String?  // e.g. "5 - 10 Workers"
+  message            String?  // Full WhatsApp message string
+  sourceUrl          String?
+  status             String   @default("AVAILABLE") // AVAILABLE, ASSIGNED, COMPLETED, CANCELLED
+  assignedWorkerId   String?
+  latitude           Float?   @default(28.6139)
+  longitude          Float?   @default(77.2090)
+  payoutAmount       Float    @default(500.0)
+  workersNeeded      Int      @default(1)
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status])
+  @@index([phone])
+  @@index([city])
+  @@index([service])
+  @@index([createdAt])
+  @@map("workforce_whatsapp_inquiries")
+}
+
 // ── Gig Workforce (Standalone Jobs) ──────────────────────────────────────────────
 
 enum GigJobStatus {

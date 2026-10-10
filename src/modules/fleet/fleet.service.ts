@@ -569,14 +569,7 @@ export async function updateDriverStatus(
 ): Promise<object> {
   const driver = await _requireDriver(userId);
 
-  // Guard: docs must be approved before going online
-  if (input.status === 'AVAILABLE' && !driver.isDocVerified) {
-    throw AppError.badRequest(
-      'Your documents are still being reviewed. You will be notified by the Parther team once approved.',
-      'DOCS_NOT_VERIFIED'
-    );
-  }
-
+  // Allow driver to toggle online/offline freely without blocking on docs
   const updated = await prisma.driver.update({
     where: { id: driver.id },
     data: { status: input.status as any },

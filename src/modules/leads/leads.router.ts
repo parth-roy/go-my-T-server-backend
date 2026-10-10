@@ -4,6 +4,7 @@ import { validate } from '@shared/middleware/validate';
 import { authenticate, requireRole, optionalAuth } from '@shared/middleware/auth.middleware';
 import { UserRole } from '@prisma/client';
 import * as ctrl from './leads.controller';
+import * as workforceCtrl from '@modules/workforce/workforce.controller';
 import {
   CreateLeadSchema,
   GetLeadsQuerySchema,
@@ -37,6 +38,17 @@ publicLeadsRouter.patch(
   authenticate,
   requireRole(UserRole.DRIVER, UserRole.FLEET_OWNER, UserRole.ADMIN),
   ctrl.acceptDriverWhatsAppLead
+);
+
+// ── Worker-End WhatsApp Jobs Marketplace API ──
+// Allows workers to view and accept direct workforce inquiries submitted via WhatsApp
+publicLeadsRouter.get('/worker/whatsapp-jobs', optionalAuth, workforceCtrl.getWorkerWhatsAppJobs);
+publicLeadsRouter.get('/worker/whatsapp-jobs/:id', optionalAuth, workforceCtrl.getWorkerWhatsAppJobById);
+publicLeadsRouter.patch(
+  '/worker/whatsapp-jobs/:id/accept',
+  authenticate,
+  requireRole(UserRole.WORKER, UserRole.ADMIN),
+  workforceCtrl.acceptWorkerWhatsAppJob
 );
 
 // ── Admin Routes (Protected) ──

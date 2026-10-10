@@ -260,3 +260,28 @@ export async function getAnnouncements(req: Request, res: Response, next: NextFu
   } catch (err) { next(err); }
 }
 
+// ─────────────────────────────────────────────
+// WORKER WHATSAPP JOBS
+// ─────────────────────────────────────────────
+
+export async function getWorkerWhatsAppJobs(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await service.getWorkerWhatsAppJobs(req.user?.id, req.query);
+    res.status(200).json(result);
+  } catch (err) { next(err); }
+}
+
+export async function getWorkerWhatsAppJobById(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await service.getWorkerWhatsAppJobById(String(req.params.id));
+    sendSuccess(res, result);
+  } catch (err) { next(err); }
+}
+
+export async function acceptWorkerWhatsAppJob(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await service.acceptWorkerWhatsAppJob(req.user!.id, String(req.params.id));
+    sendSuccess(res, result, 'Work lead accepted successfully', 200);
+  } catch (err) { next(err); }
+}
+

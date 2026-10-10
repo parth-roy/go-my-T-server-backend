@@ -528,13 +528,73 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
         goodsLengthCm:  null,
         goodsWidthCm:   null,
         goodsHeightCm:  null,
-        handlingInstructions: null,
-        goodsImageUrls: [],
+        handlingInstructions: null as string | null,
+        goodsImageUrls: [] as string[],
         estimatedDuration: g.durationHours != null ? g.durationHours * 60 : null,
         distanceKm,
         createdAt:      g.createdAt,
+        customerName:   undefined as string | undefined,
+        customerPhone:  undefined as string | undefined,
+        source:         'GIG',
       };
     });
+
+  // Fetch available Workforce WhatsApp Inquiries (HIRE / BULK)
+  const waJobs = await prisma.workforceWhatsAppInquiry.findMany({
+    where: {
+      status: 'AVAILABLE',
+      intent: { in: ['HIRE', 'BULK'] },
+    },
+    take: limit * 2,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const mappedWaJobs = waJobs.map((wa) => {
+    const lat = wa.latitude ?? 28.6139;
+    const lng = wa.longitude ?? 77.2090;
+    const distanceKm =
+      worker.currentLat != null && worker.currentLng != null
+        ? Math.round(haversineKm(worker.currentLat, worker.currentLng, lat, lng) * 10) / 10
+        : null;
+
+    const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
+    const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
+
+    return {
+      id:             wa.id,
+      bookingNumber:  wa.inquiryNumber,
+      pickupLat:      lat,
+      pickupLng:      lng,
+      pickupAddress:  address,
+      dropAddress:    'N/A',
+      laborType:      wa.service || 'General Helper',
+      gigCategory:    (wa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
+      locationZone:   'METRO',
+      durationHours:  2,
+      urgency:        isUrgent ? 'IMMEDIATE' : 'SCHEDULED',
+      payoutAmount:   wa.payoutAmount || 500,
+      slotsRemaining: wa.workersNeeded || 1,
+      totalSlots:     wa.workersNeeded || 1,
+      vehicleType:    'WhatsApp Lead',
+      goodsType:      `${wa.service || 'Service'}${wa.timing ? ` (${wa.timing})` : ''}`,
+      goodsDescription: wa.message || `Customer ${wa.name} requested ${wa.service || 'service'} in ${wa.city}`,
+      goodsWeightKg:  null,
+      goodsQuantity:  1,
+      goodsLengthCm:  null,
+      goodsWidthCm:   null,
+      goodsHeightCm:  null,
+      handlingInstructions: wa.notes || null,
+      goodsImageUrls: [] as string[],
+      estimatedDuration: 120,
+      distanceKm,
+      createdAt:      wa.createdAt,
+      customerName:   wa.name,
+      customerPhone:  wa.phone,
+      source:         'WHATSAPP',
+    };
+  });
+
+  openBookings = [...openBookings, ...mappedWaJobs];
 
   if (minPayout != null) {
     openBookings = openBookings.filter(b => b.payoutAmount >= minPayout);
@@ -720,6 +780,40 @@ export async function acceptJob(userId: string, bookingId: string) {
             throw AppError.conflict('Worker is no longer available', 'WORKER_NOT_AVAILABLE');
           }
           return { assignment, newAcceptedCount: acceptedCount + 1, totalSlots, isGig: true };
+        }
+
+        // Check Workforce WhatsApp Inquiry
+        const waInquiry = await tx.workforceWhatsAppInquiry.findUnique({ where: { id: bookingId } });
+        if (waInquiry) {
+          if (waInquiry.status !== 'AVAILABLE') {
+            throw AppError.conflict('This workforce work lead is no longer open', 'JOB_NOT_OPEN');
+          }
+          const updated = await tx.workforceWhatsAppInquiry.update({
+            where: { id: bookingId },
+            data: {
+              status: 'ASSIGNED',
+              assignedWorkerId: worker.id,
+            },
+          });
+          const workerClaim = await tx.worker.updateMany({
+            where: { id: worker.id, status: WorkerStatus.AVAILABLE, isDocVerified: true },
+            data: { status: WorkerStatus.ON_JOB },
+          });
+          if (workerClaim.count !== 1) {
+            throw AppError.conflict('Worker is no longer available', 'WORKER_NOT_AVAILABLE');
+          }
+          const assignment = {
+            id: updated.id,
+            status: WorkerJobStatus.ACCEPTED,
+            payoutAmount: updated.payoutAmount,
+            bookingNumber: updated.inquiryNumber,
+            pickupAddress: updated.location ? `${updated.location}, ${updated.city}` : updated.city,
+            customerName: updated.name,
+            customerPhone: updated.phone,
+            laborType: updated.service || 'Service',
+            isWhatsAppWork: true,
+          };
+          return { assignment, newAcceptedCount: 1, totalSlots: 1, isGig: true };
         }
 
         // Standard Booking
@@ -1400,7 +1494,50 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
     }))
     .filter(job => job.distanceKm <= radiusKm);
 
-  return availablePins;
+  // Find nearby available Workforce WhatsApp Inquiries (HIRE / BULK)
+  const waInquiries = await prisma.workforceWhatsAppInquiry.findMany({
+    where: {
+      status: 'AVAILABLE',
+      intent: { in: ['HIRE', 'BULK'] },
+    },
+    take: 50,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const waPins = waInquiries.map((wa) => {
+    const pLat = wa.latitude ?? 28.6139;
+    const pLng = wa.longitude ?? 77.2090;
+    const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
+    const dist = haversineKm(lat, lng, pLat, pLng);
+    const workers = wa.workersNeeded || 1;
+    const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
+
+    return {
+      id: wa.id,
+      bookingNumber: wa.inquiryNumber,
+      pickupLat: pLat,
+      pickupLng: pLng,
+      pickupAddress: address,
+      locationZone: 'METRO',
+      totalFare: (wa.payoutAmount || 500) * workers,
+      perWorkerRate: wa.payoutAmount || 500,
+      laborCharge: wa.payoutAmount || 500,
+      laborType: wa.service || 'General Helper',
+      gigCategory: (wa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
+      description: wa.message || `Direct WhatsApp Work Lead: ${wa.service} in ${wa.city}`,
+      durationHours: 2,
+      urgency: isUrgent ? 'IMMEDIATE' : 'SCHEDULED',
+      laborersCount: workers,
+      vehicleType: 'WhatsApp Lead',
+      goodsType: wa.service || 'Service',
+      goodsWeightKg: null,
+      goodsQuantity: 1,
+      distanceKm: dist,
+      source: 'WHATSAPP',
+    };
+  }).filter((job) => job.distanceKm <= radiusKm);
+
+  return [...availablePins, ...waPins];
 }
 
 // ─────────────────────────────────────────────
@@ -1765,5 +1902,147 @@ export async function deleteAccount(userId: string) {
   ]);
 
   return { deleted: true };
+}
+
+// ─────────────────────────────────────────────
+// WORKER WHATSAPP JOBS (Dedicated Worker-End APIs)
+// ─────────────────────────────────────────────
+
+export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
+  const { status = 'AVAILABLE', city, service, limit = '50', page = '1' } = query || {};
+  const take = Math.min(Number(limit) || 50, 100);
+  const skip = ((Number(page) || 1) - 1) * take;
+
+  const where: any = {};
+  if (status && status !== 'ALL') {
+    where.status = String(status);
+  } else if (!status) {
+    where.status = 'AVAILABLE';
+  }
+
+  if (query?.intent) {
+    where.intent = String(query.intent);
+  } else {
+    where.intent = { in: ['HIRE', 'BULK'] };
+  }
+
+  if (city && typeof city === 'string' && city.trim() !== '' && city.toLowerCase() !== 'all') {
+    where.city = { contains: city.trim(), mode: 'insensitive' };
+  }
+
+  if (service && typeof service === 'string' && service.trim() !== '' && service.toLowerCase() !== 'all') {
+    where.service = { contains: service.trim(), mode: 'insensitive' };
+  }
+
+  const [items, total] = await Promise.all([
+    prisma.workforceWhatsAppInquiry.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take,
+      skip,
+    }),
+    prisma.workforceWhatsAppInquiry.count({ where }),
+  ]);
+
+  const formatted = items.map((wa) => {
+    const lat = wa.latitude ?? 28.6139;
+    const lng = wa.longitude ?? 77.2090;
+    const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
+    const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
+
+    return {
+      id: wa.id,
+      bookingNumber: wa.inquiryNumber,
+      jobNumber: wa.inquiryNumber,
+      source: 'WHATSAPP',
+      intent: wa.intent,
+      service: wa.service || 'General Service',
+      laborType: wa.service || 'General Helper',
+      gigCategory: (wa.service || 'HELPER').toUpperCase().replace(/\s+/g, '_'),
+      title: `${wa.service || 'Worker'} Needed — ${wa.city}`,
+      pickupAddress: address,
+      locationAddress: address,
+      city: wa.city,
+      location: wa.location,
+      pickupLat: lat,
+      pickupLng: lng,
+      locationLat: lat,
+      locationLng: lng,
+      payoutAmount: wa.payoutAmount || 500,
+      totalFare: (wa.payoutAmount || 500) * (wa.workersNeeded || 1),
+      perWorkerRate: wa.payoutAmount || 500,
+      workersNeeded: wa.workersNeeded || 1,
+      laborersCount: wa.workersNeeded || 1,
+      slotsRemaining: wa.workersNeeded || 1,
+      timing: wa.timing || 'Immediate',
+      urgency: isUrgent ? 'IMMEDIATE' : 'SCHEDULED',
+      durationHours: 2,
+      vehicleType: 'WhatsApp Lead',
+      goodsType: wa.service || 'Service',
+      goodsDescription: wa.message || `Customer ${wa.name} requested ${wa.service} in ${wa.city}`,
+      customerName: wa.name,
+      customerPhone: wa.phone,
+      message: wa.message,
+      sourceUrl: wa.sourceUrl,
+      status: wa.status,
+      assignedWorkerId: wa.assignedWorkerId,
+      createdAt: wa.createdAt.toISOString(),
+    };
+  });
+
+  return {
+    success: true,
+    count: formatted.length,
+    total,
+    page: Number(page) || 1,
+    limit: take,
+    data: formatted,
+  };
+}
+
+export async function getWorkerWhatsAppJobById(id: string) {
+  const item = await prisma.workforceWhatsAppInquiry.findUnique({
+    where: { id: String(id) },
+  });
+  if (!item) throw AppError.notFound('WhatsApp work inquiry not found');
+  return item;
+}
+
+export async function acceptWorkerWhatsAppJob(userId: string, id: string) {
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    select: { id: true, status: true, isDocVerified: true },
+  });
+  if (!worker) throw AppError.notFound('Worker not found');
+
+  const inquiry = await prisma.workforceWhatsAppInquiry.findUnique({
+    where: { id: String(id) },
+  });
+
+  if (!inquiry) throw AppError.notFound('WhatsApp work inquiry not found');
+  if (inquiry.status !== 'AVAILABLE') {
+    throw AppError.conflict(`This job is already ${inquiry.status.toLowerCase()}`, 'JOB_NOT_OPEN');
+  }
+
+  const updated = await prisma.workforceWhatsAppInquiry.update({
+    where: { id: String(id) },
+    data: {
+      status: 'ASSIGNED',
+      assignedWorkerId: worker.id,
+    },
+  });
+
+  return {
+    id: updated.id,
+    bookingNumber: updated.inquiryNumber,
+    status: updated.status,
+    assignedWorkerId: updated.assignedWorkerId,
+    customerName: updated.name,
+    customerPhone: updated.phone,
+    service: updated.service,
+    city: updated.city,
+    location: updated.location,
+    payoutAmount: updated.payoutAmount,
+  };
 }
 

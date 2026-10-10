@@ -267,22 +267,109 @@ export const updateLeadStatus = async (req: Request, res: Response, next: NextFu
   }
 };
 
-// ── Log WhatsApp Modal submission to Google Sheets ───────────────────────────
-// Called from the frontend browser when user clicks "Open WhatsApp Chat".
-// Runs server-side to avoid CORS issues with direct browser→Apps Script calls.
+// ── Helper: City Coordinate Geocoding for Workforce Leads ─────────────────
+function getCoordinatesForCity(city: string): { lat: number; lng: number } {
+  const c = (city || '').toLowerCase().trim();
+  if (c.includes('kolkata') || c.includes('howrah') || c.includes('calcutta')) return { lat: 22.5726, lng: 88.3639 };
+  if (c.includes('mumbai') || c.includes('thane') || c.includes('navi mumbai')) return { lat: 19.0760, lng: 72.8777 };
+  if (c.includes('bangalore') || c.includes('bengaluru')) return { lat: 12.9716, lng: 77.5946 };
+  if (c.includes('hyderabad') || c.includes('secunderabad')) return { lat: 17.3850, lng: 78.4867 };
+  if (c.includes('chennai') || c.includes('madras')) return { lat: 13.0827, lng: 80.2707 };
+  if (c.includes('pune')) return { lat: 18.5204, lng: 73.8567 };
+  if (c.includes('ahmedabad')) return { lat: 23.0225, lng: 72.5714 };
+  if (c.includes('jaipur')) return { lat: 26.9124, lng: 75.7873 };
+  if (c.includes('patna')) return { lat: 25.5941, lng: 85.1376 };
+  if (c.includes('lucknow')) return { lat: 26.8467, lng: 80.9462 };
+  if (c.includes('chandigarh')) return { lat: 30.7333, lng: 76.7794 };
+  if (c.includes('gurgaon') || c.includes('gurugram')) return { lat: 28.4595, lng: 77.0266 };
+  if (c.includes('noida')) return { lat: 28.5355, lng: 77.3910 };
+  if (c.includes('ghaziabad')) return { lat: 28.6692, lng: 77.4538 };
+  if (c.includes('faridabad')) return { lat: 28.4089, lng: 77.3178 };
+  // Default fallback: Delhi NCR center
+  return { lat: 28.6139, lng: 77.2090 };
+}
+
+// ── Log Workforce WhatsApp Modal submission to DB & Google Sheets ──────────────
 export const logWhatsAppMessage = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const {
-      name, phone, city, intent,
-      service, location, timing, count,
-      message, sourceUrl
+      name,
+      phone,
+      city,
+      intent,
+      service,
+      location,
+      timing,
+      count,
+      message,
+      sourceUrl,
+      payoutAmount,
     } = req.body;
 
-    // Respond immediately — don't make browser wait for the sheet append
-    res.status(200).json({ success: true, message: 'Logged' });
+    const inquiryNumber = `WF-${Math.floor(100000 + Math.random() * 900000)}`;
+    const coords = getCoordinatesForCity(city || location || '');
 
-    // Fire-and-forget after response sent
+    // Estimate realistic payout amount based on requested service
+    let estimatedPayout = 500.0;
+    const servLower = (service || '').toLowerCase();
+    if (servLower.includes('electric') || servLower.includes('plumb') || servLower.includes('ac')) {
+      estimatedPayout = 550.0;
+    } else if (servLower.includes('carpent') || servLower.includes('paint')) {
+      estimatedPayout = 600.0;
+    } else if (servLower.includes('clean') || servLower.includes('helper')) {
+      estimatedPayout = 450.0;
+    } else if (servLower.includes('load')) {
+      estimatedPayout = 500.0;
+    }
+
+    // Parse worker count if given in bulk
+    let parsedWorkersNeeded = 1;
+    if (count && typeof count === 'string') {
+      const match = count.match(/\d+/);
+      if (match) parsedWorkersNeeded = parseInt(match[0], 10);
+    }
+
+    // 1. Save Workforce WhatsApp Inquiry to Database
+    const inquiry = await prisma.workforceWhatsAppInquiry.create({
+      data: {
+        inquiryNumber,
+        intent: String(intent || 'HIRE'),
+        name: String(name || 'Anonymous'),
+        phone: String(phone || ''),
+        city: String(city || 'Delhi NCR'),
+        service: service ? String(service) : null,
+        location: location ? String(location) : null,
+        timing: timing ? String(timing) : null,
+        count: count ? String(count) : null,
+        message: message ? String(message) : null,
+        sourceUrl: sourceUrl ? String(sourceUrl) : null,
+        status: 'AVAILABLE',
+        latitude: coords.lat,
+        longitude: coords.lng,
+        payoutAmount: Number(payoutAmount) || estimatedPayout,
+        workersNeeded: parsedWorkersNeeded,
+      },
+    });
+
+    // 2. Dual-save to Lead table for CRM & Admin panel visibility
+    try {
+      await prisma.lead.create({
+        data: {
+          name: String(name || 'Anonymous'),
+          phone: String(phone || ''),
+          city: String(city || 'Delhi NCR'),
+          role: 'WORKFORCE_WHATSAPP_INQUIRY',
+          notes: `[${inquiryNumber}] Intent: ${intent || 'HIRE'} | Service: ${service || 'General'} | Loc: ${location || 'N/A'} | Timing: ${timing || 'N/A'}`,
+          status: 'PENDING',
+        },
+      });
+    } catch (dualErr) {
+      console.error('[leads.controller] Workforce lead dual-save warning:', dualErr);
+    }
+
+    // 3. Fire-and-forget to Google Sheets
     appendToSheet('WhatsApp_Messages', {
+      inquiryNumber,
       name:      name      || '',
       phone:     phone     || '',
       city:      city      || '',
@@ -293,8 +380,18 @@ export const logWhatsAppMessage = async (req: Request, res: Response, next: Next
       count:     count     || '',
       message:   message   || '',
       sourceUrl: sourceUrl || '',
-    }).catch(() => {});
+    }).catch((err: any) => console.error('[leads.controller] Sheet append error:', err));
 
+    // Respond with structured data
+    res.status(200).json({
+      success: true,
+      message: 'Workforce inquiry logged and saved to Database',
+      data: {
+        id: inquiry.id,
+        inquiryNumber: inquiry.inquiryNumber,
+        status: inquiry.status,
+      },
+    });
   } catch (error) {
     next(error);
   }

@@ -320,8 +320,8 @@ function validateParticipantEligibility(
 ) {
   if (participant.partyType === BidPartyType.DRIVER) {
     const driver = participant.driver;
-    if (!driver.isActive || !driver.isDocVerified) {
-      throw AppError.forbidden('Driver verification is required before bidding');
+    if (!driver.isActive) {
+      throw AppError.forbidden('Driver account is inactive');
     }
     if (driver.status !== 'AVAILABLE') {
       throw AppError.conflict('You must be available before bidding', 'DRIVER_NOT_AVAILABLE');
@@ -539,7 +539,7 @@ export async function listOpportunities(actor: Actor, query: OpportunitiesQuery)
   let vehicleTypes: any[] = [];
   if (participant.partyType === BidPartyType.DRIVER) {
     const driver = participant.driver;
-    if (!driver.isActive || !driver.isDocVerified || driver.status !== 'AVAILABLE' || driver.fleetMemberships.length > 0) {
+    if (!driver.isActive || driver.status !== 'AVAILABLE' || driver.fleetMemberships.length > 0) {
       return { opportunities: [], meta: { page, limit, total: 0, totalPages: 0 } };
     }
     if (driver.vehicle?.isActive) {
