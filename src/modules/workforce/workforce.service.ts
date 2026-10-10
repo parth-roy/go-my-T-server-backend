@@ -1750,11 +1750,20 @@ export async function getWalletTransactions(userId: string, page: number, limit:
 export async function getNearbyPins(userId: string, query: JobRadarQuery) {
   const { lat, lng, radiusKm } = query;
   
+  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+
   // Find nearby available Gig jobs
   const jobs = await prisma.gigJob.findMany({
     where: {
       status: 'PENDING',
-      assignments: { none: { worker: { userId } } }, // Exclude jobs already offered/assigned to this worker
+      assignments: {
+        none: {
+          OR: [
+            { worker: { userId } },
+            ...(worker ? [{ workerId: worker.id }] : []),
+          ],
+        },
+      },
     },
     select: {
       id: true,
@@ -1823,7 +1832,10 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       goodsType: job.description && !job.description.startsWith('{') ? (job.description.includes('—') ? job.description.split('—')[0].trim() : job.description) : (job.gigCategory || 'Service'),
       goodsWeightKg: null,
       goodsQuantity: 1,
-      distanceKm: haversineKm(lat, lng, job.locationLat, job.locationLng)
+      distanceKm: haversineKm(lat, lng, job.locationLat, job.locationLng),
+      scheduledSlot: job.scheduledSlot,
+      status: job.status,
+      createdAt: job.createdAt,
     }))
     .filter(job => job.distanceKm <= radiusKm);
 
@@ -1835,6 +1847,7 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       intent: { in: ['HIRE', 'BULK'] },
       NOT: [
         { notes: { contains: `[DECLINED:${userId}]` } },
+        ...(worker ? [{ notes: { contains: `[DECLINED:${worker.id}]` } }] : []),
         { notes: { contains: '[CANCELLED]' } },
       ],
     },
@@ -1848,7 +1861,12 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       if (wa.status !== 'AVAILABLE' || wa.assignedWorkerId != null) return false;
 
       // 2. Cancellation / decline check
-      if (wa.notes && (wa.notes.includes('[CANCELLED]') || wa.notes.includes(`[DECLINED:${userId}]`))) {
+      if (
+        wa.notes &&
+        (wa.notes.includes('[CANCELLED]') ||
+          wa.notes.includes(`[DECLINED:${userId}]`) ||
+          (worker && wa.notes.includes(`[DECLINED:${worker.id}]`)))
+      ) {
         return false;
       }
 
@@ -1894,6 +1912,9 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
         goodsQuantity: 1,
         distanceKm: dist,
         source: 'WHATSAPP',
+        scheduledSlot: wa.timing,
+        status: wa.status,
+        createdAt: wa.createdAt,
       };
     }).filter((job) => job.distanceKm <= radiusKm);
 
@@ -2273,6 +2294,11 @@ export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
   const take = Math.min(Number(limit) || 50, 100);
   const skip = ((Number(page) || 1) - 1) * take;
 
+  let worker: { id: string } | null = null;
+  if (userId) {
+    worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  }
+
   const where: any = {};
   if (status && status !== 'ALL') {
     where.status = String(status);
@@ -2282,16 +2308,11 @@ export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
 
   if (where.status === 'AVAILABLE') {
     where.assignedWorkerId = null;
-    if (userId) {
-      where.NOT = [
-        { notes: { contains: `[DECLINED:${userId}]` } },
-        { notes: { contains: '[CANCELLED]' } },
-      ];
-    } else {
-      where.NOT = [
-        { notes: { contains: '[CANCELLED]' } },
-      ];
-    }
+    where.NOT = [
+      { notes: { contains: '[CANCELLED]' } },
+      ...(userId ? [{ notes: { contains: `[DECLINED:${userId}]` } }] : []),
+      ...(worker ? [{ notes: { contains: `[DECLINED:${worker.id}]` } }] : []),
+    ];
   }
 
   if (query?.intent) {
@@ -2322,7 +2343,12 @@ export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
     .filter((wa) => {
       if (where.status === 'AVAILABLE') {
         if (wa.status !== 'AVAILABLE' || wa.assignedWorkerId != null) return false;
-        if (wa.notes && (wa.notes.includes('[CANCELLED]') || (userId && wa.notes.includes(`[DECLINED:${userId}]`)))) {
+        if (
+          wa.notes &&
+          (wa.notes.includes('[CANCELLED]') ||
+            (userId && wa.notes.includes(`[DECLINED:${userId}]`)) ||
+            (worker && wa.notes.includes(`[DECLINED:${worker.id}]`)))
+        ) {
           return false;
         }
         if (isJobExpiredOrPast({
