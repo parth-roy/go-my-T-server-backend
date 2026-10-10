@@ -129,6 +129,7 @@ export type OnboardingDocumentsInput = z.infer<typeof onboardingDocumentsSchema>
 
 export const updateProfileInfoSchema = z.object({
   name: z.string().min(1).max(100).trim().optional(),
+  email: z.string().email().trim().optional().or(z.literal('')),
   dob: z.string().trim().optional(),
   gender: z.string().trim().optional(),
   profileImageUrl: z.string().url().trim().optional().or(z.literal('')),

@@ -915,7 +915,13 @@ export async function updateProfileInfo(
   const driver = await _getOrCreateDriver(userId);
 
   const userUpdateData: any = {};
-  if (input.name !== undefined) userUpdateData.name = input.name;
+  if (input.name !== undefined) {
+    userUpdateData.name = input.name;
+    userUpdateData.profileComplete = true;
+  }
+  if (input.email !== undefined && input.email.trim()) {
+    userUpdateData.email = input.email.trim();
+  }
   if (input.profileImageUrl !== undefined) {
     userUpdateData.profileImageUrl = input.profileImageUrl || null;
   }
@@ -938,6 +944,7 @@ export async function updateProfileInfo(
       select: {
         id: true,
         name: true,
+        email: true,
         phone: true,
         profileImageUrl: true,
         profileComplete: true,
@@ -959,6 +966,7 @@ export async function updateProfileInfo(
   return {
     user: {
       name: updatedUser.name ?? null,
+      email: updatedUser.email ?? null,
       phone: updatedUser.phone ?? null,
       dob: formattedDob,
       gender: input.gender ?? null,
