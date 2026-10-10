@@ -2159,6 +2159,9 @@ export async function getDriverBids(q: DriverBidsQuery) {
       { booking: { stops: { some: { address: { contains: s, mode: 'insensitive' } } } } },
       { driver: { user: { name: { contains: s, mode: 'insensitive' } } } },
       { driver: { user: { phone: { contains: s } } } },
+      { fleetOwner: { companyName: { contains: s, mode: 'insensitive' } } },
+      { fleetOwner: { user: { name: { contains: s, mode: 'insensitive' } } } },
+      { fleetOwner: { user: { phone: { contains: s } } } },
       { booking: { customer: { name: { contains: s, mode: 'insensitive' } } } },
       { booking: { customer: { phone: { contains: s } } } },
     ];
@@ -2188,7 +2191,7 @@ export async function getDriverBids(q: DriverBidsQuery) {
             totalFare: true,
             grandTotal: true,
             status: true,
-            pickupDate: true,
+            createdAt: true,
             vehicleType: true,
             customer: { select: { id: true, name: true, phone: true } },
           },
@@ -2226,7 +2229,7 @@ export async function getDriverBids(q: DriverBidsQuery) {
     prisma.marketplaceBid.groupBy({
       by: ['status'],
       _count: { id: true },
-    }),
+    }).catch(() => []),
   ]);
 
   const stats = {
@@ -2239,43 +2242,48 @@ export async function getDriverBids(q: DriverBidsQuery) {
     closed: 0,
   };
 
-  statusCounts.forEach((sc) => {
-    stats.total += sc._count.id;
-    const st = sc.status.toLowerCase() as keyof typeof stats;
-    if (st in stats) {
-      stats[st] = sc._count.id;
-    }
-  });
+  if (Array.isArray(statusCounts)) {
+    statusCounts.forEach((sc: any) => {
+      const count = sc?._count?.id ?? 0;
+      stats.total += count;
+      const st = String(sc?.status ?? '').toLowerCase() as keyof typeof stats;
+      if (st && st in stats) {
+        stats[st] = count;
+      }
+    });
+  }
 
   return {
     total,
     page: q.page,
     limit: q.limit,
-    totalPages: Math.ceil(total / q.limit),
+    totalPages: Math.ceil(total / q.limit) || 1,
     stats,
     data: bids.map((b) => {
-      const latestRevision = b.revisions[0] ?? null;
-      const dropoff = b.booking.stops[b.booking.stops.length - 1]?.address ?? '—';
+      const latestRevision = b.revisions?.[0] ?? null;
+      const dropoff = b.booking?.stops?.length
+        ? b.booking.stops[b.booking.stops.length - 1]?.address ?? '—'
+        : '—';
       return {
         id: b.id,
         bookingId: b.bookingId,
-        bookingNumber: b.booking.bookingNumber,
-        pickupAddress: b.booking.pickupAddress,
+        bookingNumber: b.booking?.bookingNumber ?? '—',
+        pickupAddress: b.booking?.pickupAddress ?? '—',
         dropoffAddress: dropoff,
-        bookingStatus: b.booking.status,
-        bookingEstimatedPrice: Number(b.booking.grandTotal ?? b.booking.totalFare ?? 0),
-        pickupDate: b.booking.pickupDate,
-        customerName: b.booking.customer.name,
-        customerPhone: b.booking.customer.phone,
+        bookingStatus: b.booking?.status ?? 'UNKNOWN',
+        bookingEstimatedPrice: Number(b.booking?.grandTotal ?? b.booking?.totalFare ?? 0),
+        pickupDate: b.booking?.createdAt ? b.booking.createdAt.toISOString() : undefined,
+        customerName: b.booking?.customer?.name ?? 'Customer',
+        customerPhone: b.booking?.customer?.phone ?? '',
 
-        driverId: b.driverId,
-        driverName: b.driver?.user.name ?? 'Driver Partner',
-        driverPhone: b.driver?.user.phone ?? '',
+        driverId: b.driverId ?? null,
+        driverName: b.driver?.user?.name ?? b.fleetOwner?.companyName ?? 'Driver / Partner',
+        driverPhone: b.driver?.user?.phone ?? b.fleetOwner?.user?.phone ?? '',
         driverRating: b.driver?.rating ?? 0,
         driverTotalTrips: b.driver?.totalTrips ?? 0,
         isDocVerified: b.driver?.isDocVerified ?? false,
         vehicleReg: b.driver?.vehicle?.registrationNo ?? '—',
-        vehicleType: latestRevision?.vehicleType ?? b.driver?.vehicle?.type ?? b.booking.vehicleType,
+        vehicleType: latestRevision?.vehicleType ?? b.driver?.vehicle?.type ?? b.booking?.vehicleType,
 
         fleetOwnerCompany: b.fleetOwner?.companyName ?? null,
 
@@ -2297,7 +2305,7 @@ export async function getDriverBids(q: DriverBidsQuery) {
               createdAt: latestRevision.createdAt,
             }
           : null,
-        awardDetails: b.awards[0] ?? null,
+        awardDetails: b.awards?.[0] ?? null,
         submittedAt: b.submittedAt,
         withdrawnAt: b.withdrawnAt,
         rejectedAt: b.rejectedAt,
@@ -2366,6 +2374,11 @@ export async function exportDriverBidsCsv() {
           vehicle: { select: { registrationNo: true, type: true } },
         },
       },
+      fleetOwner: {
+        include: {
+          user: { select: { name: true, phone: true } },
+        },
+      },
       revisions: {
         orderBy: { revisionNumber: 'desc' as const },
         take: 1,
@@ -2375,17 +2388,17 @@ export async function exportDriverBidsCsv() {
 
   const header = 'Bid ID,Booking Number,Driver Name,Driver Phone,Vehicle Reg,Vehicle Type,Customer Name,Customer Phone,Quoted Amount (INR),Customer Total (INR),Status,Pickup Commitment,Submitted At\n';
   const rows = bids.map((b) => {
-    const rev = b.revisions[0];
-    const dropoff = b.booking.stops[0]?.address || '—';
+    const rev = b.revisions?.[0];
+    const dropoff = b.booking?.stops?.[0]?.address || '—';
     return [
       `"${b.id}"`,
-      `"${b.booking.bookingNumber}"`,
-      `"${b.driver?.user.name || '—'}"`,
-      `"${b.driver?.user.phone || '—'}"`,
+      `"${b.booking?.bookingNumber || '—'}"`,
+      `"${b.driver?.user?.name || b.fleetOwner?.companyName || '—'}"`,
+      `"${b.driver?.user?.phone || b.fleetOwner?.user?.phone || '—'}"`,
       `"${b.driver?.vehicle?.registrationNo || '—'}"`,
       `"${rev?.vehicleType || b.driver?.vehicle?.type || '—'}"`,
-      `"${b.booking.customer.name || '—'}"`,
-      `"${b.booking.customer.phone || '—'}"`,
+      `"${b.booking?.customer?.name || '—'}"`,
+      `"${b.booking?.customer?.phone || '—'}"`,
       rev?.quotedAmount ? Number(rev.quotedAmount).toFixed(2) : '0.00',
       rev?.customerTotal ? Number(rev.customerTotal).toFixed(2) : '0.00',
       `"${b.status}"`,
