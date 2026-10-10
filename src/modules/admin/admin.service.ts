@@ -15,7 +15,7 @@ import type {
   BookingsQuery, UsersQuery, DriversQuery, FleetQuery, FinanceQuery,
   TicketsQuery, AssignDriverInput, CancelBookingInput, RefundInput,
   WalletCreditInput, DocStatusInput, DocVerifiedInput, PricingUpdateInput,
-  AnnouncementInput, BroadcastInput, SubscriptionUpdate, UlipLogsQuery,
+  AnnouncementInput, BroadcastInput, SubscriptionUpdate, UlipLogsQuery, DriverBidsQuery,
 } from './admin.schema';
 import { cancelBookingBySystem, assertTransition } from '../booking/booking.service';
 
@@ -2117,5 +2117,285 @@ export async function bulkHardDeleteFleetTrucks(ids: string[], reason = 'Admin b
   logger.info(`[Admin] Bulk hard deleted ${deleted.length} fleet trucks, skipped ${skipped.length} — reason: ${reason}`);
   return { deletedCount: deleted.length, skippedCount: skipped.length, skipped };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRIVER BIDS / MARKETPLACE MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getDriverBids(q: DriverBidsQuery) {
+  const where: Prisma.MarketplaceBidWhereInput = {};
+
+  if (q.status && q.status !== 'all') {
+    where.status = q.status as any;
+  }
+
+  if (q.driverId) {
+    where.driverId = q.driverId;
+  }
+
+  if (q.bookingId) {
+    where.bookingId = q.bookingId;
+  }
+
+  if (q.vehicleType && q.vehicleType !== 'all-vt') {
+    where.revisions = {
+      some: {
+        vehicleType: q.vehicleType as any,
+      },
+    };
+  }
+
+  if (q.from || q.to) {
+    where.submittedAt = {};
+    if (q.from) where.submittedAt.gte = new Date(q.from);
+    if (q.to) where.submittedAt.lte = new Date(q.to);
+  }
+
+  if (q.search) {
+    const s = q.search.trim();
+    where.OR = [
+      { booking: { bookingNumber: { contains: s, mode: 'insensitive' } } },
+      { booking: { pickupAddress: { contains: s, mode: 'insensitive' } } },
+      { booking: { stops: { some: { address: { contains: s, mode: 'insensitive' } } } } },
+      { driver: { user: { name: { contains: s, mode: 'insensitive' } } } },
+      { driver: { user: { phone: { contains: s } } } },
+      { booking: { customer: { name: { contains: s, mode: 'insensitive' } } } },
+      { booking: { customer: { phone: { contains: s } } } },
+    ];
+  }
+
+  const orderBy: Prisma.MarketplaceBidOrderByWithRelationInput = {};
+  if (q.sortBy === 'submittedAt') {
+    orderBy.submittedAt = q.sortOrder === 'asc' ? 'asc' : 'desc';
+  } else {
+    orderBy.submittedAt = 'desc';
+  }
+
+  const [total, bids, statusCounts] = await Promise.all([
+    prisma.marketplaceBid.count({ where }),
+    prisma.marketplaceBid.findMany({
+      where,
+      skip: (q.page - 1) * q.limit,
+      take: q.limit,
+      orderBy,
+      include: {
+        booking: {
+          select: {
+            id: true,
+            bookingNumber: true,
+            pickupAddress: true,
+            stops: { select: { address: true, sequence: true }, orderBy: { sequence: 'asc' as const } },
+            totalFare: true,
+            grandTotal: true,
+            status: true,
+            pickupDate: true,
+            vehicleType: true,
+            customer: { select: { id: true, name: true, phone: true } },
+          },
+        },
+        driver: {
+          select: {
+            id: true,
+            rating: true,
+            totalTrips: true,
+            isDocVerified: true,
+            user: { select: { id: true, name: true, phone: true } },
+            vehicle: true,
+          },
+        },
+        fleetOwner: {
+          select: {
+            id: true,
+            companyName: true,
+            user: { select: { id: true, name: true, phone: true } },
+          },
+        },
+        revisions: {
+          orderBy: { revisionNumber: 'desc' as const },
+          take: 3,
+          include: {
+            author: { select: { id: true, name: true } },
+          },
+        },
+        awards: {
+          orderBy: { createdAt: 'desc' as const },
+          take: 1,
+        },
+      },
+    }),
+    prisma.marketplaceBid.groupBy({
+      by: ['status'],
+      _count: { id: true },
+    }),
+  ]);
+
+  const stats = {
+    total: 0,
+    open: 0,
+    awarded: 0,
+    rejected: 0,
+    withdrawn: 0,
+    expired: 0,
+    closed: 0,
+  };
+
+  statusCounts.forEach((sc) => {
+    stats.total += sc._count.id;
+    const st = sc.status.toLowerCase() as keyof typeof stats;
+    if (st in stats) {
+      stats[st] = sc._count.id;
+    }
+  });
+
+  return {
+    total,
+    page: q.page,
+    limit: q.limit,
+    totalPages: Math.ceil(total / q.limit),
+    stats,
+    data: bids.map((b) => {
+      const latestRevision = b.revisions[0] ?? null;
+      const dropoff = b.booking.stops[b.booking.stops.length - 1]?.address ?? '—';
+      return {
+        id: b.id,
+        bookingId: b.bookingId,
+        bookingNumber: b.booking.bookingNumber,
+        pickupAddress: b.booking.pickupAddress,
+        dropoffAddress: dropoff,
+        bookingStatus: b.booking.status,
+        bookingEstimatedPrice: Number(b.booking.grandTotal ?? b.booking.totalFare ?? 0),
+        pickupDate: b.booking.pickupDate,
+        customerName: b.booking.customer.name,
+        customerPhone: b.booking.customer.phone,
+
+        driverId: b.driverId,
+        driverName: b.driver?.user.name ?? 'Driver Partner',
+        driverPhone: b.driver?.user.phone ?? '',
+        driverRating: b.driver?.rating ?? 0,
+        driverTotalTrips: b.driver?.totalTrips ?? 0,
+        isDocVerified: b.driver?.isDocVerified ?? false,
+        vehicleReg: b.driver?.vehicle?.registrationNo ?? '—',
+        vehicleType: latestRevision?.vehicleType ?? b.driver?.vehicle?.type ?? b.booking.vehicleType,
+
+        fleetOwnerCompany: b.fleetOwner?.companyName ?? null,
+
+        status: b.status,
+        revisionCount: b.latestRevisionNumber,
+        latestRevision: latestRevision
+          ? {
+              id: latestRevision.id,
+              revisionNumber: latestRevision.revisionNumber,
+              quotedAmount: Number(latestRevision.quotedAmount),
+              gstAmount: Number(latestRevision.gstAmount),
+              customerTotal: Number(latestRevision.customerTotal),
+              pickupCommitmentAt: latestRevision.pickupCommitmentAt,
+              transitMinutes: latestRevision.transitMinutes,
+              vehicleType: latestRevision.vehicleType,
+              inclusions: latestRevision.inclusions,
+              exclusions: latestRevision.exclusions,
+              note: latestRevision.note,
+              createdAt: latestRevision.createdAt,
+            }
+          : null,
+        awardDetails: b.awards[0] ?? null,
+        submittedAt: b.submittedAt,
+        withdrawnAt: b.withdrawnAt,
+        rejectedAt: b.rejectedAt,
+        closedAt: b.closedAt,
+      };
+    }),
+  };
+}
+
+export async function getDriverBidById(id: string) {
+  const bid = await prisma.marketplaceBid.findUnique({
+    where: { id },
+    include: {
+      booking: {
+        include: {
+          customer: { select: { id: true, name: true, phone: true } },
+          stops: { orderBy: { sequence: 'asc' as const } },
+        },
+      },
+      driver: {
+        include: {
+          user: { select: { id: true, name: true, phone: true } },
+          vehicle: true,
+        },
+      },
+      fleetOwner: {
+        include: {
+          user: { select: { id: true, name: true, phone: true } },
+        },
+      },
+      revisions: {
+        orderBy: { revisionNumber: 'desc' as const },
+        include: { author: { select: { id: true, name: true } } },
+      },
+      messages: {
+        orderBy: { createdAt: 'asc' as const },
+        include: { sender: { select: { id: true, name: true } } },
+      },
+      awards: true,
+    },
+  });
+
+  if (!bid) {
+    throw AppError.notFound('Marketplace bid not found');
+  }
+
+  return bid;
+}
+
+export async function exportDriverBidsCsv() {
+  const bids = await prisma.marketplaceBid.findMany({
+    orderBy: { submittedAt: 'desc' },
+    take: 1000,
+    include: {
+      booking: {
+        select: {
+          bookingNumber: true,
+          pickupAddress: true,
+          stops: { select: { address: true }, orderBy: { sequence: 'desc' as const }, take: 1 },
+          customer: { select: { name: true, phone: true } },
+        },
+      },
+      driver: {
+        include: {
+          user: { select: { name: true, phone: true } },
+          vehicle: { select: { registrationNo: true, type: true } },
+        },
+      },
+      revisions: {
+        orderBy: { revisionNumber: 'desc' as const },
+        take: 1,
+      },
+    },
+  });
+
+  const header = 'Bid ID,Booking Number,Driver Name,Driver Phone,Vehicle Reg,Vehicle Type,Customer Name,Customer Phone,Quoted Amount (INR),Customer Total (INR),Status,Pickup Commitment,Submitted At\n';
+  const rows = bids.map((b) => {
+    const rev = b.revisions[0];
+    const dropoff = b.booking.stops[0]?.address || '—';
+    return [
+      `"${b.id}"`,
+      `"${b.booking.bookingNumber}"`,
+      `"${b.driver?.user.name || '—'}"`,
+      `"${b.driver?.user.phone || '—'}"`,
+      `"${b.driver?.vehicle?.registrationNo || '—'}"`,
+      `"${rev?.vehicleType || b.driver?.vehicle?.type || '—'}"`,
+      `"${b.booking.customer.name || '—'}"`,
+      `"${b.booking.customer.phone || '—'}"`,
+      rev?.quotedAmount ? Number(rev.quotedAmount).toFixed(2) : '0.00',
+      rev?.customerTotal ? Number(rev.customerTotal).toFixed(2) : '0.00',
+      `"${b.status}"`,
+      rev?.pickupCommitmentAt ? new Date(rev.pickupCommitmentAt).toISOString() : '—',
+      new Date(b.submittedAt).toISOString(),
+    ].join(',');
+  });
+
+  return header + rows.join('\n');
+}
+
 
 

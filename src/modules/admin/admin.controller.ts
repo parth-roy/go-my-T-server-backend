@@ -10,6 +10,7 @@ import {
   subscriptionUpdateSchema, ulipLogsQuerySchema, userStatusSchema,
   fleetStatusSchema, ticketStatusSchema, ticketReplySchema,
   deleteEntitySchema, driverStatusOverrideSchema, bulkDeleteSchema,
+  driverBidsQuerySchema,
 } from './admin.schema';
 import { prisma } from '@shared/db/prisma';
 
@@ -674,6 +675,32 @@ export const bulkHardDeleteFleetTrucks = async (req: Request, res: Response, nex
     }
 
     ok(res, await adminService.bulkHardDeleteFleetTrucks(ids, input.reason));
+  } catch (e) { next(e); }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DRIVER BIDS / MARKETPLACE
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const listDriverBids = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const q = driverBidsQuerySchema.parse(req.query);
+    ok(res, await adminService.getDriverBids(q));
+  } catch (e) { next(e); }
+};
+
+export const getDriverBidById = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    ok(res, await adminService.getDriverBidById(p(req.params.id)));
+  } catch (e) { next(e); }
+};
+
+export const exportDriverBids = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const csv = await adminService.exportDriverBidsCsv();
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="driver-bids.csv"');
+    res.send(csv);
   } catch (e) { next(e); }
 };
 

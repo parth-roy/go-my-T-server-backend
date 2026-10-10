@@ -225,3 +225,16 @@ export const VerifyWorkerDocumentSchema = z.object({
   reason: z.string().optional(),
 });
 export type VerifyWorkerDocumentInput = z.infer<typeof VerifyWorkerDocumentSchema>;
+
+export const driverBidsQuerySchema = paginationSchema.extend({
+  status: z.string().optional(),
+  vehicleType: z.string().optional(),
+  search: z.string().optional(),
+  driverId: z.string().optional(),
+  bookingId: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  sortBy: z.enum(['submittedAt', 'quotedAmount', 'customerTotal']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
+});
+export type DriverBidsQuery = z.infer<typeof driverBidsQuerySchema>;

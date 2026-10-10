@@ -44,6 +44,11 @@ adminRouter.post('/bookings/:id/assign-agent-driver', ctrl.assignAgentDriver);
 adminRouter.post('/bookings/:id/cancel',              ctrl.cancelBooking);
 adminRouter.post('/bookings/:id/refund',              ctrl.refundBooking);
 
+// ── Driver Bids (Marketplace) ──────────────────────────────────────────
+adminRouter.get('/driver-bids/export',                ctrl.exportDriverBids); // BEFORE /:id
+adminRouter.get('/driver-bids',                       ctrl.listDriverBids);
+adminRouter.get('/driver-bids/:id',                   ctrl.getDriverBidById);
+
 // ── Manual / Offline Bookings ─────────────────────────────────────────────────
 import * as manualBookingCtrl from '@modules/manual-booking/manual-booking.controller';
 adminRouter.get('/manual-bookings/export',            manualBookingCtrl.exportManualBookingsCsv);  // BEFORE /:id

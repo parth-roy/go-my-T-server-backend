@@ -107,9 +107,10 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
   let weeklyEarnings = 0;
   let lastWeekEarnings = 0;
 
+  let txns: Array<{ amount: number; createdAt: Date }> = [];
   const wallet = await prisma.driverWallet.findUnique({ where: { driverId: driver.id } });
   if (wallet) {
-    const txns = await prisma.driverWalletTransaction.findMany({
+    txns = await prisma.driverWalletTransaction.findMany({
       where: {
         walletId: wallet.id,
         type: 'CREDIT',
@@ -154,6 +155,33 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
     ? Math.max(0, Math.ceil((new Date(sub!.endDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
     : 0;
 
+  // 7-day daily earnings distribution
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dailyEarnings: Array<{ day: string; date: string; amount: number; isToday: boolean }> = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+    const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    const isToday = i === 0;
+    const dayLabel = isToday ? 'Today' : dayNames[d.getDay()];
+
+    let dayAmount = 0;
+    if (wallet) {
+      for (const tx of txns) {
+        if (tx.createdAt >= dayStart && tx.createdAt < dayEnd) {
+          dayAmount += tx.amount;
+        }
+      }
+    }
+
+    dailyEarnings.push({
+      day: dayLabel,
+      date: dayStart.toISOString().slice(0, 10),
+      amount: dayAmount,
+      isToday,
+    });
+  }
+
   const profile = _formatDriverProfile(driver);
   return {
     ...profile,
@@ -172,6 +200,7 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
     weeklyEarnings,
     todayTrend: calculateTrend(todayEarnings, yesterdayEarnings),
     weeklyTrend: calculateTrend(weeklyEarnings, lastWeekEarnings),
+    dailyEarnings,
   };
 }
 
