@@ -202,7 +202,6 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
       customer: {
         select: {
           name: true,
-          businessName: true,
         },
       },
       stops: {
@@ -292,7 +291,7 @@ export async function getMyDriverProfile(userId: string): Promise<object> {
     return {
       id: b.id,
       customerName: b.customer?.name || 'Verified Shipper',
-      company: b.customer?.businessName || b.gstBusinessName || 'Enterprise Shipper',
+      company: b.gstBusinessName || (b.customer?.name ? `${b.customer.name} (Client)` : 'Enterprise Shipper'),
       rating: ratingVal,
       date: b.createdAt.toISOString(),
       route: `${pickupArea} ➔ ${dropArea}`,
