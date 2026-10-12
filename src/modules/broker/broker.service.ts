@@ -1,7 +1,7 @@
 import { prisma } from '@shared/db/prisma';
 import { appendToGMTSheet } from '@shared/services/googleSheets.service';
 import { AppError } from '@shared/errors/AppError';
-import { UserRole, BrokerBookingStatus, BrokerQuoteStatus, BountySettlementStatus } from '@prisma/client';
+import { UserRole, BrokerBookingStatus, BrokerQuoteStatus, BountySettlementStatus, VehicleType } from '@prisma/client';
 import { assertBrokerTransition } from '../booking/booking.transition';
 import {
   PostBrokerLoadInput,
@@ -307,9 +307,15 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
     ];
   }
 
-  // Vehicle type filter
+  // Vehicle type filter — validate against the Prisma enum to avoid PrismaClientValidationError
+  // for stale/unrecognised values (e.g. "TRUCK_22FT") sent by older clients.
   if (vehicleType && vehicleType !== 'all') {
-    where.vehicleType = vehicleType;
+    const validVehicleTypes = Object.values(VehicleType) as string[];
+    if (validVehicleTypes.includes(vehicleType)) {
+      where.vehicleType = vehicleType as VehicleType;
+    }
+    // If the value is not a valid enum member, silently drop the filter so the
+    // full load list is still returned rather than crashing the request.
   }
 
   // Budget range filter
