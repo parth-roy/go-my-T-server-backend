@@ -38,12 +38,21 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
     }
   }
 
-  // Compute slaExpiresAt from urgencyWindow if provided
+  // Compute slaExpiresAt from pickupDateTime or urgencyWindow if provided
   let slaExpiresAt: Date | null = null;
-  if (data.urgencyWindow && data.urgencyWindow !== 'FLEXIBLE' && data.slaExpiresAt) {
-    slaExpiresAt = new Date(data.slaExpiresAt);
+  if ((data as any).pickupDateTime) {
+    slaExpiresAt = new Date((data as any).pickupDateTime);
   } else if (data.slaExpiresAt) {
     slaExpiresAt = new Date(data.slaExpiresAt);
+  } else if (data.urgencyWindow && data.urgencyWindow !== 'FLEXIBLE') {
+    const hoursMap: Record<string, number> = {
+      UNDER_2_HOURS: 2,
+      UNDER_4_HOURS: 4,
+      UNDER_24_HOURS: 24,
+      TWO_DAYS: 48,
+    };
+    const hours = hoursMap[data.urgencyWindow];
+    if (hours) slaExpiresAt = new Date(Date.now() + hours * 3600 * 1000);
   }
 
   const load = await prisma.brokerLoad.create({
@@ -278,7 +287,7 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
       ...(where.AND || []),
       {
         OR: [
-          { slaExpiresAt: null },           // No timer set = always visible
+          { slaExpiresAt: null, createdAt: { gt: new Date(Date.now() - 72 * 3600 * 1000) } }, // No timer set = expires after 72 hours
           { slaExpiresAt: { gt: new Date() } }, // Timer not yet expired
         ],
       },
@@ -355,8 +364,29 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
     prisma.brokerLoad.count({ where })
   ]);
 
+  const formattedLoads = loads.map((l) => {
+    let pickupTime = 'Flexible / Standard';
+    if (l.urgencyWindow === 'UNDER_2_HOURS') {
+      pickupTime = 'Immediate (Within 1-2 Hours)';
+    } else if (l.urgencyWindow === 'UNDER_4_HOURS') {
+      pickupTime = 'Within 4 Hours';
+    } else if (l.urgencyWindow === 'UNDER_24_HOURS') {
+      pickupTime = 'Today (Within 24 Hours)';
+    } else if (l.urgencyWindow === 'TWO_DAYS') {
+      pickupTime = 'Within 2 Days';
+    } else if (l.urgencyWindow === 'FLEXIBLE') {
+      pickupTime = 'Flexible / Standard';
+    } else if (l.slaExpiresAt) {
+      pickupTime = `Required by ${new Date(l.slaExpiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+    }
+    return {
+      ...l,
+      pickupTime,
+    };
+  });
+
   return {
-    loads,
+    loads: formattedLoads,
     meta: { page, limit, total, totalPages: Math.ceil(total / limit) }
   };
 }

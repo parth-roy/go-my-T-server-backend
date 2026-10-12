@@ -18,6 +18,8 @@ export const postBrokerLoadSchema = z.object({
   contractDuration: z.string().optional(),
   urgencyWindow: z.enum(['UNDER_2_HOURS', 'UNDER_4_HOURS', 'UNDER_24_HOURS', 'TWO_DAYS', 'FLEXIBLE']).optional().default('FLEXIBLE'),
   slaExpiresAt: z.string().datetime().optional(), // ISO string; service will convert to Date
+  pickupTime: z.string().optional(),
+  pickupDateTime: z.union([z.string(), z.date()]).optional(),
 });
 
 export const submitBrokerQuoteSchema = z.object({

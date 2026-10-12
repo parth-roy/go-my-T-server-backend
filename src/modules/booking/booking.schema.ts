@@ -57,6 +57,8 @@ export const createBookingSchema = z.object({
     contractDuration: z.string().max(100).optional(),
     urgencyWindow: z.enum(["UNDER_2_HOURS", "UNDER_4_HOURS", "UNDER_24_HOURS", "TWO_DAYS", "FLEXIBLE"]).optional().default("FLEXIBLE"),
     slaExpiresAt: z.string().datetime().optional().nullable(),
+    pickupTime: z.string().optional(),
+    pickupDateTime: z.union([z.string(), z.date()]).optional().nullable(),
     // Extra fields sent by app but not stored — accepted to avoid validation errors
     dropLat: z.number().optional(),
     dropLng: z.number().optional(),

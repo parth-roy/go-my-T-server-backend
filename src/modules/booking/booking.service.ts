@@ -292,7 +292,19 @@ export async function createBooking(customerId: string, data: CreateBookingInput
                     truckCount: bookingData.truckCount || 1,
                     contractDuration: bookingData.contractDuration || null,
                     urgencyWindow: (bookingData.urgencyWindow as any) || "FLEXIBLE",
-                    slaExpiresAt: bookingData.slaExpiresAt ? new Date(bookingData.slaExpiresAt) : null,
+                    slaExpiresAt: bookingData.slaExpiresAt
+                        ? new Date(bookingData.slaExpiresAt)
+                        : (bookingData as any).pickupDateTime
+                            ? new Date((bookingData as any).pickupDateTime)
+                            : bookingData.urgencyWindow === 'UNDER_2_HOURS'
+                                ? new Date(Date.now() + 2 * 3600 * 1000)
+                                : bookingData.urgencyWindow === 'UNDER_4_HOURS'
+                                    ? new Date(Date.now() + 4 * 3600 * 1000)
+                                    : bookingData.urgencyWindow === 'UNDER_24_HOURS'
+                                        ? new Date(Date.now() + 24 * 3600 * 1000)
+                                        : bookingData.urgencyWindow === 'TWO_DAYS'
+                                            ? new Date(Date.now() + 48 * 3600 * 1000)
+                                            : null,
                     hasLoadingService: data.laborRequired || data.hasLoadingService,
                     laborRequired: data.laborRequired,
                     laborersCount: data.laborRequired ? data.laborersCount : null,

@@ -418,6 +418,8 @@ export const logGMTWhatsAppMessage = async (req: Request, res: Response, next: N
       query,
       sourceUrl,
       notes,
+      pickupTime,
+      pickupDateTime,
       ...rest
     } = req.body;
 
@@ -427,6 +429,10 @@ export const logGMTWhatsAppMessage = async (req: Request, res: Response, next: N
       : `WA-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const resolvedCity = city || partnerCity || enterpriseCity || pickupCity || null;
+    const effectiveTiming = pickupTime || (pickupDateTime ? String(pickupDateTime) : null);
+    const effectiveNotes = effectiveTiming
+      ? `Pickup Timing: ${effectiveTiming}${notes ? ` | ${notes}` : ''}`
+      : notes ? String(notes) : null;
 
     // 1. Save WhatsApp inquiry into PostgreSQL via Prisma
     const inquiry = await prisma.whatsAppInquiry.create({
@@ -447,7 +453,7 @@ export const logGMTWhatsAppMessage = async (req: Request, res: Response, next: N
         bookingNumber: bookingNumber ? String(bookingNumber) : inquiryNumber,
         query: query ? String(query) : null,
         sourceUrl: sourceUrl ? String(sourceUrl) : null,
-        notes: notes ? String(notes) : null,
+        notes: effectiveNotes,
         status: 'AVAILABLE',
       },
     });
@@ -464,7 +470,7 @@ export const logGMTWhatsAppMessage = async (req: Request, res: Response, next: N
           companyName: companyName ? String(companyName) : null,
           vehicleType: vehicleType ? String(vehicleType) : null,
           vehicleNumber: vehicleNumber ? String(vehicleNumber) : null,
-          notes: `[${inquiryNumber}] Intent: ${intent || 'N/A'}${pickupCity ? ` | Route: ${pickupCity} -> ${dropCity || ''}` : ''}${goodsType ? ` | Goods: ${goodsType}` : ''}${query ? ` | Query: ${query}` : ''}`,
+          notes: `[${inquiryNumber}] Intent: ${intent || 'N/A'}${effectiveTiming ? ` | Timing: ${effectiveTiming}` : ''}${pickupCity ? ` | Route: ${pickupCity} -> ${dropCity || ''}` : ''}${goodsType ? ` | Goods: ${goodsType}` : ''}${query ? ` | Query: ${query}` : ''}`,
           status: 'PENDING',
         },
       });
@@ -525,6 +531,13 @@ export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: 
       where.status = String(status);
     }
 
+    // Only show active/non-expired WhatsApp leads to drivers (leads older than 48 hours expire automatically)
+    if (!status || status === 'AVAILABLE') {
+      where.createdAt = {
+        gte: new Date(Date.now() - 48 * 60 * 60 * 1000), // 48h SLA expiry window
+      };
+    }
+
     if (city && typeof city === 'string' && city.trim() !== '' && city.toLowerCase() !== 'all') {
       where.OR = [
         { pickupCity: { contains: city.trim(), mode: 'insensitive' } },
@@ -551,6 +564,27 @@ export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: 
     const formatted = items.map((item) => {
       const pickup = item.pickupCity ? `${item.pickupCity} Hub` : (item.city || 'Hub Location');
       const drop = item.dropCity ? `${item.dropCity} Hub` : 'Delivery Point';
+
+      // Extract pickup timing from notes or query
+      let parsedPickupTime = 'Flexible / Standard';
+      const textToSearch = `${item.notes || ''} ${item.query || ''}`;
+      if (textToSearch.includes('Pickup Timing:')) {
+        const match = textToSearch.match(/Pickup Timing:\s*([^|\n]+)/i);
+        if (match && match[1]) {
+          const val = match[1].trim();
+          if (val && !val.includes('[Not Specified') && !val.includes('[Not Selected')) {
+            parsedPickupTime = val;
+          }
+        }
+      } else if (textToSearch.includes('Pickup:')) {
+        const match = textToSearch.match(/Pickup:\s*([^|\n]+)/i);
+        if (match && match[1]) {
+          const val = match[1].trim();
+          if (val && !val.includes('[Not Specified') && !val.includes('[Not Selected')) {
+            parsedPickupTime = val;
+          }
+        }
+      }
 
       return {
         id: item.id,
@@ -594,8 +628,8 @@ export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: 
         notes: item.query || item.notes || `WhatsApp Direct Lead: ${item.intent}`,
         handlingInstructions: item.goodsType ? `Cargo: ${item.goodsType}` : undefined,
         specialInstructions: item.query || item.notes || undefined,
-        pickupTime: 'Immediate Pickup',
-        isUrgent: true,
+        pickupTime: parsedPickupTime,
+        isUrgent: parsedPickupTime.toLowerCase().includes('immediate') || parsedPickupTime.toLowerCase().includes('urgent'),
         hasLoadingService: false,
         laborRequired: false,
         createdAt: item.createdAt.toISOString(),
