@@ -531,10 +531,10 @@ export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: 
       where.status = String(status);
     }
 
-    // Only show active/non-expired WhatsApp leads to drivers (leads older than 48 hours expire automatically)
+    // Only show active/non-expired WhatsApp leads to drivers (leads older than 96 hours / 4 days expire automatically)
     if (!status || status === 'AVAILABLE') {
       where.createdAt = {
-        gte: new Date(Date.now() - 48 * 60 * 60 * 1000), // 48h SLA expiry window
+        gte: new Date(Date.now() - 96 * 60 * 60 * 1000), // 96h (4 days) SLA expiry window
       };
     }
 

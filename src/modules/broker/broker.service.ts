@@ -287,7 +287,7 @@ export async function listBrokerLoads(query: BrokerLoadsQuery, brokerId?: string
       ...(where.AND || []),
       {
         OR: [
-          { slaExpiresAt: null, createdAt: { gt: new Date(Date.now() - 72 * 3600 * 1000) } }, // No timer set = expires after 72 hours
+          { slaExpiresAt: null, createdAt: { gt: new Date(Date.now() - 96 * 3600 * 1000) } }, // No timer set = expires after 96 hours (4 days)
           { slaExpiresAt: { gt: new Date() } }, // Timer not yet expired
         ],
       },
