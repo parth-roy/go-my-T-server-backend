@@ -434,6 +434,18 @@ export const logGMTWhatsAppMessage = async (req: Request, res: Response, next: N
       ? `Pickup Timing: ${effectiveTiming}${notes ? ` | ${notes}` : ''}`
       : notes ? String(notes) : null;
 
+    // Reject duplicate/identical pickup and drop location
+    if (pickupCity && dropCity) {
+      const normPickup = String(pickupCity).trim().toLowerCase().replace(/\s+hub$/i, '').replace(/[\s,.-]+/g, ' ');
+      const normDrop = String(dropCity).trim().toLowerCase().replace(/\s+hub$/i, '').replace(/[\s,.-]+/g, ' ');
+      if (normPickup === normDrop && normPickup.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Pickup and drop location cannot be the same. Please choose a different destination.',
+        });
+      }
+    }
+
     // 1. Save WhatsApp inquiry into PostgreSQL via Prisma
     const inquiry = await prisma.whatsAppInquiry.create({
       data: {
@@ -562,8 +574,42 @@ export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: 
 
     // Format fields for direct 100% compatibility with Driver App LoadItem.fromMap
     const formatted = items.map((item) => {
-      const pickup = item.pickupCity ? `${item.pickupCity} Hub` : (item.city || 'Hub Location');
-      const drop = item.dropCity ? `${item.dropCity} Hub` : 'Delivery Point';
+      const rawPickup = (item.pickupCity || item.city || '').trim();
+      const rawDrop = (item.dropCity || '').trim();
+
+      const normP = rawPickup.toLowerCase().replace(/\s+hub$/i, '').replace(/[\s,.-]+/g, ' ');
+      const normD = rawDrop.toLowerCase().replace(/\s+hub$/i, '').replace(/[\s,.-]+/g, ' ');
+
+      const isSameLocation = Boolean(normP && normD && normP === normD);
+
+      let pickup: string;
+      let drop: string;
+
+      if (!rawPickup && !rawDrop) {
+        pickup = 'Hub Location';
+        drop = 'Delivery Point';
+      } else if (isSameLocation) {
+        // Historical leads with identical pickup and drop
+        const baseName = rawPickup.replace(/\s+Hub$/i, '').trim();
+        pickup = `${baseName} (Pickup Point)`;
+        drop = `${baseName} (Local Delivery)`;
+      } else {
+        if (!rawPickup) {
+          pickup = 'Hub Location';
+        } else if (rawPickup.toLowerCase().endsWith('hub') || rawPickup.includes(',')) {
+          pickup = rawPickup;
+        } else {
+          pickup = `${rawPickup} Hub`;
+        }
+
+        if (!rawDrop) {
+          drop = 'Delivery Point';
+        } else if (rawDrop.toLowerCase().endsWith('hub') || rawDrop.includes(',')) {
+          drop = rawDrop;
+        } else {
+          drop = `${rawDrop} Hub`;
+        }
+      }
 
       // Extract pickup timing from notes or query
       let parsedPickupTime = 'Flexible / Standard';
@@ -601,8 +647,8 @@ export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: 
         dropAddress: drop,
         dropoffAddress: drop,
         drop: drop,
-        dropCity: item.dropCity || 'All Cities',
-        dropoffCity: item.dropCity || 'All Cities',
+        dropCity: item.dropCity || (isSameLocation ? `${item.pickupCity || ''} (Local)` : 'All Cities'),
+        dropoffCity: item.dropCity || (isSameLocation ? `${item.pickupCity || ''} (Local)` : 'All Cities'),
         dropArea: item.dropCity || 'Local Area',
         dropoffDistrict: item.dropCity || 'Local Area',
         dropState: 'N/A',

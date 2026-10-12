@@ -94,6 +94,18 @@ export const createBookingSchema = z.object({
             message: 'Enable workforce help before providing labour details',
         });
     }
+    if (value.stops && value.stops.length > 0) {
+        const firstStop = value.stops[0];
+        const normPickup = (value.pickupAddress || '').trim().toLowerCase().replace(/[\s,.-]+/g, ' ');
+        const normDrop = (firstStop.address || '').trim().toLowerCase().replace(/[\s,.-]+/g, ' ');
+        if (normPickup === normDrop && normPickup.length > 0) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['stops', 0, 'address'],
+                message: 'Drop address cannot be identical to pickup address',
+            });
+        }
+    }
 });
 
 export const cancelBookingSchema = z.object({
