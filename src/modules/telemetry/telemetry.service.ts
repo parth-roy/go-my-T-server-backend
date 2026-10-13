@@ -3,7 +3,7 @@ import { logger } from '@shared/logger';
 import { AppError } from '@shared/errors/AppError';
 import { DriverActionType, DispatchAlertSeverity, Prisma } from '@prisma/client';
 import { emitToAdminOpsRoom } from '@shared/socket/socket.instance';
-import type { DriverEngagementInput, DisintermediationFeedQuery } from './telemetry.schema';
+import type { DriverEngagementInput, DisintermediationFeedQuery, DispatchAlertsQuery } from './telemetry.schema';
 
 export class TelemetryService {
     /**
@@ -155,5 +155,95 @@ export class TelemetryService {
                 totalPages: Math.ceil(total / limit),
             },
         };
+    }
+
+    /**
+     * Retrieve Admin Dispatch Alerts (SLA 5-min critical timeouts & disintermediation alerts)
+     */
+    static async getDispatchAlerts(query: DispatchAlertsQuery) {
+        const { page, limit, isResolved, severity } = query;
+        const skip = (page - 1) * limit;
+
+        const where: Prisma.AdminDispatchAlertWhereInput = {};
+        if (isResolved === 'true') {
+            where.isResolved = true;
+        } else if (isResolved === 'false') {
+            where.isResolved = false;
+        }
+        if (severity) {
+            where.severity = severity;
+        }
+
+        const [items, total] = await Promise.all([
+            prisma.adminDispatchAlert.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    booking: {
+                        select: {
+                            id: true,
+                            bookingNumber: true,
+                            pickupAddress: true,
+                            dropAddress: true,
+                            totalFare: true,
+                            vehicleType: true,
+                            status: true,
+                            bookingChannel: true,
+                            dispatchedAt: true,
+                            dispatchTimeoutAt: true,
+                            isOpsEscalated: true,
+                            customer: { select: { id: true, name: true, phone: true } },
+                            driver: {
+                                select: {
+                                    id: true,
+                                    user: { select: { name: true, phone: true } },
+                                    vehicle: { select: { registrationNo: true } },
+                                },
+                            },
+                        },
+                    },
+                },
+            }),
+            prisma.adminDispatchAlert.count({ where }),
+        ]);
+
+        return {
+            items,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
+
+    /**
+     * Mark an Admin Dispatch Alert as resolved with notes
+     */
+    static async resolveDispatchAlert(alertId: string, adminId: string, notes?: string) {
+        const existing = await prisma.adminDispatchAlert.findUnique({ where: { id: alertId } });
+        if (!existing) {
+            throw AppError.notFound('Dispatch alert not found');
+        }
+
+        const updated = await prisma.adminDispatchAlert.update({
+            where: { id: alertId },
+            data: {
+                isResolved: true,
+                resolvedByAdminId: adminId,
+                resolvedAt: new Date(),
+                notes: notes ?? existing.notes,
+            },
+            include: {
+                booking: {
+                    select: { id: true, bookingNumber: true, status: true },
+                },
+            },
+        });
+
+        return updated;
     }
 }

@@ -476,10 +476,35 @@ export async function listBookings(userId: string, role: string, query: ListBook
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getBooking(bookingId: string, userId: string, role: string) {
-    const booking = await prisma.booking.findUnique({
+    let booking = await prisma.booking.findUnique({
         where: { id: bookingId },
         select: bookingDetailSelect,
     });
+
+    if (!booking) {
+        const brokerLoad = await prisma.brokerLoad.findFirst({
+            where: {
+                OR: [{ id: bookingId }, { sourceBookingId: bookingId }],
+            },
+        });
+        if (brokerLoad) {
+            if (brokerLoad.sourceBookingId) {
+                booking = await prisma.booking.findUnique({
+                    where: { id: brokerLoad.sourceBookingId },
+                    select: bookingDetailSelect,
+                });
+            }
+            if (!booking) {
+                const resolved = await MarketplaceService.resolveBookingForMarketplace(bookingId);
+                if (resolved) {
+                    booking = await prisma.booking.findUnique({
+                        where: { id: resolved.id },
+                        select: bookingDetailSelect,
+                    });
+                }
+            }
+        }
+    }
 
     if (!booking) throw AppError.notFound('Booking not found');
 
@@ -492,11 +517,10 @@ export async function getBooking(bookingId: string, userId: string, role: string
         if (!driver) {
             throw AppError.forbidden('Driver profile not found');
         }
-        const canReadInstantOpportunity =
-            booking.bookingMode === BookingMode.INSTANT &&
-            booking.status === BookingStatus.CONFIRMED &&
-            booking.driverId === null;
-        if (booking.driverId !== driver.id && !canReadInstantOpportunity) {
+        const canReadOpenOpportunity =
+            booking.driverId === null &&
+            (booking.status === BookingStatus.CONFIRMED || booking.status === BookingStatus.DRAFT);
+        if (booking.driverId !== driver.id && !canReadOpenOpportunity) {
             throw AppError.forbidden('You do not have access to this booking');
         }
     } else if (role === UserRole.FLEET_OWNER) {
@@ -505,11 +529,10 @@ export async function getBooking(bookingId: string, userId: string, role: string
             select: { id: true },
         });
         if (!fleetOwner) throw AppError.forbidden('Fleet owner profile not found');
-        const canReadInstantOpportunity =
-            booking.bookingMode === BookingMode.INSTANT &&
-            booking.status === BookingStatus.CONFIRMED &&
-            booking.driverId === null;
-        if (booking.awardedFleetOwnerId !== fleetOwner.id && !canReadInstantOpportunity) {
+        const canReadOpenOpportunity =
+            booking.driverId === null &&
+            (booking.status === BookingStatus.CONFIRMED || booking.status === BookingStatus.DRAFT);
+        if (booking.awardedFleetOwnerId !== fleetOwner.id && !canReadOpenOpportunity) {
             throw AppError.forbidden('You do not have access to this booking');
         }
     } else if (role !== UserRole.CUSTOMER && role !== UserRole.ADMIN) {
@@ -527,14 +550,26 @@ export async function getBooking(bookingId: string, userId: string, role: string
     };
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// CUSTOMER â€” CONFIRM BOOKING (DRAFT â†’ CONFIRMED)
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────
+// CUSTOMER — CONFIRM BOOKING (DRAFT → CONFIRMED)
+// ─────────────────────────────────────────────
 
 export async function confirmBooking(bookingId: string, customerId: string) {
-    const booking = await prisma.booking.findFirst({
+    let targetId = bookingId;
+    let booking = await prisma.booking.findFirst({
         where: { id: bookingId, customerId },
     });
+    if (!booking) {
+        const bl = await prisma.brokerLoad.findFirst({
+            where: { OR: [{ id: bookingId }, { sourceBookingId: bookingId }] },
+        });
+        if (bl?.sourceBookingId) {
+            targetId = bl.sourceBookingId;
+            booking = await prisma.booking.findFirst({
+                where: { id: targetId, customerId },
+            });
+        }
+    }
 
     if (!booking) throw AppError.notFound('Booking not found');
     assertTransition(booking.status, BookingStatus.CONFIRMED);
@@ -545,7 +580,7 @@ export async function confirmBooking(bookingId: string, customerId: string) {
         const now = new Date();
 
         const confirmed = await tx.booking.update({
-            where: { id: bookingId },
+            where: { id: targetId },
             data: {
                 status: BookingStatus.CONFIRMED,
                 dispatchedAt: now,
@@ -559,12 +594,12 @@ export async function confirmBooking(bookingId: string, customerId: string) {
             const closesAt = new Date(now.getTime() + confirmed.bidWindowMinutes * 60_000);
             await tx.bidWindow.create({
                 data: {
-                    bookingId,
+                    bookingId: targetId,
                     closesAt,
                     maxRevisionsPerBid: env.BID_MAX_REVISIONS,
                 },
             });
-            return tx.booking.findUniqueOrThrow({ where: { id: bookingId }, select: bookingDetailSelect });
+            return tx.booking.findUniqueOrThrow({ where: { id: targetId }, select: bookingDetailSelect });
         }
         return confirmed;
     });

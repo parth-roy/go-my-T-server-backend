@@ -1,7 +1,18 @@
 import { prisma } from '@shared/db/prisma';
 import { appendToGMTSheet } from '@shared/services/googleSheets.service';
 import { AppError } from '@shared/errors/AppError';
-import { UserRole, BrokerBookingStatus, BrokerQuoteStatus, BountySettlementStatus, VehicleType } from '@prisma/client';
+import {
+  UserRole,
+  BrokerBookingStatus,
+  BrokerQuoteStatus,
+  BountySettlementStatus,
+  VehicleType,
+  BookingStatus,
+  BookingMode,
+  BidWindowStatus,
+} from '@prisma/client';
+import { resolveJobCoordinates } from '@modules/workforce/workforce.service';
+import { publishBidOpportunity } from '@modules/marketplace/marketplace.service';
 import { assertBrokerTransition } from '../booking/booking.transition';
 import {
   PostBrokerLoadInput,
@@ -55,8 +66,55 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
     if (hours) slaExpiresAt = new Date(Date.now() + hours * 3600 * 1000);
   }
 
+  const pCoords = resolveJobCoordinates(null, null, data.pickupAddress || data.pickupCity);
+  const dCoords = resolveJobCoordinates(null, null, data.dropAddress || data.dropCity);
+  const fare = data.customerBudget || 2500;
+  const bookingNumber = 'BK-BL-' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 90 + 10);
+
+  // Materialize backing Booking with open BidWindow
+  const backingBooking = await prisma.booking.create({
+    data: {
+      bookingNumber,
+      customerId,
+      pickupLat: pCoords.lat,
+      pickupLng: pCoords.lng,
+      pickupAddress: data.pickupAddress,
+      vehicleType: data.vehicleType,
+      goodsType: data.goodsType || 'General Goods',
+      goodsWeightKg: data.goodsWeightKg,
+      estimatedDistance: data.estimatedDistanceKm || 15,
+      totalFare: fare,
+      grandTotal: fare,
+      baseFare: fare * 0.8,
+      status: BookingStatus.CONFIRMED,
+      bookingMode: BookingMode.PRIVATE_BID,
+      bookingChannel: 'BROKER_DEMAND',
+      bookingPersona: (data.bookingPersona as any) || 'INDIVIDUAL',
+      truckCount: data.truckCount || 1,
+      urgencyWindow: (data.urgencyWindow as any) || 'FLEXIBLE',
+      slaExpiresAt,
+      stops: {
+        create: [
+          {
+            sequence: 1,
+            latitude: dCoords.lat,
+            longitude: dCoords.lng,
+            address: data.dropAddress,
+          },
+        ],
+      },
+      bidWindow: {
+        create: {
+          status: BidWindowStatus.OPEN,
+          closesAt: slaExpiresAt || new Date(Date.now() + 24 * 3600 * 1000),
+        },
+      },
+    },
+  });
+
   const load = await prisma.brokerLoad.create({
     data: {
+      sourceBookingId: backingBooking.id,
       vehicleType: data.vehicleType,
       pickupCity: data.pickupCity,
       pickupAddress: data.pickupAddress,
@@ -82,6 +140,13 @@ export async function createBrokerLoad(customerId: string, data: PostBrokerLoadI
       }
     }
   });
+
+  try {
+    await publishBidOpportunity(backingBooking.id);
+  } catch (_) {
+    // Non-blocking notification dispatch
+  }
+
   return load;
 }
 

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticate, requireRole } from '@shared/middleware/auth.middleware';
 import { validate } from '@shared/middleware/validate';
 import { UserRole } from '@prisma/client';
-import { driverEngagementSchema } from './telemetry.schema';
+import { driverEngagementSchema, resolveDispatchAlertSchema } from './telemetry.schema';
 import { TelemetryController } from './telemetry.controller';
 
 export const telemetryRouter = Router();
@@ -21,4 +21,20 @@ telemetryRouter.get(
     authenticate,
     requireRole(UserRole.ADMIN),
     TelemetryController.getDisintermediationFeed
+);
+
+// Admin dispatch alerts (SLA timeout alerts + anti-disintermediation alerts)
+telemetryRouter.get(
+    '/dispatch-alerts',
+    authenticate,
+    requireRole(UserRole.ADMIN),
+    TelemetryController.getDispatchAlerts
+);
+
+telemetryRouter.patch(
+    '/dispatch-alerts/:id/resolve',
+    authenticate,
+    requireRole(UserRole.ADMIN),
+    validate(resolveDispatchAlertSchema),
+    TelemetryController.resolveDispatchAlert
 );

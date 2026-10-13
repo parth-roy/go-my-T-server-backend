@@ -19,6 +19,7 @@ import { assertTransition } from '@modules/booking/booking.transition';
 import { inspectRazorpayOrder } from '@modules/payment/razorpay.client';
 import { secureCapturedBookingPayment } from '@modules/payment/booking-payment.service';
 import { prisma } from '@shared/db/prisma';
+import { resolveJobCoordinates } from '@modules/workforce/workforce.service';
 import { AppError } from '@shared/errors/AppError';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
@@ -646,23 +647,164 @@ export async function listOpportunities(actor: Actor, query: OpportunitiesQuery)
   };
 }
 
+export async function resolveBookingForMarketplace(
+  bookingOrLoadId: string,
+  extraInclude?: Prisma.BookingInclude,
+): Promise<any> {
+  const baseInclude: Prisma.BookingInclude = {
+    bidWindow: true,
+    stops: { orderBy: { sequence: 'asc' } },
+    customer: { select: { id: true, name: true, phone: true } },
+    ...(extraInclude || {}),
+  };
+
+  // 1. Direct Booking ID lookup
+  let booking = await prisma.booking.findUnique({
+    where: { id: bookingOrLoadId },
+    include: baseInclude,
+  });
+
+  // 2. If not found by booking ID, check BrokerLoad table
+  if (!booking) {
+    const brokerLoad = await prisma.brokerLoad.findFirst({
+      where: {
+        OR: [
+          { id: bookingOrLoadId },
+          { sourceBookingId: bookingOrLoadId },
+        ],
+      },
+    });
+
+    if (brokerLoad) {
+      if (brokerLoad.sourceBookingId) {
+        booking = await prisma.booking.findUnique({
+          where: { id: brokerLoad.sourceBookingId },
+          include: baseInclude,
+        });
+      }
+
+      // 3. If BrokerLoad does not have a backing Booking, materialize one on-the-fly
+      if (!booking) {
+        const creatorLog = await prisma.brokerLoadAuditLog.findFirst({
+          where: { loadId: brokerLoad.id, action: 'LOAD_POSTED' },
+          select: { actorId: true },
+        });
+
+        let customerUser = creatorLog
+          ? await prisma.user.findUnique({ where: { id: creatorLog.actorId } })
+          : null;
+
+        if (!customerUser) {
+          customerUser = await prisma.user.findFirst({
+            where: { role: { in: [UserRole.CUSTOMER, UserRole.ADMIN] } },
+          });
+        }
+        if (!customerUser) {
+          customerUser = await prisma.user.findFirst();
+        }
+
+        if (!customerUser) {
+          throw AppError.notFound('No valid customer account found to associate load');
+        }
+
+        const pickupCoords = resolveJobCoordinates(null, null, brokerLoad.pickupAddress || brokerLoad.pickupCity);
+        const dropCoords = resolveJobCoordinates(null, null, brokerLoad.dropAddress || brokerLoad.dropCity);
+        const fare = brokerLoad.customerBudget || brokerLoad.platformFinalPrice || 2500;
+        const bookingNumber = 'BK-BL-' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 90 + 10);
+
+        booking = await prisma.booking.create({
+          data: {
+            bookingNumber,
+            customerId: customerUser.id,
+            pickupLat: pickupCoords.lat,
+            pickupLng: pickupCoords.lng,
+            pickupAddress: brokerLoad.pickupAddress || brokerLoad.pickupCity,
+            vehicleType: brokerLoad.vehicleType,
+            goodsType: brokerLoad.goodsType || 'General Goods',
+            goodsWeightKg: brokerLoad.goodsWeightKg,
+            estimatedDistance: brokerLoad.estimatedDistanceKm || 15,
+            totalFare: fare,
+            grandTotal: fare,
+            baseFare: fare * 0.8,
+            status: BookingStatus.CONFIRMED,
+            bookingMode: BookingMode.PRIVATE_BID,
+            bookingChannel: 'BROKER_DEMAND',
+            bookingPersona: brokerLoad.bookingPersona || 'INDIVIDUAL',
+            truckCount: brokerLoad.truckCount || 1,
+            urgencyWindow: brokerLoad.urgencyWindow || 'FLEXIBLE',
+            slaExpiresAt: brokerLoad.slaExpiresAt,
+            stops: {
+              create: [
+                {
+                  sequence: 1,
+                  latitude: dropCoords.lat,
+                  longitude: dropCoords.lng,
+                  address: brokerLoad.dropAddress || brokerLoad.dropCity,
+                },
+              ],
+            },
+            bidWindow: {
+              create: {
+                status: BidWindowStatus.OPEN,
+                closesAt: brokerLoad.slaExpiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000),
+              },
+            },
+          },
+          include: baseInclude,
+        });
+
+        // Link the brokerLoad to this materialized backing booking
+        await prisma.brokerLoad.update({
+          where: { id: brokerLoad.id },
+          data: { sourceBookingId: booking.id },
+        });
+      }
+    }
+  }
+
+  if (!booking) {
+    throw AppError.notFound('Booking not found');
+  }
+
+  // 4. Ensure bidWindow exists and is open
+  if (!booking.bidWindow) {
+    const window = await prisma.bidWindow.create({
+      data: {
+        bookingId: booking.id,
+        status: BidWindowStatus.OPEN,
+        closesAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+    booking = { ...booking, bidWindow: window };
+  } else if (
+    booking.bidWindow.status === BidWindowStatus.OPEN &&
+    booking.bidWindow.closesAt.getTime() <= Date.now()
+  ) {
+    const window = await prisma.bidWindow.update({
+      where: { id: booking.bidWindow.id },
+      data: {
+        status: BidWindowStatus.OPEN,
+        closesAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+    booking = { ...booking, bidWindow: window };
+  }
+
+  return booking;
+}
+
 export async function getOpportunity(bookingId: string, actor: Actor) {
   const participant = await resolveParticipantIdentity(actor);
-  const booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    include: {
-      customer: { select: { name: true, phone: true } },
-      bidWindow: true,
-      stops: { orderBy: { sequence: 'asc' } },
-      marketplaceBids: {
-        where: { participantKey: participant.participantKey },
-        select: { id: true, status: true, latestRevisionId: true, latestRevisionNumber: true },
-        take: 1,
-      },
-      _count: { select: { marketplaceBids: true } },
+  const booking = await resolveBookingForMarketplace(bookingId, {
+    customer: { select: { name: true, phone: true } },
+    stops: { orderBy: { sequence: 'asc' } },
+    marketplaceBids: {
+      where: { participantKey: participant.participantKey },
+      select: { id: true, status: true, latestRevisionId: true, latestRevisionNumber: true },
+      take: 1,
     },
+    _count: { select: { marketplaceBids: true } },
   });
-  if (!booking) throw AppError.notFound('Bid opportunity not found');
   ensureWindowOpen(booking);
   const vehicle = validateParticipantEligibility(participant, booking);
   await ensureParticipantOperationalAvailability(participant, vehicle.vehicleId);
@@ -696,25 +838,29 @@ export async function getOpportunity(bookingId: string, actor: Actor) {
     grandTotal: booking.grandTotal,
     createdAt: booking.createdAt,
     bidWindow: booking.bidWindow,
-    bidCount: booking._count.marketplaceBids,
-    myBid: booking.marketplaceBids[0] ?? null,
+    bidCount: booking._count?.marketplaceBids ?? 0,
+    myBid: booking.marketplaceBids?.[0] ?? null,
   };
 }
 
 export async function listBookingBids(bookingId: string, actor: Actor) {
-  const booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    select: { id: true, customerId: true, bookingMode: true, bidWindow: true },
-  });
-  if (!booking) throw AppError.notFound('Booking not found');
-  if (booking.bookingMode !== BookingMode.PRIVATE_BID) throw AppError.badRequest('Not a bidding booking');
+  const booking = await resolveBookingForMarketplace(bookingId);
+  const targetBookingId = booking.id;
 
-  let where: Prisma.MarketplaceBidWhereInput = { bookingId };
+  const isBiddingOpen =
+    booking.bookingMode === BookingMode.PRIVATE_BID ||
+    booking.bidWindow !== null ||
+    booking.hasCounterBids ||
+    booking.bookingChannel === 'BROKER_DEMAND';
+
+  if (!isBiddingOpen) throw AppError.badRequest('Not a bidding booking');
+
+  let where: Prisma.MarketplaceBidWhereInput = { bookingId: targetBookingId };
   if (actor.role === UserRole.CUSTOMER) {
     if (booking.customerId !== actor.userId) throw AppError.forbidden('Access denied');
   } else {
     const participant = await resolveParticipantIdentity(actor);
-    where = { bookingId, participantKey: participant.participantKey };
+    where = { bookingId: targetBookingId, participantKey: participant.participantKey };
   }
 
   const bids = await prisma.marketplaceBid.findMany({
@@ -731,33 +877,20 @@ export async function getBidThread(bidId: string, actor: Actor) {
 }
 
 export async function submitBid(bookingId: string, actor: Actor, input: SubmitBidInput) {
+  const booking = await resolveBookingForMarketplace(bookingId);
+
   const retry = await prisma.bidRevision.findUnique({
     where: { idempotencyKey: input.idempotencyKey },
     include: { bid: true },
   });
   if (retry) {
-    if (retry.authorUserId !== actor.userId || retry.bid.bookingId !== bookingId) {
+    if (
+      retry.authorUserId !== actor.userId ||
+      (retry.bid.bookingId !== bookingId && retry.bid.bookingId !== booking.id)
+    ) {
       throw AppError.conflict('Idempotency key already used', 'IDEMPOTENCY_KEY_REUSED');
     }
     return getBidThread(retry.bidId, actor);
-  }
-
-  let booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    include: { bidWindow: true },
-  });
-  if (!booking) throw AppError.notFound('Booking not found');
-
-  // If this is a direct/instant booking without an existing bidWindow, open one dynamically
-  if (!booking.bidWindow) {
-    const window = await prisma.bidWindow.create({
-      data: {
-        bookingId: booking.id,
-        status: BidWindowStatus.OPEN,
-        closesAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      },
-    });
-    booking = { ...booking, bidWindow: window };
   }
 
   ensureWindowOpen(booking);
@@ -774,7 +907,7 @@ export async function submitBid(bookingId: string, actor: Actor, input: SubmitBi
       await tx.marketplaceBid.create({
         data: {
           id: bidId,
-          bookingId,
+          bookingId: booking.id,
           windowId: booking.bidWindow!.id,
           participantKey: participant.participantKey,
           partyType: participant.partyType,
@@ -798,6 +931,7 @@ export async function submitBid(bookingId: string, actor: Actor, input: SubmitBi
       });
       await tx.bidMessage.create({
         data: {
+          id: randomUUID(),
           bidId,
           senderUserId: actor.userId,
           clientMessageId: randomUUID(),
@@ -814,7 +948,7 @@ export async function submitBid(bookingId: string, actor: Actor, input: SubmitBi
     });
     if (
       idempotentRetry?.authorUserId === actor.userId &&
-      idempotentRetry.bid.bookingId === bookingId
+      (idempotentRetry.bid.bookingId === bookingId || idempotentRetry.bid.bookingId === booking.id)
     ) {
       return getBidThread(idempotentRetry.bidId, actor);
     }
@@ -826,22 +960,27 @@ export async function submitBid(bookingId: string, actor: Actor, input: SubmitBi
 
   // Mark booking as having counter-bids
   await prisma.booking.update({
-    where: { id: bookingId },
+    where: { id: booking.id },
     data: { hasCounterBids: true },
   });
 
   const event = {
-    bookingId,
+    bookingId: booking.id,
     bidId,
     revisionId,
     revisionNumber: 1,
     bidAmount: input.amount,
     driverName: participant.driver?.user?.name ?? 'Verified Provider',
   };
-  emitToMarketplaceCustomer(bookingId, 'bid_created', event);
+  emitToMarketplaceCustomer(booking.id, 'bid_created', event);
   emitToMarketplaceBid(bidId, 'bid_revision_created', event);
   emitToCustomerRoom(booking.customerId, 'counter_bid_received', event);
-  emitToBookingRoom(bookingId, 'counter_bid_received', event);
+  emitToBookingRoom(booking.id, 'counter_bid_received', event);
+
+  if (bookingId !== booking.id) {
+    emitToMarketplaceCustomer(bookingId, 'bid_created', event);
+    emitToBookingRoom(bookingId, 'counter_bid_received', event);
+  }
 
   // Generate Server-Driven UI Dynamic Modal for customer
   const sduiModal = DynamicModalService.buildCounterBidNotificationModal({
@@ -861,7 +1000,7 @@ export async function submitBid(bookingId: string, actor: Actor, input: SubmitBi
     `A verified driver offered ₹${input.amount} for your booking #${booking.bookingNumber}. Tap to view & negotiate.`,
     {
       type: 'COUNTER_BID_RECEIVED',
-      bookingId,
+      bookingId: booking.id,
       bidId,
       sduiModal: JSON.stringify(sduiModal),
     },
@@ -1195,8 +1334,18 @@ export async function acceptExactRevision(bidId: string, revisionId: string, act
 }
 
 export async function getAward(bookingId: string, actor: Actor) {
+  let targetId = bookingId;
+  const direct = await prisma.booking.findUnique({ where: { id: bookingId }, select: { id: true } });
+  if (!direct) {
+    const bl = await prisma.brokerLoad.findFirst({
+      where: { OR: [{ id: bookingId }, { sourceBookingId: bookingId }] },
+      select: { sourceBookingId: true },
+    });
+    if (bl?.sourceBookingId) targetId = bl.sourceBookingId;
+  }
+
   const award = await prisma.bidAward.findFirst({
-    where: { bookingId, status: { in: activeAwardStatuses } },
+    where: { bookingId: targetId, status: { in: activeAwardStatuses } },
     orderBy: { createdAt: 'desc' },
     include: {
       bid: { include: { driver: { include: { user: true, vehicle: true } }, fleetOwner: true } },
@@ -1224,11 +1373,22 @@ export async function getAward(bookingId: string, actor: Actor) {
 export async function secureCashAward(bookingId: string, actor: Actor) {
   if (actor.role !== UserRole.CUSTOMER) throw AppError.forbidden('Only the customer can secure payment');
   if (!env.BID_ALLOW_CASH) throw AppError.badRequest('Cash is not enabled for bidding bookings', 'CASH_NOT_ALLOWED');
+
+  let targetId = bookingId;
+  const direct = await prisma.booking.findUnique({ where: { id: bookingId }, select: { id: true } });
+  if (!direct) {
+    const bl = await prisma.brokerLoad.findFirst({
+      where: { OR: [{ id: bookingId }, { sourceBookingId: bookingId }] },
+      select: { sourceBookingId: true },
+    });
+    if (bl?.sourceBookingId) targetId = bl.sourceBookingId;
+  }
+
   await prisma.$transaction(async (tx) => {
     const award = await tx.bidAward.findFirst({
       where: {
-        bookingId,
-        activeKey: bookingId,
+        bookingId: targetId,
+        activeKey: targetId,
         status: BidAwardStatus.PAYMENT_PENDING,
         customerId: actor.userId,
       },
@@ -1239,7 +1399,7 @@ export async function secureCashAward(bookingId: string, actor: Actor) {
     }
     const secured = await tx.booking.updateMany({
       where: {
-        id: bookingId,
+        id: targetId,
         customerId: actor.userId,
         bookingMode: BookingMode.PRIVATE_BID,
         paymentStatus: PaymentStatus.PENDING,
@@ -1250,7 +1410,7 @@ export async function secureCashAward(bookingId: string, actor: Actor) {
       throw AppError.conflict('Booking payment state changed', 'PAYMENT_STATE_CONFLICT');
     }
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-  return finalizeSecuredAward(bookingId);
+  return finalizeSecuredAward(targetId);
 }
 
 export async function finalizePaidAward(bookingId: string) {
@@ -1625,8 +1785,21 @@ export async function notifyMarketplaceBookingCancelled(bookingId: string) {
 }
 
 export async function canSubscribeToBidWindow(bookingId: string, actor: Actor): Promise<boolean> {
-  const booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { customerId: true } });
-  return Boolean(booking && actor.role === UserRole.CUSTOMER && booking.customerId === actor.userId);
+  let booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { customerId: true } });
+  if (!booking) {
+    const bl = await prisma.brokerLoad.findFirst({
+      where: { OR: [{ id: bookingId }, { sourceBookingId: bookingId }] },
+      select: { sourceBookingId: true },
+    });
+    if (bl?.sourceBookingId) {
+      booking = await prisma.booking.findUnique({ where: { id: bl.sourceBookingId }, select: { customerId: true } });
+    }
+  }
+  return Boolean(
+    booking &&
+      (actor.role === UserRole.CUSTOMER || actor.role === UserRole.ADMIN) &&
+      (booking.customerId === actor.userId || actor.role === UserRole.ADMIN),
+  );
 }
 
 export async function canSubscribeToBidThread(bidId: string, actor: Actor): Promise<boolean> {
