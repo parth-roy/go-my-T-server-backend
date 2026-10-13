@@ -270,9 +270,23 @@ export const updateLeadStatus = async (req: Request, res: Response, next: NextFu
 // ── Helper: City Coordinate Geocoding for Workforce Leads ─────────────────
 function getCoordinatesForCity(city: string): { lat: number; lng: number } {
   const c = (city || '').toLowerCase().trim();
-  if (c.includes('kolkata') || c.includes('howrah') || c.includes('calcutta')) return { lat: 22.5726, lng: 88.3639 };
+  if (
+    c.includes('bangalore') ||
+    c.includes('bengaluru') ||
+    c.includes('karnataka') ||
+    c.includes('bellandur') ||
+    c.includes('koramangala') ||
+    c.includes('indiranagar') ||
+    c.includes('whitefield') ||
+    c.includes('electronic city') ||
+    c.includes('hsr layout') ||
+    c.includes('marathahalli') ||
+    c.includes('benglor')
+  ) {
+    return { lat: 12.9716, lng: 77.5946 };
+  }
+  if (c.includes('kolkata') || c.includes('howrah') || c.includes('calcutta') || c.includes('west bengal') || c.includes('salt lake') || c.includes('new town')) return { lat: 22.5726, lng: 88.3639 };
   if (c.includes('mumbai') || c.includes('thane') || c.includes('navi mumbai')) return { lat: 19.0760, lng: 72.8777 };
-  if (c.includes('bangalore') || c.includes('bengaluru')) return { lat: 12.9716, lng: 77.5946 };
   if (c.includes('hyderabad') || c.includes('secunderabad')) return { lat: 17.3850, lng: 78.4867 };
   if (c.includes('chennai') || c.includes('madras')) return { lat: 13.0827, lng: 80.2707 };
   if (c.includes('pune')) return { lat: 18.5204, lng: 73.8567 };
@@ -285,6 +299,7 @@ function getCoordinatesForCity(city: string): { lat: number; lng: number } {
   if (c.includes('noida')) return { lat: 28.5355, lng: 77.3910 };
   if (c.includes('ghaziabad')) return { lat: 28.6692, lng: 77.4538 };
   if (c.includes('faridabad')) return { lat: 28.4089, lng: 77.3178 };
+  if (c.includes('delhi')) return { lat: 28.6139, lng: 77.2090 };
   // Default fallback: Delhi NCR center
   return { lat: 28.6139, lng: 77.2090 };
 }
@@ -307,7 +322,7 @@ export const logWhatsAppMessage = async (req: Request, res: Response, next: Next
     } = req.body;
 
     const inquiryNumber = `WF-${Math.floor(100000 + Math.random() * 900000)}`;
-    const coords = getCoordinatesForCity(city || location || '');
+    const coords = getCoordinatesForCity(`${city || ''} ${location || ''} ${message || ''}`);
 
     // Estimate realistic payout amount based on requested service
     let estimatedPayout = 500.0;

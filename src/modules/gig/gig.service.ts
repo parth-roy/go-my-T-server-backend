@@ -15,6 +15,7 @@ import { appendToSheet } from '@shared/services/googleSheets.service';
 import { calculateGigFare, classifyZone } from './gig.pricing';
 import type { GigFareRequest, GigSkill, GigUrgency } from './gig.pricing.types';
 import { razorpay } from '../payment/razorpay.client';
+import { resolveJobCoordinates } from '@modules/workforce/workforce.service';
 
 // ─────────────────────────────────────────────
 // HELPERS — read GigPricingConfig from DB
@@ -78,20 +79,29 @@ async function getNearestWorkerDistanceKm(lat: number, lng: number): Promise<num
 // ─────────────────────────────────────────────
 
 export async function estimateGigFare(input: {
-  locationLat:   number;
-  locationLng:   number;
+  locationLat?:  number;
+  locationLng?:  number;
+  locationAddress?: string;
   gigCategory:   string;
   durationHours: number;
   urgency:       string;
   workersNeeded: number;
   scheduledHour?: number;
 }) {
+  const { lat: finalLat, lng: finalLng } = resolveJobCoordinates(
+    input.locationLat,
+    input.locationLng,
+    input.locationAddress
+  );
+  input.locationLat = finalLat;
+  input.locationLng = finalLng;
+
   const config = await getGigConfig();
-  const workerDistanceKm = await getNearestWorkerDistanceKm(input.locationLat, input.locationLng);
+  const workerDistanceKm = await getNearestWorkerDistanceKm(finalLat, finalLng);
 
   const req: GigFareRequest = {
-    locationLat:           input.locationLat,
-    locationLng:           input.locationLng,
+    locationLat:           finalLat,
+    locationLng:           finalLng,
     gigCategory:           input.gigCategory as GigSkill,
     durationHours:         input.durationHours,
     urgency:               input.urgency as GigUrgency,
@@ -118,12 +128,20 @@ export async function estimateGigFare(input: {
 // ─────────────────────────────────────────────
 
 export async function createGig(customerId: string, data: any) {
+  const { lat: finalLat, lng: finalLng } = resolveJobCoordinates(
+    data.locationLat,
+    data.locationLng,
+    `${data.locationAddress || ''} ${data.description || ''}`
+  );
+  data.locationLat = finalLat;
+  data.locationLng = finalLng;
+
   const config = await getGigConfig();
-  const workerDistanceKm = await getNearestWorkerDistanceKm(data.locationLat, data.locationLng);
+  const workerDistanceKm = await getNearestWorkerDistanceKm(finalLat, finalLng);
 
   const req: GigFareRequest = {
-    locationLat:           data.locationLat,
-    locationLng:           data.locationLng,
+    locationLat:           finalLat,
+    locationLng:           finalLng,
     gigCategory:           (data.gigCategory ?? 'HELPER') as GigSkill,
     durationHours:         data.durationHours ?? 2,
     urgency:               (data.urgency ?? 'SCHEDULED') as GigUrgency,

@@ -86,3 +86,66 @@ export async function sendPasswordResetEmail(
     throw new Error('Email delivery failed. Please try again later.');
   }
 }
+
+/**
+ * Sends a 6-digit verification OTP email to a user.
+ * Valid for 5 minutes.
+ */
+export async function sendOtpEmail(to: string, otp: string): Promise<void> {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Your MetroMitra Verification Code</title>
+  <style>
+    body { font-family: 'Inter', -apple-system, sans-serif; background: #f8fafc; margin: 0; padding: 20px; color: #0f172a; }
+    .container { max-width: 480px; margin: 30px auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e2e8f0; }
+    .header { background: #0f172a; padding: 28px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+    .header p { color: #94a3b8; margin: 6px 0 0; font-size: 13px; }
+    .body { padding: 32px; text-align: center; }
+    .otp-box { display: inline-block; background: #f1f5f9; border: 2px dashed #3b82f6; border-radius: 12px; padding: 14px 32px; margin: 24px 0; }
+    .otp-code { font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #1e3a8a; }
+    .note { font-size: 13px; color: #64748b; line-height: 1.5; margin: 12px 0 0; }
+    .footer { background: #f8fafc; padding: 16px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>MetroMitra & GoMyTruck</h1>
+      <p>Secure Verification</p>
+    </div>
+    <div class="body">
+      <p style="font-size: 15px; color: #334155; margin: 0;">Use the verification code below to sign in:</p>
+      <div class="otp-box">
+        <div class="otp-code">${otp}</div>
+      </div>
+      <p class="note">This code is valid for <strong>5 minutes</strong>. Do not share this code with anyone.</p>
+    </div>
+    <div class="footer">
+      &copy; ${new Date().getFullYear()} Parther Technologies Pvt Ltd · All rights reserved.
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Your MetroMitra verification code is: ${otp}\nValid for 5 minutes. Do not share with anyone.\n\n— MetroMitra Team`;
+
+  try {
+    const mailer = getMailer();
+    const info = await mailer.sendMail({
+      from: FROM,
+      to,
+      subject: `🔐 Your MetroMitra Verification Code: ${otp}`,
+      html,
+      text,
+    });
+    logger.info(`[Email] OTP email sent to ${to} — messageId: ${info.messageId}`);
+  } catch (err: any) {
+    logger.error(`[Email] Failed to send OTP email to ${to}:`, err.message);
+  }
+}
+

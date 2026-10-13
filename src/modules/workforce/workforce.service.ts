@@ -53,6 +53,118 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+export function resolveJobCoordinates(
+  locationLat: number | null | undefined,
+  locationLng: number | null | undefined,
+  addressText: string | null | undefined
+): { lat: number; lng: number } {
+  const text = (addressText || '').toLowerCase();
+
+  // Bangalore / Bengaluru / Karnataka
+  if (
+    text.includes('bangalore') ||
+    text.includes('bengaluru') ||
+    text.includes('karnataka') ||
+    text.includes('bellandur') ||
+    text.includes('koramangala') ||
+    text.includes('indiranagar') ||
+    text.includes('whitefield') ||
+    text.includes('electronic city') ||
+    text.includes('hsr layout') ||
+    text.includes('marathahalli') ||
+    text.includes('benglor')
+  ) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05) ||
+      (Math.abs(locationLat - 28.6139) < 0.05 && Math.abs(locationLng - 77.2090) < 0.05)
+    ) {
+      return { lat: 12.9716, lng: 77.5946 };
+    }
+  }
+
+  // Kolkata / Howrah / West Bengal
+  if (
+    text.includes('kolkata') ||
+    text.includes('howrah') ||
+    text.includes('calcutta') ||
+    text.includes('west bengal') ||
+    text.includes('salt lake') ||
+    text.includes('new town') ||
+    text.includes('park street')
+  ) {
+    return { lat: locationLat ?? 22.5726, lng: locationLng ?? 88.3639 };
+  }
+
+  // Delhi / NCR / Gurgaon / Noida
+  if (
+    text.includes('delhi') ||
+    text.includes('noida') ||
+    text.includes('gurgaon') ||
+    text.includes('gurugram') ||
+    text.includes('ghaziabad') ||
+    text.includes('faridabad')
+  ) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 28.6139, lng: 77.2090 };
+    }
+  }
+
+  // Mumbai / Thane / Navi Mumbai
+  if (text.includes('mumbai') || text.includes('thane') || text.includes('navi mumbai')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 19.0760, lng: 72.8777 };
+    }
+  }
+
+  // Hyderabad
+  if (text.includes('hyderabad') || text.includes('secunderabad')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 17.3850, lng: 78.4867 };
+    }
+  }
+
+  // Chennai
+  if (text.includes('chennai') || text.includes('madras')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 13.0827, lng: 80.2707 };
+    }
+  }
+
+  // Pune
+  if (text.includes('pune')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 18.5204, lng: 73.8567 };
+    }
+  }
+
+  return {
+    lat: locationLat ?? 22.5726,
+    lng: locationLng ?? 88.3639,
+  };
+}
+
 // ─────────────────────────────────────────────
 // OTP HELPERS (dual-write Redis + in-memory)
 // ─────────────────────────────────────────────
@@ -93,6 +205,8 @@ const isDemoAccount = (phone: string) => phone in DEMO_ACCOUNTS;
 // AUTH — SEND OTP
 // ─────────────────────────────────────────────
 export async function sendOtp(input: SendOtpInput): Promise<{ message: string; otp?: string; _devOtp?: string }> {
+  const isEmail = input.phone.includes('@');
+
   // Demo account: skip real OTP delivery
   if (isDemoAccount(input.phone)) {
     logger.info(`[Workforce OTP] Demo account ${input.phone} — static OTP accepted, skipping delivery`);
@@ -102,28 +216,31 @@ export async function sendOtp(input: SendOtpInput): Promise<{ message: string; o
   const otp = String(crypto.randomInt(100000, 999999));
   await storeOtp(input.phone, otp);
 
-  // In production: send via FCM data message or MSG91 SMS
+  // Best-effort FCM push notification to user's device
+  let token = input.fcmToken;
+  if (!token) {
+    const user = await prisma.user.findFirst({
+      where: isEmail ? { email: input.phone } : { phone: input.phone },
+      select: { fcmToken: true },
+    });
+    token = user?.fcmToken || undefined;
+  }
+
+  if (token) {
+    try {
+      await notificationService.sendToDevice(token, {
+        title: '🔐 Your MetroMitra OTP',
+        body: `Your MetroMitra verification code is: ${otp}. Valid for 5 minutes. Do not share with anyone.`,
+        data: { type: 'WORKFORCE_OTP', otp },
+      });
+      logger.info(`[Workforce OTP] Push notification sent to token for ${input.phone}`);
+    } catch (err) {
+      logger.error('[Workforce OTP] FCM send failed:', err);
+    }
+  }
+
   if (env.NODE_ENV !== 'production') {
     logger.info(`[Workforce OTP] Dev OTP for ${input.phone}: ${otp}`);
-  } else {
-    // Best-effort FCM: use provided token or find existing user
-    let token = input.fcmToken;
-    if (!token) {
-      const user = await prisma.user.findUnique({ where: { phone: input.phone }, select: { fcmToken: true } });
-      token = user?.fcmToken || undefined;
-    }
-
-    if (token) {
-      try {
-        await notificationService.sendToDevice(token, {
-          title: '🔐 Your MetroMitra OTP',
-          body: `Your MetroMitra verification code is: ${otp}. Valid for 5 minutes. Do not share with anyone.`,
-          data: { type: 'WORKFORCE_OTP', otp },
-        });
-      } catch (err) {
-        logger.error('[Workforce OTP] FCM send failed:', err);
-      }
-    }
   }
 
   return {
@@ -138,6 +255,7 @@ export async function sendOtp(input: SendOtpInput): Promise<{ message: string; o
 // ─────────────────────────────────────────────
 export async function verifyOtp(input: VerifyOtpInput) {
   let finalName = input.name;
+  const isEmail = input.phone.includes('@');
 
   if (isDemoAccount(input.phone)) {
     const demo = DEMO_ACCOUNTS[input.phone];
@@ -154,24 +272,37 @@ export async function verifyOtp(input: VerifyOtpInput) {
     await deleteOtp(input.phone); // Single-use
   }
 
-  // Upsert user with WORKER role
-  const user = await prisma.user.upsert({
-    where: { phone: input.phone },
-    update: {
-      isActive: true,
-      ...(input.fcmToken && { fcmToken: input.fcmToken }),
-      ...(finalName && { name: finalName }),
-    },
-    create: {
-      phone: input.phone,
-      role: UserRole.WORKER,
-      isActive: true,
-      profileComplete: false,
-      ...(input.fcmToken && { fcmToken: input.fcmToken }),
-      ...(finalName && { name: finalName }),
-    },
-    select: { id: true, phone: true, role: true, name: true, profileComplete: true },
+  // Find existing user by email or phone
+  let user = await prisma.user.findFirst({
+    where: isEmail ? { email: input.phone } : { phone: input.phone },
+    select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true },
   });
+
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        ...(isEmail
+          ? { email: input.phone, authProvider: 'EMAIL' }
+          : { phone: input.phone, authProvider: 'PHONE' }),
+        role: UserRole.WORKER,
+        isActive: true,
+        profileComplete: false,
+        ...(input.fcmToken && { fcmToken: input.fcmToken }),
+        ...(finalName && { name: finalName }),
+      },
+      select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true },
+    });
+  } else {
+    user = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isActive: true,
+        ...(input.fcmToken && { fcmToken: input.fcmToken }),
+        ...(finalName && { name: finalName }),
+      },
+      select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true },
+    });
+  }
 
   // Ensure Worker record exists
   let worker = await prisma.worker.findUnique({ where: { userId: user.id } });
@@ -183,7 +314,7 @@ export async function verifyOtp(input: VerifyOtpInput) {
 
   // Issue JWT pair
   const accessToken = jwt.sign(
-    { userId: user.id, phone: user.phone, role: UserRole.WORKER }, // Contextual Login
+    { userId: user.id, phone: user.phone || user.email || '', email: user.email, role: UserRole.WORKER },
     env.JWT_ACCESS_SECRET,
     { expiresIn: env.JWT_ACCESS_EXPIRES as any }
   );
@@ -214,7 +345,7 @@ export async function getMe(userId: string) {
   const worker = await prisma.worker.findUnique({
     where: { userId },
     include: {
-      user: { select: { id: true, name: true, phone: true, profileImageUrl: true, profileComplete: true } },
+      user: { select: { id: true, name: true, phone: true, email: true, profileImageUrl: true, profileComplete: true } },
       documents: true,
     },
   });
@@ -311,12 +442,38 @@ export async function updatePreferences(userId: string, input: UpdatePreferences
   const { name, fcmToken, ...workerFields } = input;
 
   // Update user fields if provided
-  if (name || fcmToken) {
+  if (name || fcmToken || input.phone || input.email) {
+    if (input.phone) {
+      const existingPhoneUser = await prisma.user.findFirst({
+        where: { phone: input.phone, id: { not: userId } },
+      });
+      if (existingPhoneUser) {
+        await prisma.user.update({
+          where: { id: existingPhoneUser.id },
+          data: { phone: null },
+        });
+      }
+    }
+    if (input.email) {
+      const normalizedEmail = input.email.trim().toLowerCase();
+      const existingEmailUser = await prisma.user.findFirst({
+        where: { email: normalizedEmail, id: { not: userId } },
+      });
+      if (existingEmailUser) {
+        await prisma.user.update({
+          where: { id: existingEmailUser.id },
+          data: { email: null },
+        });
+      }
+    }
+
     await prisma.user.update({
       where: { id: userId },
       data: {
         ...(name && { name, profileComplete: true }),
         ...(fcmToken && { fcmToken }),
+        ...(input.phone && { phone: input.phone }),
+        ...(input.email && { email: input.email.trim().toLowerCase() }),
       },
     });
   }
@@ -1820,31 +1977,35 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
 
       return true;
     })
-    .map(job => ({
-      id: job.id,
-      bookingNumber: job.jobNumber,
-      pickupLat: job.locationLat,
-      pickupLng: job.locationLng,
-      pickupAddress: job.locationAddress,
-      locationZone: job.locationZone,
-      totalFare: job.totalFare,
-      perWorkerRate: job.perWorkerRate,
-      laborCharge: job.perWorkerRate > 0 ? job.perWorkerRate : (job.totalFare ?? 0) / (job.workersNeeded ?? 1),
-      laborType: job.gigCategory || job.gigType,
-      gigCategory: job.gigCategory,
-      description: job.description,
-      durationHours: job.durationHours,
-      urgency: job.urgency,
-      laborersCount: job.workersNeeded,
-      vehicleType: 'Gig',
-      goodsType: job.description && !job.description.startsWith('{') ? (job.description.includes('—') ? job.description.split('—')[0].trim() : job.description) : (job.gigCategory || 'Service'),
-      goodsWeightKg: null,
-      goodsQuantity: 1,
-      distanceKm: haversineKm(lat, lng, job.locationLat, job.locationLng),
-      scheduledSlot: job.scheduledSlot,
-      status: job.status,
-      createdAt: job.createdAt,
-    }))
+    .map(job => {
+      const resolved = resolveJobCoordinates(job.locationLat, job.locationLng, job.locationAddress || job.description);
+      const dist = haversineKm(lat, lng, resolved.lat, resolved.lng);
+      return {
+        id: job.id,
+        bookingNumber: job.jobNumber,
+        pickupLat: resolved.lat,
+        pickupLng: resolved.lng,
+        pickupAddress: job.locationAddress,
+        locationZone: job.locationZone,
+        totalFare: job.totalFare,
+        perWorkerRate: job.perWorkerRate,
+        laborCharge: job.perWorkerRate > 0 ? job.perWorkerRate : (job.totalFare ?? 0) / (job.workersNeeded ?? 1),
+        laborType: job.gigCategory || job.gigType,
+        gigCategory: job.gigCategory,
+        description: job.description,
+        durationHours: job.durationHours,
+        urgency: job.urgency,
+        laborersCount: job.workersNeeded,
+        vehicleType: 'Gig',
+        goodsType: job.description && !job.description.startsWith('{') ? (job.description.includes('—') ? job.description.split('—')[0].trim() : job.description) : (job.gigCategory || 'Service'),
+        goodsWeightKg: null,
+        goodsQuantity: 1,
+        distanceKm: dist,
+        scheduledSlot: job.scheduledSlot,
+        status: job.status,
+        createdAt: job.createdAt,
+      };
+    })
     .filter(job => job.distanceKm <= radiusKm);
 
   // Find nearby available Workforce WhatsApp Inquiries (HIRE / BULK)
@@ -1896,18 +2057,17 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       return true;
     })
     .map((wa) => {
-      const pLat = wa.latitude ?? 28.6139;
-      const pLng = wa.longitude ?? 77.2090;
       const address = wa.location ? `${wa.location}, ${wa.city}` : wa.city;
-      const dist = haversineKm(lat, lng, pLat, pLng);
+      const resolved = resolveJobCoordinates(wa.latitude, wa.longitude, `${address} ${wa.message || ''}`);
+      const dist = haversineKm(lat, lng, resolved.lat, resolved.lng);
       const workers = wa.workersNeeded || 1;
       const isUrgent = Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent'));
 
       return {
         id: wa.id,
         bookingNumber: wa.inquiryNumber,
-        pickupLat: pLat,
-        pickupLng: pLng,
+        pickupLat: resolved.lat,
+        pickupLng: resolved.lng,
         pickupAddress: address,
         locationZone: 'METRO',
         totalFare: (wa.payoutAmount || 500) * workers,

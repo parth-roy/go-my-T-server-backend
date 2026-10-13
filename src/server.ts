@@ -18,6 +18,7 @@ import { registerEventListeners } from '@shared/eventbus/listeners';
 import { startAllWorkers } from './workers';
 import { startCleanupJobs } from '@shared/jobs/cleanup.job';
 import { startEngagementJobs } from '@shared/jobs/engagement.job';
+import { startDispatchSlaWorker } from '@shared/jobs/dispatch_sla.worker';
 import { setSocketInstance } from '@shared/socket/socket.instance';
 
 
@@ -73,6 +74,7 @@ async function bootstrap() {
   // 5.7. Start scheduled engagement push notifications
   startEngagementJobs();
   startMarketplaceJobs();
+  startDispatchSlaWorker();
 
   // 6. Start BullMQ workers
   try {

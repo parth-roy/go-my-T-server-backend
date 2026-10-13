@@ -13,8 +13,8 @@ export const createGigSchema = z.object({
   gigCategory:    z.enum(GIG_SKILLS).default('HELPER'),
   description:    z.string().max(500).optional(),
   contactPhone:   z.string().max(20).optional(),
-  locationLat:    z.number().min(-90).max(90).optional().default(22.5726),
-  locationLng:    z.number().min(-180).max(180).optional().default(88.3639),
+  locationLat:    z.number().min(-90).max(90).optional(),
+  locationLng:    z.number().min(-180).max(180).optional(),
   locationAddress:z.string().min(3).max(500),
   workersNeeded:  z.number().int().min(1).max(20).default(1),
   durationHours:  z.number().int().min(1).max(12).default(2),
@@ -44,8 +44,8 @@ export const verifyGigPaymentSchema = z.object({
 
 export const estimateGigSchema = z.object({
   gigCategory:    z.enum(GIG_SKILLS).default('HELPER'),
-  locationLat:    z.number().min(-90).max(90).optional().default(22.5726),
-  locationLng:    z.number().min(-180).max(180).optional().default(88.3639),
+  locationLat:    z.number().min(-90).max(90).optional(),
+  locationLng:    z.number().min(-180).max(180).optional(),
   workersNeeded:  z.number().int().min(1).max(20).default(1),
   durationHours:  z.number().int().min(1).max(12).default(2),
   urgency:        z.enum(GIG_URGENCIES).default('SCHEDULED'),

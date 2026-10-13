@@ -4,13 +4,18 @@ import { z } from 'zod';
 // AUTH
 // ─────────────────────────────────────────────
 
+const phoneOrEmail = z.string().trim().refine(
+  (val) => /^[6-9]\d{9}$/.test(val) || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val),
+  { message: 'Must be a valid 10-digit Indian phone number or email address' }
+);
+
 export const SendOtpSchema = z.object({
-  phone: z.string().regex(/^[6-9]\d{9}$/, 'Invalid Indian phone number'),
+  phone: phoneOrEmail,
   fcmToken: z.string().optional(),
 });
 
 export const VerifyOtpSchema = z.object({
-  phone: z.string().regex(/^[6-9]\d{9}$/, 'Invalid Indian phone number'),
+  phone: phoneOrEmail,
   otp: z.string().length(6, 'OTP must be 6 digits'),
   fcmToken: z.string().optional(),
   name: z.string().min(2).max(80).optional(),
@@ -38,6 +43,8 @@ export const UpdateBankDetailsSchema = z.object({
 
 export const UpdatePreferencesSchema = z.object({
   name: z.string().min(2).max(80).optional(),
+  phone: z.string().optional(),
+  email: z.string().email().optional(),
   maxWeightKg: z.number().min(1).max(50000).optional(),
   preferredTypes: z.array(z.enum(['LOADING', 'UNLOADING', 'BOTH'])).optional(),
   preferredWork: z.string().optional(),
