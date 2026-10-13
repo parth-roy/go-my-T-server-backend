@@ -124,7 +124,8 @@ export const rateBookingSchema = z.object({
 export const listBookingsQuerySchema = z.object({
     page: z.string().default('1').transform(Number),
     limit: z.string().default('10').transform(Number),
-    status: z.nativeEnum(BookingStatus).optional(),
+    status: z.string().optional(),
+    scope: z.string().optional(),
 });
 
 // ─── Bidding (Enterprise) ───

@@ -88,6 +88,30 @@ enum BookingMode {
   PRIVATE_BID
 }
 
+enum BookingChannel {
+  CUSTOMER_DIRECT
+  CUSTOMER_AUCTION
+  BROKER_DEMAND
+  BROKER_ATTACHED
+}
+
+enum DriverActionType {
+  DETAILS_VIEWED
+  CONTACT_UNMASKED
+  PHONE_CALL_INITIATED
+  WHATSAPP_CLICKED
+  BID_SUBMITTED
+  INSTANT_ACCEPTED
+  LOAD_DECLINED
+}
+
+enum DispatchAlertSeverity {
+  INFO
+  WARNING
+  CRITICAL_TIMEOUT
+  SUSPECTED_DISINTERMEDIATION
+}
+
 enum BidWindowStatus {
   OPEN
   LOCKED
@@ -487,6 +511,7 @@ model Driver {
   fleetMemberships FleetDriver[]
   subscription     DriverSubscription?
   driverWallet     DriverWallet?
+  driverAudits     DriverEngagementAudit[]
 
   @@index([status])
   @@index([status, isDocVerified, isActive])
@@ -880,12 +905,25 @@ model Booking {
   slaExpiresAt     DateTime?                      // UTC expiry — null means no timer set
   ScratchCard      ScratchCard?
 
+  // ── Multi-Channel Dispatch & Telemetry Audit ───────────────────────────
+  bookingChannel    BookingChannel   @default(CUSTOMER_DIRECT)
+  hasCounterBids    Boolean          @default(false)
+  dispatchedAt      DateTime?
+  dispatchTimeoutAt DateTime?        // Automatic SLA escalation time (creation + 5m)
+  isOpsEscalated    Boolean          @default(false)
+
+  driverAudits      DriverEngagementAudit[]
+  opsAlerts         AdminDispatchAlert[]
+  brokerFulfillment BrokerFulfillmentDetails?
+
   @@index([status])
   @@index([customerId, status])
   @@index([driverId, status])
   @@index([paymentStatus])
   @@index([createdAt])
   @@index([bookingMode, status])
+  @@index([bookingChannel, status])
+  @@index([dispatchTimeoutAt, status])
   @@index([awardedFleetOwnerId, status])
   @@index([laborRequired, status]) // Speeds up workforce job-feed queries
   @@index([slaExpiresAt])
@@ -2552,6 +2590,7 @@ model BrokerProfile {
   
   quotes                BrokerQuote[]
   driverRetentions      BrokerDriverRetention[]
+  fulfillments          BrokerFulfillmentDetails[]
   
   @@index([primaryCity, isActive])
   @@index([isKycVerified, isActive])
@@ -2747,3 +2786,67 @@ model BrokerDriverRetention {
   @@index([driverId])
   @@map("broker_driver_retentions")
 }
+
+// ─────────────────────────────────────────────
+// BROKER FULFILLMENT DETAILS
+// ─────────────────────────────────────────────
+
+model BrokerFulfillmentDetails {
+  id                  String        @id @default(uuid())
+  bookingId           String        @unique
+  booking             Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  brokerProfileId     String
+  brokerProfile       BrokerProfile @relation(fields: [brokerProfileId], references: [id])
+  assignedDriverName  String
+  assignedDriverPhone String
+  assignedTruckRegNo  String
+  brokerMarginAmount  Decimal?      @db.Decimal(10, 2)
+  createdAt           DateTime      @default(now())
+
+  @@index([brokerProfileId])
+  @@map("broker_fulfillment_details")
+}
+
+// ─────────────────────────────────────────────
+// DRIVER ENGAGEMENT & TELEMETRY AUDIT
+// ─────────────────────────────────────────────
+
+model DriverEngagementAudit {
+  id        String           @id @default(uuid())
+  bookingId String
+  booking   Booking          @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  driverId  String
+  driver    Driver           @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  action    DriverActionType
+  driverLat Float?
+  driverLng Float?
+  metadata  Json?
+  createdAt DateTime         @default(now())
+
+  @@index([bookingId, driverId])
+  @@index([createdAt])
+  @@index([action])
+  @@map("driver_engagement_audits")
+}
+
+// ─────────────────────────────────────────────
+// ADMIN DISPATCH OPS ALERTS
+// ─────────────────────────────────────────────
+
+model AdminDispatchAlert {
+  id                String                @id @default(uuid())
+  bookingId         String
+  booking           Booking               @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  severity          DispatchAlertSeverity @default(WARNING)
+  reason            String                // e.g. "UNASSIGNED_AFTER_5_MINS", "SUSPECTED_DISINTERMEDIATION"
+  isResolved        Boolean               @default(false)
+  resolvedByAdminId String?
+  resolvedAt        DateTime?
+  notes             String?
+  createdAt         DateTime              @default(now())
+
+  @@index([isResolved, severity])
+  @@index([createdAt])
+  @@map("admin_dispatch_alerts")
+}
+

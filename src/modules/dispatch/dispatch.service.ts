@@ -4,7 +4,8 @@ import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { cancelBookingBySystem } from '@modules/booking/booking.service';
-import { emitToWorkerRoom } from '@shared/socket/socket.instance';
+import { emitToWorkerRoom, emitToDriverRoom } from '@shared/socket/socket.instance';
+import { DynamicModalService } from './sdui.service';
 
 const MAX_DRIVERS_TO_NOTIFY = 5;
 const MAX_SEARCH_RADIUS_KM = 50;
@@ -117,13 +118,27 @@ export async function dispatchBooking(bookingId: string): Promise<void> {
     const dropAddress = booking.stops[0]?.address ?? 'Destination';
     const body = `₹${booking.totalFare ?? '—'} • ${booking.pickupAddress} → ${dropAddress}`;
 
-    // Notify all ranked drivers simultaneously
+    // Build Server-Driven UI Dynamic Modal for real-time overlay
+    const sduiModal = DynamicModalService.buildDirectInstantAlertModal({
+        id: booking.id,
+        bookingNumber: booking.bookingNumber,
+        totalFare: booking.totalFare,
+        pickupAddress: booking.pickupAddress,
+        dropAddress,
+        vehicleType: booking.vehicleType,
+    });
+
+    // Notify all ranked drivers simultaneously via Socket.IO and FCM
     await Promise.allSettled(
         ranked.map(async (driver) => {
+            // 1. Emit live Socket event to driver's personal room (instant foreground presentation)
+            emitToDriverRoom(driver.id, 'sdui_modal_received', sduiModal);
+
+            // 2. High-priority FCM push (for background / screen-locked delivery)
             if (!driver.user.fcmToken) return;
             try {
                 await notificationService.sendToDevice(driver.user.fcmToken, {
-                    title: '🚛 New Booking Nearby!',
+                    title: '⚡ Instant Direct Booking!',
                     body,
                     data: {
                         type: 'NEW_BOOKING',
@@ -131,16 +146,17 @@ export async function dispatchBooking(bookingId: string): Promise<void> {
                         vehicleType: booking.vehicleType,
                         fare: String(booking.totalFare ?? 0),
                         distanceKm: String(Math.round(driver.distanceKm * 10) / 10),
+                        sduiModal: JSON.stringify(sduiModal),
                     },
                 });
                 await createNotification(
                     driver.user.id,
-                    '🚛 New Booking Nearby!',
+                    '⚡ Instant Direct Booking!',
                     body,
                     NotificationType.BOOKING_STATUS,
                     booking.id,
                 );
-                logger.info(`[Dispatch] Notified driver ${driver.id} (${Math.round(driver.distanceKm * 10) / 10} km) for booking ${booking.bookingNumber}`);
+                logger.info(`[Dispatch] Notified driver ${driver.id} (${Math.round(driver.distanceKm * 10) / 10} km) for booking ${booking.bookingNumber} with SDUI modal`);
             } catch (err) {
                 logger.error(`[Dispatch] FCM failed for driver ${driver.id}:`, err);
             }

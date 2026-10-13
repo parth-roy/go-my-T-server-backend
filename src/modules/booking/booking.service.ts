@@ -6,6 +6,7 @@ import { NotificationType } from '@prisma/client';
 import {
     BidAwardStatus,
     BidWindowStatus,
+    BookingChannel,
     BookingMode,
     BookingStatus,
     DriverStatus,
@@ -37,8 +38,11 @@ import type {
 import { env } from '@config/env';
 import * as MarketplaceService from '@modules/marketplace/marketplace.service';
 import { assertTransition } from './booking.transition';
-export { assertTransition } from './booking.transition';
+export { assertTransition };
 import { extractCityFromAddress, getCityAliases } from '@modules/broker/broker.service';
+import { ConcurrencyLockService } from '@modules/dispatch/concurrency_lock.service';
+import { DynamicModalService } from '@modules/dispatch/sdui.service';
+import { emitToBookingRoom, emitToCustomerRoom } from '@shared/socket/socket.instance';
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // HELPERS
@@ -157,6 +161,27 @@ const bookingDetailSelect = {
         },
     },
     pickupOtp: true,
+    bookingChannel: true,
+    hasCounterBids: true,
+    dispatchedAt: true,
+    dispatchTimeoutAt: true,
+    isOpsEscalated: true,
+    brokerFulfillment: {
+        select: {
+            assignedDriverName: true,
+            assignedDriverPhone: true,
+            assignedTruckRegNo: true,
+            brokerProfile: {
+                select: {
+                    user: {
+                        select: {
+                            name: true,
+                        },
+                    },
+                },
+            },
+        },
+    },
 } as const;
 
 // Internal helper â€” verifies the calling driver owns the booking
@@ -380,9 +405,28 @@ export async function listBookings(userId: string, role: string, query: ListBook
     if (role === UserRole.CUSTOMER) {
         where.customerId = userId;
     } else if (role === UserRole.DRIVER) {
-        const driver = await prisma.driver.findUnique({ where: { userId } });
+        const driver = await prisma.driver.findUnique({
+            where: { userId },
+            include: { vehicle: true },
+        });
         if (!driver) throw AppError.notFound('Driver profile not found');
-        where.driverId = driver.id;
+
+        const isQueryingAvailable = typeof status === 'string' &&
+            (status.includes('AVAILABLE') || status.includes('BROADCAST') || (query as any).scope === 'available');
+
+        if (isQueryingAvailable) {
+            // Driver is querying unassigned direct bookings to accept or counter-bid
+            where.driverId = null;
+            where.status = { in: [BookingStatus.CONFIRMED, BookingStatus.DRAFT] };
+            where.bookingChannel = { in: [BookingChannel.CUSTOMER_DIRECT, BookingChannel.BROKER_DEMAND] };
+            // If vehicle is registered and not all, optionally filter by vehicle class
+            if (driver.vehicle?.type) {
+                where.vehicleType = driver.vehicle.type;
+            }
+        } else {
+            // Driver is querying their own assigned trips (Upcoming / Active / History)
+            where.driverId = driver.id;
+        }
     }
 
     const [bookings, total] = await prisma.$transaction([
@@ -403,8 +447,12 @@ export async function listBookings(userId: string, role: string, query: ListBook
 
     const enrichedBookings = bookings.map(b => {
         const log = auditLogs.find(a => a.bookingId === b.id);
+        const stops = (b as any).stops || [];
+        const dropAddress = stops.length > 0 ? stops[stops.length - 1].address : b.pickupAddress;
         return {
             ...b,
+            pickupCity: extractCityFromAddress(b.pickupAddress),
+            dropCity: extractCityFromAddress(dropAddress),
             customerName: b.customer?.name || b.receiverName || 'Verified Shipper',
             customerPhone: b.customer?.phone || b.receiverPhone || '',
             driverPayout: log?.driverPayout ?? null,
@@ -492,14 +540,23 @@ export async function confirmBooking(bookingId: string, customerId: string) {
     assertTransition(booking.status, BookingStatus.CONFIRMED);
 
     const updated = await prisma.$transaction(async (tx) => {
+        const isBidding = booking.bookingMode === 'PRIVATE_BID';
+        const timeoutMinutes = isBidding ? (booking.bidWindowMinutes || 10) : 5;
+        const now = new Date();
+
         const confirmed = await tx.booking.update({
             where: { id: bookingId },
-            data: { status: BookingStatus.CONFIRMED },
+            data: {
+                status: BookingStatus.CONFIRMED,
+                dispatchedAt: now,
+                dispatchTimeoutAt: new Date(now.getTime() + timeoutMinutes * 60_000),
+                bookingChannel: isBidding ? BookingChannel.CUSTOMER_AUCTION : BookingChannel.CUSTOMER_DIRECT,
+            },
             select: bookingDetailSelect,
         });
 
-        if (confirmed.bookingMode === 'PRIVATE_BID') {
-            const closesAt = new Date(Date.now() + confirmed.bidWindowMinutes * 60_000);
+        if (isBidding) {
+            const closesAt = new Date(now.getTime() + confirmed.bidWindowMinutes * 60_000);
             await tx.bidWindow.create({
                 data: {
                     bookingId,
@@ -519,51 +576,7 @@ export async function confirmBooking(bookingId: string, customerId: string) {
         vehicleType: updated.vehicleType,
     });
 
-    // Proactively create BrokerLoad for agent marketplace instant visibility
-    try {
-        const pCity = extractCityFromAddress(updated.pickupAddress);
-        const stops = (updated as any).stops || [];
-        const dAddress = stops.length > 0 ? stops[stops.length - 1].address : updated.pickupAddress;
-        const dCity = extractCityFromAddress(dAddress);
-        const targetCities = Array.from(new Set([
-            ...getCityAliases(pCity),
-            ...getCityAliases(dCity),
-        ]));
-
-        await prisma.brokerLoad.upsert({
-            where: { sourceBookingId: updated.id },
-            update: {
-                pickupCity: pCity,
-                dropCity: dCity,
-                targetCities,
-                bookingPersona: (updated as any).bookingPersona || "INDIVIDUAL",
-                truckCount: (updated as any).truckCount || 1,
-                urgencyWindow: (updated as any).urgencyWindow || "FLEXIBLE",
-                slaExpiresAt: (updated as any).slaExpiresAt || null,
-            },
-            create: {
-                sourceBookingId: updated.id,
-                pickupCity: pCity,
-                pickupAddress: updated.pickupAddress,
-                dropCity: dCity,
-                dropAddress: dAddress,
-                vehicleType: updated.vehicleType,
-                goodsType: updated.goodsType || "General Goods",
-                goodsWeightKg: updated.goodsWeightKg,
-                customerBudget: updated.grandTotal || updated.totalFare || updated.baseFare || 1200,
-                targetCities,
-                brokerStatus: "SOURCING",
-                bookingPersona: (updated as any).bookingPersona || "INDIVIDUAL",
-                truckCount: (updated as any).truckCount || 1,
-                urgencyWindow: (updated as any).urgencyWindow || "FLEXIBLE",
-                slaExpiresAt: (updated as any).slaExpiresAt || null,
-            }
-        });
-    } catch (e) {
-        logger.warn(`Failed to proactively create broker load for booking ${updated.id}: ${e}`);
-    }
-
-    logger.info(`Booking confirmed: ${updated.bookingNumber}`);
+    logger.info(`Booking confirmed: ${updated.bookingNumber} (${updated.bookingChannel})`);
     return updated;
 }
 
@@ -1123,7 +1136,10 @@ export async function completeBooking(bookingId: string, userId: string) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function driverAcceptBooking(bookingId: string, userId: string) {
-    const driver = await prisma.driver.findUnique({ where: { userId } });
+    const driver = await prisma.driver.findUnique({
+        where: { userId },
+        include: { user: true, vehicle: true },
+    });
     if (!driver) throw AppError.notFound('Driver profile not found');
 
     const marketplaceReservation = await prisma.bidAward.findFirst({
@@ -1171,71 +1187,99 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
     // Generate 4-digit pickup OTP
     const pickupOtp = String(randomInt(1000, 9999));
 
-    // Two valid accept scenarios handled atomically:
-    //
-    // Flow A â€” Direct dispatch: dispatch notified multiple drivers via FCM.
+    // Two valid accept scenarios handled atomically with Redis distributed locking:
+    // Flow A — Direct dispatch: dispatch notified multiple drivers via FCM.
     //   Booking is CONFIRMED with driverId=null.
     //   First driver to accept claims it by setting driverId + transitioning to DRIVER_ARRIVING.
-    //
-    // Flow B â€” Fleet assignment: fleet owner pre-assigned this driver.
+    // Flow B — Fleet assignment: fleet owner pre-assigned this driver.
     //   Booking is DRIVER_ASSIGNED with driverId=this driver. Driver confirms.
 
-    assertTransition(BookingStatus.CONFIRMED, BookingStatus.DRIVER_ARRIVING);
-    let acceptResult = await prisma.booking.updateMany({
-        where: {
-            id: bookingId,
-            bookingMode: BookingMode.INSTANT,
-            driverId: null,
-            status: BookingStatus.CONFIRMED,
-        },
-        data: { driverId: driver.id, status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
-    });
+    const lockKey = `lock:booking:assignment:${bookingId}`;
+    await ConcurrencyLockService.runWithLock(
+        lockKey,
+        5000,
+        'Another driver is currently accepting this booking. Please try another load.',
+        async () => {
+            assertTransition(BookingStatus.CONFIRMED, BookingStatus.DRIVER_ARRIVING);
+            let acceptResult = await prisma.booking.updateMany({
+                where: {
+                    id: bookingId,
+                    bookingMode: BookingMode.INSTANT,
+                    driverId: null,
+                    status: BookingStatus.CONFIRMED,
+                },
+                data: { driverId: driver.id, status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
+            });
 
-    if (acceptResult.count === 0) {
-        // Try fleet assignment flow
-        assertTransition(BookingStatus.DRIVER_ASSIGNED, BookingStatus.DRIVER_ARRIVING);
-        acceptResult = await prisma.booking.updateMany({
-            where: { id: bookingId, driverId: driver.id, status: BookingStatus.DRIVER_ASSIGNED },
-            data: { status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
-        });
-    }
+            if (acceptResult.count === 0) {
+                // Try fleet assignment flow
+                assertTransition(BookingStatus.DRIVER_ASSIGNED, BookingStatus.DRIVER_ARRIVING);
+                acceptResult = await prisma.booking.updateMany({
+                    where: { id: bookingId, driverId: driver.id, status: BookingStatus.DRIVER_ASSIGNED },
+                    data: { status: BookingStatus.DRIVER_ARRIVING, pickupOtp },
+                });
+            }
 
-    if (acceptResult.count === 0) {
-        throw AppError.conflict(
-            'Booking has already been claimed by another driver or is no longer available',
-            'BOOKING_NOT_AVAILABLE'
-        );
-    }
+            if (acceptResult.count === 0) {
+                throw AppError.conflict(
+                    'Booking has already been claimed by another driver or is no longer available',
+                    'BOOKING_NOT_AVAILABLE'
+                );
+            }
 
-    // Driver is now on trip
-    await prisma.driver.update({
-        where: { id: driver.id },
-        data: { status: 'ON_TRIP' },
-    });
+            // Driver is now on trip
+            await prisma.driver.update({
+                where: { id: driver.id },
+                data: { status: 'ON_TRIP' },
+            });
+        }
+    );
 
     // Fetch booking to get customerId for notification
-    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    const booking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        include: { customer: true, driver: { include: { user: true, vehicle: true } } },
+    });
 
-    // Notify customer via push + in-app (include OTP in push so customer sees it on lock screen)
+    // Notify customer and subscribers via WebSocket + Push
     if (booking?.customerId) {
+        emitToCustomerRoom(booking.customerId, 'booking_assigned', {
+            bookingId,
+            driverId: driver.id,
+            driverName: booking.driver?.user?.name ?? '',
+            driverPhone: booking.driver?.user?.phone ?? '',
+            pickupOtp,
+            vehicleNumber: booking.driver?.vehicle?.registrationNo,
+        });
+        emitToBookingRoom(bookingId, 'booking_assigned', {
+            bookingId,
+            driverId: driver.id,
+            driverName: booking.driver?.user?.name ?? '',
+            pickupOtp,
+        });
+
+        // Also inform any other drivers who were reviewing/bidding that the load is claimed
+        const conflictModal = DynamicModalService.buildConflictLostModal(bookingId);
+        emitToBookingRoom(bookingId, 'booking_conflict_lost', conflictModal);
+
         const customer = await prisma.user.findUnique({ where: { id: booking.customerId } });
         if (customer?.fcmToken) {
             await notificationService.sendToDevice(customer.fcmToken, {
-                title: 'ðŸš› Your Driver is On The Way!',
-                body: `Locked & loaded! Your driver accepted the booking. OTP: ${pickupOtp} â€” share when they arrive. ðŸ”‘`,
+                title: '🚛 Your Driver is On The Way!',
+                body: `Locked & loaded! Your driver accepted the booking. OTP: ${pickupOtp} — share when they arrive. 🔑`,
                 data: { type: 'DRIVER_ARRIVING', bookingId, pickupOtp },
             });
         }
         await createNotification(
             booking.customerId,
-            'ðŸš› Driver Accepted!',
+            '🚛 Driver Accepted!',
             `Your driver is on the way. Your pickup OTP is ${pickupOtp}.`,
             NotificationType.BOOKING_STATUS,
             bookingId,
         );
     }
 
-    logger.info(`Driver ${driver.id} accepted booking ${bookingId} â€” OTP: ${pickupOtp}`);
+    logger.info(`Driver ${driver.id} accepted booking ${bookingId} — OTP: ${pickupOtp}`);
     return prisma.booking.findUnique({ where: { id: bookingId }, select: bookingDetailSelect });
 }
 

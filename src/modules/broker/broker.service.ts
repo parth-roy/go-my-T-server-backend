@@ -198,10 +198,15 @@ export function extractCityFromAddress(address?: string | null): string {
 
 export async function syncOpenBookingsToBrokerLoads() {
   try {
+    // Decoupled: Only sync bookings explicitly escalated by Ops or originating from the broker channel
     const openBookings = await prisma.booking.findMany({
       where: {
         driverId: null,
         status: { in: ['CONFIRMED', 'DRAFT'] },
+        OR: [
+          { isOpsEscalated: true },
+          { bookingChannel: 'BROKER_DEMAND' },
+        ],
       },
       include: {
         stops: { orderBy: { sequence: 'asc' } },

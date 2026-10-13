@@ -44,10 +44,21 @@ export function setupTrackingGateway(io: SocketServer) {
         const role   = (socket as any).user?.role;
         logger.debug(`Socket connected: ${socket.id} user: ${userId}`);
 
-        // Every driver automatically joins their personal room so ULIP worker
-        // can push document verification results directly to them.
+        if (userId) {
+            socket.join(`user_${userId}`);
+        }
+
+        if (role === 'CUSTOMER' && userId) {
+            socket.join(`customer_${userId}`);
+        }
+
+        if (role === 'ADMIN') {
+            socket.join('admin_ops');
+        }
+
+        // Every driver automatically joins their personal room so dispatch/ULIP workers
+        // can push verification results, SDUI alerts, and job offers directly to them.
         if (role === 'DRIVER' && userId) {
-            // We need the driverId, not userId — look it up and join the room
             prisma.driver.findUnique({ where: { userId }, select: { id: true } })
                 .then(driver => {
                     if (driver) {

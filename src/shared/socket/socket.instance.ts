@@ -69,4 +69,28 @@ export function emitToMarketplaceUser(userId: string, event: string, data: objec
     socketInstance.of('/marketplace').to(`marketplace_user_${userId}`).emit(event, data);
 }
 
+/**
+ * Emit an event to a customer's personal tracking room.
+ */
+export function emitToCustomerRoom(customerId: string, event: string, data: object): void {
+    if (!socketInstance) return;
+    socketInstance.of('/tracking').to(`customer_${customerId}`).emit(event, data);
+}
+
+/**
+ * Emit an event to any authenticated user's room.
+ */
+export function emitToUserRoom(userId: string, event: string, data: object): void {
+    if (!socketInstance) return;
+    socketInstance.of('/tracking').to(`user_${userId}`).emit(event, data);
+}
+
+/**
+ * Emit an event to the operations room for admins.
+ */
+export function emitToAdminOpsRoom(event: string, data: object): void {
+    if (!socketInstance) return;
+    socketInstance.of('/tracking').to('admin_ops').emit(event, data);
+}
+
 

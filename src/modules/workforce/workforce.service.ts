@@ -528,31 +528,27 @@ export function isJobExpiredOrPast(params: {
     }
   }
 
-  // 3. Timing evaluation (e.g. for WhatsApp leads with "Today (Urgent)", "Immediate", "Urgent")
+  // 3. Timing evaluation (for WhatsApp inquiries and on-demand leads)
   if (timing && typeof timing === 'string' && timing.trim().length > 0) {
     const tLower = timing.toLowerCase().trim();
 
-    if (tLower.includes('today') || tLower.includes('urgent') || tLower.includes('immediate')) {
-      // If posted on a previous calendar day, it has expired!
-      if (createdDayStart < todayStart) {
-        return true;
-      }
-      // If posted today but older than 12 hours for immediate/urgent needs:
-      if (nowMs - createdMs > 12 * 60 * 60 * 1000) {
+    if (tLower.includes('urgent') || tLower.includes('immediate') || tLower.includes('today')) {
+      // Urgent / Today leads remain open for 48 hours from submission
+      if (nowMs - createdMs > 48 * 60 * 60 * 1000) {
         return true;
       }
     } else if (tLower.includes('tomorrow')) {
-      const tomorrowDay = createdDayStart + 24 * 60 * 60 * 1000;
-      if (tomorrowDay < todayStart) {
-        return true; // Tomorrow has already passed
+      // Tomorrow leads remain open for 72 hours from submission
+      if (nowMs - createdMs > 72 * 60 * 60 * 1000) {
+        return true;
       }
     }
   }
 
-  // 4. Urgency = IMMEDIATE or WITHIN_HOUR with no slot
+  // 4. Urgency = IMMEDIATE or WITHIN_HOUR with no slot (valid for 48h)
   if (urgency === 'IMMEDIATE' || urgency === 'WITHIN_HOUR') {
-    if (nowMs - createdMs > 24 * 60 * 60 * 1000) {
-      return true; // On-demand immediate gig older than 24h
+    if (nowMs - createdMs > 48 * 60 * 60 * 1000) {
+      return true;
     }
   }
 
@@ -711,11 +707,16 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   const waAndConditions: any[] = [
     { status: 'AVAILABLE' },
     { assignedWorkerId: null },
-    { intent: { in: ['HIRE', 'BULK'] } },
+    { intent: { in: ['HIRE', 'BULK', 'hire', 'bulk', 'Hire', 'Bulk'] } },
     {
-      NOT: [
-        { notes: { contains: `[DECLINED:${worker.id}]` } },
-        { notes: { contains: '[CANCELLED]' } },
+      OR: [
+        { notes: null },
+        {
+          NOT: [
+            { notes: { contains: `[DECLINED:${worker.id}]` } },
+            { notes: { contains: '[CANCELLED]' } },
+          ],
+        },
       ],
     },
   ];
@@ -733,7 +734,11 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
 
   if (city && typeof city === 'string' && city.trim().length > 0 && city.toLowerCase() !== 'all') {
     waAndConditions.push({
-      city: { contains: city.trim(), mode: 'insensitive' },
+      OR: [
+        { city: { contains: city.trim(), mode: 'insensitive' } },
+        { location: { contains: city.trim(), mode: 'insensitive' } },
+        { message: { contains: city.trim(), mode: 'insensitive' } },
+      ],
     });
   } else if (state && typeof state === 'string' && state.trim().length > 0 && state.toLowerCase() !== 'all') {
     waAndConditions.push({
@@ -800,8 +805,10 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
         slotsRemaining: wa.workersNeeded || 1,
         totalSlots:     wa.workersNeeded || 1,
         vehicleType:    'WhatsApp Lead',
-        goodsType:      `${wa.service || 'Service'}${wa.timing ? ` (${wa.timing})` : ''}`,
-        goodsDescription: wa.message || `Customer ${wa.name} requested ${wa.service || 'service'} in ${wa.city}`,
+        goodsType:      wa.service || 'Service',
+        goodsDescription: wa.service
+          ? `${wa.service} Needed — ${wa.location ? `${wa.location}, ${wa.city}` : wa.city}`
+          : `Work Lead in ${wa.city}`,
         goodsWeightKg:  null,
         goodsQuantity:  1,
         goodsLengthCm:  null,
@@ -837,12 +844,13 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
     }
   }
 
-  // Sort
+  // Sort: by distance if coordinates available, payout if selected, else recent by default
   if (sortBy === 'distance' && worker.currentLat != null) {
     openBookings.sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
   } else if (sortBy === 'payout') {
     openBookings.sort((a, b) => b.payoutAmount - a.payoutAmount);
-  } else if (sortBy === 'recent') {
+  } else {
+    // Default fallback: most recent leads/gigs first so workers immediately see new incoming jobs
     openBookings.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -1844,11 +1852,16 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
     where: {
       status: 'AVAILABLE',
       assignedWorkerId: null,
-      intent: { in: ['HIRE', 'BULK'] },
-      NOT: [
-        { notes: { contains: `[DECLINED:${userId}]` } },
-        ...(worker ? [{ notes: { contains: `[DECLINED:${worker.id}]` } }] : []),
-        { notes: { contains: '[CANCELLED]' } },
+      intent: { in: ['HIRE', 'BULK', 'hire', 'bulk', 'Hire', 'Bulk'] },
+      OR: [
+        { notes: null },
+        {
+          NOT: [
+            { notes: { contains: `[DECLINED:${userId}]` } },
+            ...(worker ? [{ notes: { contains: `[DECLINED:${worker.id}]` } }] : []),
+            { notes: { contains: '[CANCELLED]' } },
+          ],
+        },
       ],
     },
     take: 50,
@@ -2299,35 +2312,54 @@ export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
     worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
   }
 
-  const where: any = {};
+  const conditions: any[] = [];
+  const isAvailable = !status || status === 'AVAILABLE';
+
   if (status && status !== 'ALL') {
-    where.status = String(status);
+    conditions.push({ status: String(status) });
   } else if (!status) {
-    where.status = 'AVAILABLE';
+    conditions.push({ status: 'AVAILABLE' });
   }
 
-  if (where.status === 'AVAILABLE') {
-    where.assignedWorkerId = null;
-    where.NOT = [
-      { notes: { contains: '[CANCELLED]' } },
-      ...(userId ? [{ notes: { contains: `[DECLINED:${userId}]` } }] : []),
-      ...(worker ? [{ notes: { contains: `[DECLINED:${worker.id}]` } }] : []),
-    ];
+  if (isAvailable) {
+    conditions.push({ assignedWorkerId: null });
+    conditions.push({
+      OR: [
+        { notes: null },
+        {
+          NOT: [
+            { notes: { contains: '[CANCELLED]' } },
+            ...(userId ? [{ notes: { contains: `[DECLINED:${userId}]` } }] : []),
+            ...(worker ? [{ notes: { contains: `[DECLINED:${worker.id}]` } }] : []),
+          ],
+        },
+      ],
+    });
   }
 
   if (query?.intent) {
-    where.intent = String(query.intent);
+    conditions.push({ intent: String(query.intent) });
   } else {
-    where.intent = { in: ['HIRE', 'BULK'] };
+    conditions.push({ intent: { in: ['HIRE', 'BULK', 'hire', 'bulk', 'Hire', 'Bulk'] } });
   }
 
   if (city && typeof city === 'string' && city.trim() !== '' && city.toLowerCase() !== 'all') {
-    where.city = { contains: city.trim(), mode: 'insensitive' };
+    conditions.push({
+      OR: [
+        { city: { contains: city.trim(), mode: 'insensitive' } },
+        { location: { contains: city.trim(), mode: 'insensitive' } },
+        { message: { contains: city.trim(), mode: 'insensitive' } },
+      ],
+    });
   }
 
   if (service && typeof service === 'string' && service.trim() !== '' && service.toLowerCase() !== 'all') {
-    where.service = { contains: service.trim(), mode: 'insensitive' };
+    conditions.push({
+      service: { contains: service.trim(), mode: 'insensitive' },
+    });
   }
+
+  const where: any = conditions.length > 0 ? { AND: conditions } : {};
 
   const [items, total] = await Promise.all([
     prisma.workforceWhatsAppInquiry.findMany({
@@ -2341,7 +2373,7 @@ export async function getWorkerWhatsAppJobs(userId?: string, query?: any) {
 
   const formatted = items
     .filter((wa) => {
-      if (where.status === 'AVAILABLE') {
+      if (isAvailable) {
         if (wa.status !== 'AVAILABLE' || wa.assignedWorkerId != null) return false;
         if (
           wa.notes &&
