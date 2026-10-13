@@ -27,7 +27,10 @@ import {
   emitToMarketplaceBid,
   emitToMarketplaceCustomer,
   emitToMarketplaceUser,
+  emitToCustomerRoom,
+  emitToBookingRoom,
 } from '@shared/socket/socket.instance';
+import { DynamicModalService } from '@modules/dispatch/sdui.service';
 import type {
   CreateRevisionInput,
   OpportunitiesQuery,
@@ -230,16 +233,22 @@ function serializeBidThread(bid: any) {
 }
 
 function ensureWindowOpen(booking: any): void {
-  if (booking.bookingMode !== BookingMode.PRIVATE_BID) {
-    throw AppError.badRequest('This booking is not open for private bidding', 'NOT_BIDDING_BOOKING');
+  const isDirectDispatch =
+    (booking.bookingMode === BookingMode.INSTANT ||
+      booking.bookingChannel === 'CUSTOMER_DIRECT' ||
+      booking.bookingChannel === 'BROKER_DEMAND') &&
+    booking.driverId === null;
+
+  if (booking.bookingMode !== BookingMode.PRIVATE_BID && !isDirectDispatch) {
+    throw AppError.badRequest('This booking is not open for bidding or counter-offers', 'NOT_BIDDING_BOOKING');
   }
-  if (booking.status !== BookingStatus.CONFIRMED) {
+  if (booking.status !== BookingStatus.CONFIRMED && booking.status !== BookingStatus.DRAFT) {
     throw AppError.conflict('This booking is no longer open for bidding', 'BID_WINDOW_NOT_OPEN');
   }
-  if (!booking.bidWindow || booking.bidWindow.status !== BidWindowStatus.OPEN) {
+  if (booking.bidWindow && booking.bidWindow.status !== BidWindowStatus.OPEN) {
     throw AppError.conflict('The bid window is not open', 'BID_WINDOW_NOT_OPEN');
   }
-  if (booking.bidWindow.closesAt.getTime() <= Date.now()) {
+  if (booking.bidWindow && booking.bidWindow.closesAt.getTime() <= Date.now()) {
     throw AppError.conflict('The bid window has expired', 'BID_WINDOW_EXPIRED');
   }
 }
@@ -733,17 +742,30 @@ export async function submitBid(bookingId: string, actor: Actor, input: SubmitBi
     return getBidThread(retry.bidId, actor);
   }
 
-  const booking = await prisma.booking.findUnique({
+  let booking = await prisma.booking.findUnique({
     where: { id: bookingId },
     include: { bidWindow: true },
   });
   if (!booking) throw AppError.notFound('Booking not found');
+
+  // If this is a direct/instant booking without an existing bidWindow, open one dynamically
+  if (!booking.bidWindow) {
+    const window = await prisma.bidWindow.create({
+      data: {
+        bookingId: booking.id,
+        status: BidWindowStatus.OPEN,
+        closesAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+    booking = { ...booking, bidWindow: window };
+  }
+
   ensureWindowOpen(booking);
 
   const participant = await resolveParticipantIdentity(actor);
   const vehicle = validateParticipantEligibility(participant, booking, input.vehicleId, true);
   await ensureParticipantOperationalAvailability(participant, vehicle.vehicleId);
-  const revisionValues = buildRevisionValues(input, booking, booking.bidWindow, vehicle);
+  const revisionValues = buildRevisionValues(input, booking, booking.bidWindow!, vehicle);
   const bidId = randomUUID();
   const revisionId = randomUUID();
 
@@ -802,16 +824,49 @@ export async function submitBid(bookingId: string, actor: Actor, input: SubmitBi
     throw error;
   }
 
-  const event = { bookingId, bidId, revisionId, revisionNumber: 1 };
+  // Mark booking as having counter-bids
+  await prisma.booking.update({
+    where: { id: bookingId },
+    data: { hasCounterBids: true },
+  });
+
+  const event = {
+    bookingId,
+    bidId,
+    revisionId,
+    revisionNumber: 1,
+    bidAmount: input.amount,
+    driverName: participant.driver?.user?.name ?? 'Verified Provider',
+  };
   emitToMarketplaceCustomer(bookingId, 'bid_created', event);
   emitToMarketplaceBid(bidId, 'bid_revision_created', event);
+  emitToCustomerRoom(booking.customerId, 'counter_bid_received', event);
+  emitToBookingRoom(bookingId, 'counter_bid_received', event);
+
+  // Generate Server-Driven UI Dynamic Modal for customer
+  const sduiModal = DynamicModalService.buildCounterBidNotificationModal({
+    bookingId: booking.id,
+    bookingNumber: booking.bookingNumber,
+    driverId: participant.driverId ?? '',
+    driverName: participant.driver?.user?.name ?? 'Verified Driver',
+    bidAmount: input.amount,
+    originalFare: booking.totalFare ?? input.amount,
+    notes: input.note,
+  });
+  emitToCustomerRoom(booking.customerId, 'sdui_modal_received', sduiModal);
+
   await notifyUser(
     booking.customerId,
-    'New private bid received',
-    'A verified provider submitted an offer for your load.',
-    { type: 'BID_RECEIVED', bookingId, bidId },
+    '🚛 Driver Counter-Offer Received!',
+    `A verified driver offered ₹${input.amount} for your booking #${booking.bookingNumber}. Tap to view & negotiate.`,
+    {
+      type: 'COUNTER_BID_RECEIVED',
+      bookingId,
+      bidId,
+      sduiModal: JSON.stringify(sduiModal),
+    },
   );
-  logger.info('[Marketplace] Bid submitted', event);
+  logger.info('[Marketplace] Bid submitted with counter-bid escalation', event);
   return getBidThread(bidId, actor);
 }
 
