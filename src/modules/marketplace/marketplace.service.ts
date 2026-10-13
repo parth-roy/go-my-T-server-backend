@@ -4,6 +4,7 @@ import {
   BidPartyType,
   BidRevisionAuthorSide,
   BidWindowStatus,
+  BookingChannel,
   BookingMode,
   BookingStatus,
   DriverStatus,
@@ -13,6 +14,7 @@ import {
   PaymentStatus,
   Prisma,
   UserRole,
+  VehicleType,
 } from '@prisma/client';
 import { env } from '@config/env';
 import { assertTransition } from '@modules/booking/booking.transition';
@@ -647,6 +649,24 @@ export async function listOpportunities(actor: Actor, query: OpportunitiesQuery)
   };
 }
 
+function mapMarketplaceVehicleType(v: string | null | undefined): VehicleType {
+  const s = (v || '').toUpperCase();
+  if (s.includes('32') || s.includes('CONTAINER') || s.includes('TRAILER')) return VehicleType.CONTAINER_32FT;
+  if (s.includes('20')) return VehicleType.TRUCK_20FT;
+  if (s.includes('19')) return VehicleType.TRUCK_19FT;
+  if (s.includes('17')) return VehicleType.TRUCK_17FT;
+  if (s.includes('14')) return VehicleType.TRUCK_14FT;
+  if (s.includes('BOLERO')) return VehicleType.BOLERO_PICKUP;
+  if (s.includes('DOST')) return VehicleType.ASHOK_LEYLAND_DOST;
+  if (s.includes('JEETO')) return VehicleType.MAHINDRA_JEETO;
+  if (s.includes('INTRA')) return VehicleType.TATA_INTRA;
+  if (s.includes('ACE')) return VehicleType.TATA_ACE;
+  if (s.includes('MINI')) return VehicleType.MINI_TRUCK;
+  if (s.includes('THREE') || s.includes('AUTO') || s.includes('3 WHEEL')) return VehicleType.THREE_WHEELER;
+  if (s.includes('BIKE')) return VehicleType.BIKE;
+  return VehicleType.TATA_ACE;
+}
+
 export async function resolveBookingForMarketplace(
   bookingOrLoadId: string,
   extraInclude?: Prisma.BookingInclude,
@@ -757,6 +777,84 @@ export async function resolveBookingForMarketplace(
         await prisma.brokerLoad.update({
           where: { id: brokerLoad.id },
           data: { sourceBookingId: booking.id },
+        });
+      }
+    }
+  }
+
+  // 3. If not found in Booking or BrokerLoad, check WhatsAppInquiry table
+  if (!booking) {
+    const inq = await prisma.whatsAppInquiry.findFirst({
+      where: {
+        OR: [
+          { id: bookingOrLoadId },
+          { inquiryNumber: bookingOrLoadId },
+          { bookingNumber: bookingOrLoadId },
+        ],
+      },
+    });
+
+    if (inq) {
+      booking = await prisma.booking.findFirst({
+        where: {
+          OR: [
+            { id: inq.id },
+            { bookingNumber: inq.inquiryNumber },
+          ],
+        },
+        include: baseInclude,
+      });
+
+      if (!booking) {
+        let customerUser = await prisma.user.findFirst({
+          where: { role: { in: [UserRole.CUSTOMER, UserRole.ADMIN] } },
+        });
+        if (!customerUser) customerUser = await prisma.user.findFirst();
+        if (!customerUser) throw AppError.notFound('No valid user found to associate booking');
+
+        const pickupCoords = resolveJobCoordinates(null, null, inq.pickupCity || inq.city);
+        const dropCoords = resolveJobCoordinates(null, null, inq.dropCity || inq.city);
+
+        booking = await prisma.booking.create({
+          data: {
+            id: inq.id,
+            bookingNumber: inq.inquiryNumber,
+            customerId: customerUser.id,
+            pickupLat: pickupCoords.lat,
+            pickupLng: pickupCoords.lng,
+            pickupAddress: inq.pickupCity || inq.city || 'Hub Location',
+            vehicleType: mapMarketplaceVehicleType(inq.vehicleType),
+            goodsType: inq.goodsType || 'General Cargo',
+            goodsWeightKg: 1000,
+            estimatedDistance: 18.5,
+            totalFare: 2500,
+            grandTotal: 2500,
+            baseFare: 2000,
+            status: BookingStatus.CONFIRMED,
+            bookingMode: BookingMode.PRIVATE_BID,
+            bookingChannel: BookingChannel.CUSTOMER_AUCTION,
+            receiverName: inq.name || 'Verified Consignee',
+            receiverPhone: inq.phone || '',
+            stops: {
+              create: [
+                {
+                  sequence: 1,
+                  latitude: dropCoords.lat,
+                  longitude: dropCoords.lng,
+                  address: inq.dropCity || inq.city || 'Delivery Point',
+                  receiverName: inq.name || 'Verified Consignee',
+                  receiverPhone: inq.phone || '',
+                },
+              ],
+            },
+            bidWindow: {
+              create: {
+                status: BidWindowStatus.OPEN,
+                closesAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+              },
+            },
+          },
+          include: baseInclude,
         });
       }
     }

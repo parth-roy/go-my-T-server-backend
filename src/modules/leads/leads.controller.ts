@@ -650,6 +650,8 @@ export const getDriverWhatsAppLeads = async (req: Request, res: Response, next: 
       return {
         id: item.id,
         bookingNumber: item.inquiryNumber, // Starts with WA- -> Driver LoadItem automatically flags as LoadSource.whatsApp
+        sourceBookingId: item.id,
+        bookingId: item.id,
         source: 'WHATSAPP',
         bookingMode: 'WHATSAPP_LEAD',
         pickupAddress: pickup,
