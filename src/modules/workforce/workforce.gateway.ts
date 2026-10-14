@@ -51,6 +51,22 @@ export function setupWorkforceGateway(io: SocketServer): void {
       socket.join(`worker_${worker.id}`);
       logger.debug(`[WorkforceSocket] Worker ${worker.id} joined personal room worker_${worker.id}`);
 
+      // ── GIG ROOM JOIN / LEAVE ───────────────────────────────────────────
+      // Worker joins/leaves active gig chat rooms for real-time delivery
+      socket.on('join', (room: string) => {
+        if (typeof room === 'string' && room.startsWith('gig:')) {
+          socket.join(room);
+          logger.debug(`[WorkforceSocket] Worker ${worker.id} joined room ${room}`);
+        }
+      });
+
+      socket.on('leave', (room: string) => {
+        if (typeof room === 'string' && room.startsWith('gig:')) {
+          socket.leave(room);
+          logger.debug(`[WorkforceSocket] Worker ${worker.id} left room ${room}`);
+        }
+      });
+
       // ── WORKER LOCATION UPDATE ─────────────────────────────────────────
       // Worker app sends GPS pings here (mirrors driver location_update pattern).
       // Rate-limited via Redis: DB snapshot only every 30s, Redis update always.

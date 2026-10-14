@@ -1576,10 +1576,15 @@ async function purgeUserRelatedRecords(tx: Prisma.TransactionClient, userId: str
   await tx.bidAward.deleteMany({ where: { customerId: userId } });
   await tx.marketplaceBid.deleteMany({ where: { createdByUserId: userId } });
 
-  // 3. Wallets
+  // 3. Wallets - Financial Integrity Guard (AUD-034)
   const wallet = await tx.wallet.findUnique({ where: { userId } });
   if (wallet) {
-    await tx.walletTransaction.deleteMany({ where: { walletId: wallet.id } });
+    const txCount = await tx.walletTransaction.count({ where: { walletId: wallet.id } });
+    if (txCount > 0) {
+      throw AppError.badRequest(
+        'Cannot hard-delete account with existing financial ledger transactions. Financial audit trails must be preserved. Use soft delete to deactivate this account.'
+      );
+    }
     await tx.wallet.delete({ where: { id: wallet.id } });
   }
 
@@ -1626,7 +1631,12 @@ async function purgeUserRelatedRecords(tx: Prisma.TransactionClient, userId: str
     await tx.driverSubscription.deleteMany({ where: { driverId: driver.id } });
     const dWallet = await tx.driverWallet.findUnique({ where: { driverId: driver.id } });
     if (dWallet) {
-      await tx.driverWalletTransaction.deleteMany({ where: { walletId: dWallet.id } });
+      const dTxCount = await tx.driverWalletTransaction.count({ where: { walletId: dWallet.id } });
+      if (dTxCount > 0) {
+        throw AppError.badRequest(
+          'Cannot hard-delete driver with existing financial ledger transactions. Financial audit trails must be preserved. Use soft delete to deactivate this account.'
+        );
+      }
       await tx.driverWallet.delete({ where: { id: dWallet.id } });
     }
     await tx.fleetDriver.deleteMany({ where: { driverId: driver.id } });
@@ -1644,7 +1654,12 @@ async function purgeUserRelatedRecords(tx: Prisma.TransactionClient, userId: str
     await tx.gigAssignment.deleteMany({ where: { workerId: worker.id } });
     const wWallet = await tx.workerWallet.findUnique({ where: { workerId: worker.id } });
     if (wWallet) {
-      await tx.workerWalletTransaction.deleteMany({ where: { walletId: wWallet.id } });
+      const wTxCount = await tx.workerWalletTransaction.count({ where: { walletId: wWallet.id } });
+      if (wTxCount > 0) {
+        throw AppError.badRequest(
+          'Cannot hard-delete worker with existing financial ledger transactions. Financial audit trails must be preserved. Use soft delete to deactivate this account.'
+        );
+      }
       await tx.workerWallet.delete({ where: { id: wWallet.id } });
     }
     await tx.worker.delete({ where: { id: worker.id } });
@@ -1667,7 +1682,12 @@ async function purgeUserRelatedRecords(tx: Prisma.TransactionClient, userId: str
     await tx.fleetEarning.deleteMany({ where: { fleetOwnerId: fleetOwner.id } });
     const fWallet = await tx.fleetWallet.findUnique({ where: { fleetOwnerId: fleetOwner.id } });
     if (fWallet) {
-      await tx.fleetWalletTransaction.deleteMany({ where: { walletId: fWallet.id } });
+      const fTxCount = await tx.fleetWalletTransaction.count({ where: { walletId: fWallet.id } });
+      if (fTxCount > 0) {
+        throw AppError.badRequest(
+          'Cannot hard-delete fleet owner with existing financial ledger transactions. Financial audit trails must be preserved. Use soft delete to deactivate this account.'
+        );
+      }
       await tx.fleetWallet.delete({ where: { id: fWallet.id } });
     }
     await tx.fleetOwner.delete({ where: { id: fleetOwner.id } });

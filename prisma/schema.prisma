@@ -1143,7 +1143,7 @@ model Wallet {
 model WalletTransaction {
   id           String                  @id @default(uuid())
   walletId     String
-  wallet       Wallet                  @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  wallet       Wallet                  @relation(fields: [walletId], references: [id], onDelete: Restrict)
   type         WalletTransactionType
   reason       WalletTransactionReason
   amount       Float
@@ -1154,6 +1154,7 @@ model WalletTransaction {
 
   @@index([walletId, createdAt])
   @@index([referenceId])
+  @@index([walletId, referenceId])
   @@map("wallet_transactions")
 }
 
@@ -1638,7 +1639,7 @@ model DriverWallet {
 model DriverWalletTransaction {
   id           String                @id @default(uuid())
   walletId     String
-  wallet       DriverWallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  wallet       DriverWallet          @relation(fields: [walletId], references: [id], onDelete: Restrict)
   type         WalletTransactionType // CREDIT | DEBIT
   reason       DriverWalletReason
   amount       Float
@@ -1651,6 +1652,7 @@ model DriverWalletTransaction {
   @@index([walletId, createdAt])
   @@index([bookingId])
   @@index([referenceId])
+  @@index([walletId, referenceId])
   @@map("driver_wallet_transactions")
 }
 
@@ -1676,7 +1678,7 @@ model WorkerWallet {
 model WorkerWalletTransaction {
   id           String                @id @default(uuid())
   walletId     String
-  wallet       WorkerWallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  wallet       WorkerWallet          @relation(fields: [walletId], references: [id], onDelete: Restrict)
   type         WalletTransactionType
   reason       WorkerWalletReason
   amount       Float
@@ -1688,6 +1690,8 @@ model WorkerWalletTransaction {
 
   @@index([walletId, createdAt])
   @@index([bookingId])
+  @@index([referenceId])
+  @@index([walletId, referenceId])
   @@map("worker_wallet_transactions")
 }
 
@@ -1788,7 +1792,7 @@ model FleetWallet {
 model FleetWalletTransaction {
   id           String                @id @default(uuid())
   walletId     String
-  wallet       FleetWallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  wallet       FleetWallet           @relation(fields: [walletId], references: [id], onDelete: Restrict)
   type         WalletTransactionType
   amount       Float
   balanceAfter Float
@@ -1796,6 +1800,9 @@ model FleetWalletTransaction {
   note         String?
   createdAt    DateTime              @default(now())
 
+  @@index([walletId, createdAt])
+  @@index([referenceId])
+  @@index([walletId, referenceId])
   @@map("fleet_wallet_transactions")
 }
 
