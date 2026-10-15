@@ -436,10 +436,9 @@ export async function listBookings(userId: string, role: string, query: ListBook
             // Driver is querying unassigned direct bookings to accept or counter-bid
             where.driverId = null;
             where.status = { in: [BookingStatus.CONFIRMED, BookingStatus.DRAFT] };
-            where.bookingChannel = { in: [BookingChannel.CUSTOMER_DIRECT, BookingChannel.BROKER_DEMAND] };
-            // If vehicle is registered and not all, optionally filter by vehicle class
-            if (driver.vehicle?.type) {
-                where.vehicleType = driver.vehicle.type;
+            where.bookingChannel = { in: [BookingChannel.CUSTOMER_DIRECT, BookingChannel.BROKER_DEMAND, BookingChannel.CUSTOMER_AUCTION] };
+            if ((query as any).vehicleType) {
+                where.vehicleType = (query as any).vehicleType;
             }
         } else {
             // Driver is querying their own assigned trips (Upcoming / Active / History)
