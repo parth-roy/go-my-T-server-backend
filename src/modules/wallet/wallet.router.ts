@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate } from '@shared/middleware/auth.middleware';
+import { authenticate, requireRole } from '@shared/middleware/auth.middleware';
+import { UserRole } from '@prisma/client';
 import { validate } from '@shared/middleware/validate';
 import * as WalletController from './wallet.controller';
 import { addMoneySchema } from './wallet.schema';
@@ -12,8 +13,8 @@ walletRouter.use(authenticate);
 walletRouter.get('/', WalletController.getWallet);
 walletRouter.get('/transactions', WalletController.getTransactions);
 
-// Direct credit (legacy / admin use)
-walletRouter.post('/add', validate(addMoneySchema), WalletController.addMoney);
+// Direct credit (RESTRICTED TO ADMIN ONLY — ordinary users cannot mint funds)
+walletRouter.post('/add', requireRole(UserRole.ADMIN), validate(addMoneySchema), WalletController.addMoney);
 
 // Wallet payment for booking
 walletRouter.post('/pay', WalletController.payForBooking);

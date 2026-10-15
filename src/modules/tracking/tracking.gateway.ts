@@ -27,7 +27,10 @@ const authMiddleware = (socket: Socket, next: (err?: Error) => void) => {
     const token = socket.handshake.auth.token || socket.handshake.query.token;
     if (!token) return next(new Error('Authentication error: Missing token'));
     try {
-        const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET);
+        const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as any;
+        if (decoded.type && decoded.type !== 'access') {
+            return next(new Error('Authentication error: Invalid token type'));
+        }
         (socket as any).user = decoded;
         next();
     } catch {
@@ -69,10 +72,52 @@ export function setupTrackingGateway(io: SocketServer) {
                 .catch(() => { /* non-fatal */ });
         }
 
-        // Customer/admin subscribes to live updates for a booking
-        socket.on('subscribe_booking', (bookingId: string) => {
-            socket.join(`booking_${bookingId}`);
-            logger.debug(`Socket ${socket.id} joined room booking_${bookingId}`);
+        // Customer/driver/fleetOwner/admin subscribes to live updates for a booking
+        socket.on('subscribe_booking', async (bookingId: unknown, acknowledge?: (result: object) => void) => {
+            if (typeof bookingId !== 'string' || !bookingId.trim()) {
+                return acknowledge?.({ success: false, code: 'INVALID_BOOKING_ID' });
+            }
+            const cleanBookingId = bookingId.trim();
+
+            if (role === 'ADMIN') {
+                socket.join(`booking_${cleanBookingId}`);
+                logger.debug(`Socket ${socket.id} (Admin ${userId}) joined room booking_${cleanBookingId}`);
+                return acknowledge?.({ success: true });
+            }
+
+            try {
+                const booking = await prisma.booking.findUnique({
+                    where: { id: cleanBookingId },
+                    select: {
+                        id: true,
+                        customerId: true,
+                        driverId: true,
+                        driver: { select: { userId: true } },
+                        awardedFleetOwner: { select: { userId: true } },
+                    },
+                });
+
+                if (!booking) {
+                    logger.warn(`[TrackingGateway] User ${userId} requested non-existent booking ${cleanBookingId}`);
+                    return acknowledge?.({ success: false, code: 'NOT_FOUND' });
+                }
+
+                const isCustomer = booking.customerId === userId;
+                const isDriver = booking.driver?.userId === userId;
+                const isFleetOwner = booking.awardedFleetOwner?.userId === userId;
+
+                if (!isCustomer && !isDriver && !isFleetOwner) {
+                    logger.warn(`[TrackingGateway] Unauthorized subscription attempt by user ${userId} (${role}) to booking ${cleanBookingId}`);
+                    return acknowledge?.({ success: false, code: 'FORBIDDEN' });
+                }
+
+                socket.join(`booking_${cleanBookingId}`);
+                logger.debug(`Socket ${socket.id} (user ${userId}) authorized and joined room booking_${cleanBookingId}`);
+                acknowledge?.({ success: true });
+            } catch (err: any) {
+                logger.error(`[TrackingGateway] Error authorizing booking subscription: ${err.message}`);
+                acknowledge?.({ success: false, code: 'SERVER_ERROR' });
+            }
         });
 
 

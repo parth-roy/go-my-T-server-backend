@@ -12,6 +12,7 @@ import {
     DriverStatus,
     MarketplaceBidStatus,
     PaymentMethod,
+    PaymentStatus,
     Prisma,
     UserRole,
     WorkerJobStatus,
@@ -29,6 +30,7 @@ import { handleDriverDecline } from '@modules/dispatch/dispatch.service';
 import { checkServiceability } from '@modules/maps/serviceability.service';
 import { settleTripEarnings } from '@modules/driver-wallet/driver-wallet.service';
 import { refundToWallet } from '@modules/wallet/wallet.service';
+import { s3Service } from '@modules/upload/upload.service';
 import type {
     CreateBookingInput,
     CancelBookingInput,
@@ -204,7 +206,18 @@ async function getDriverBooking(bookingId: string, userId: string) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function createBooking(customerId: string, data: CreateBookingInput) {
-    const { stops, estimatedFare, estimatedDistanceKm, dropLat, dropLng, dropAddress, ...bookingData } = data as any;
+    const {
+        stops,
+        estimatedFare,
+        estimatedDistanceKm,
+        dropLat,
+        dropLng,
+        dropAddress,
+        pickupTime,
+        pickupDateTime,
+        customerNote: rawCustomerNote,
+        ...bookingData
+    } = data as any;
 
     if (data.containsRestrictedGoods) {
         throw AppError.badRequest(
@@ -313,14 +326,19 @@ export async function createBooking(customerId: string, data: CreateBookingInput
             booking = await prisma.booking.create({
                 data: {
                     ...bookingData,
+                    customerNote: rawCustomerNote
+                        ? (pickupTime && !rawCustomerNote.includes(pickupTime)
+                            ? `${rawCustomerNote} (Pickup: ${pickupTime})`
+                            : rawCustomerNote)
+                        : (pickupTime ? `Pickup: ${pickupTime}` : null),
                     bookingPersona: (bookingData.bookingPersona as any) || "INDIVIDUAL",
                     truckCount: bookingData.truckCount || 1,
                     contractDuration: bookingData.contractDuration || null,
                     urgencyWindow: (bookingData.urgencyWindow as any) || "FLEXIBLE",
                     slaExpiresAt: bookingData.slaExpiresAt
                         ? new Date(bookingData.slaExpiresAt)
-                        : (bookingData as any).pickupDateTime
-                            ? new Date((bookingData as any).pickupDateTime)
+                        : pickupDateTime
+                            ? new Date(pickupDateTime)
                             : bookingData.urgencyWindow === 'UNDER_2_HOURS'
                                 ? new Date(Date.now() + 2 * 3600 * 1000)
                                 : bookingData.urgencyWindow === 'UNDER_4_HOURS'
@@ -544,10 +562,26 @@ export async function getBooking(bookingId: string, userId: string, role: string
         orderBy: { calculatedAt: 'desc' },
     });
 
-    return {
+    const resolvedStops = booking.stops
+        ? await Promise.all(
+            booking.stops.map(async (stop: any) => {
+                if (!stop.podPhotoUrl) return stop;
+                const viewableUrl = await s3Service.resolveViewableUrl(stop.podPhotoUrl);
+                return { ...stop, podPhotoUrl: viewableUrl || stop.podPhotoUrl };
+            })
+        )
+        : booking.stops;
+
+    const result: any = {
         ...booking,
+        stops: resolvedStops,
         driverPayout: auditLog?.driverPayout ?? null,
     };
+    // Ensure customer's secret pickupOtp is NEVER disclosed to drivers or fleet owners
+    if (role !== UserRole.CUSTOMER && role !== UserRole.ADMIN) {
+        result.pickupOtp = null;
+    }
+    return result;
 }
 
 // ─────────────────────────────────────────────
@@ -916,8 +950,10 @@ export async function markDriverArriving(bookingId: string, userId: string) {
         NotificationType.BOOKING_STATUS,
         bookingId
     );
-    const { emitToBookingRoom } = await import('@shared/socket/socket.instance');
-    emitToBookingRoom(bookingId, 'booking_update', { type: 'DRIVER_ARRIVING', pickupOtp: finalOtp });
+    const { emitToBookingRoom, emitToCustomerRoom } = await import('@shared/socket/socket.instance');
+    // Sanitize booking room payload: do NOT broadcast secret pickup OTP to driver socket!
+    emitToBookingRoom(bookingId, 'booking_update', { type: 'DRIVER_ARRIVING' });
+    emitToCustomerRoom(updated.customerId, 'pickup_otp_generated', { bookingId, pickupOtp: finalOtp });
 
     return updated;
 }
@@ -926,33 +962,14 @@ export async function markDriverArriving(bookingId: string, userId: string) {
 // DRIVER — VERIFY PICKUP OTP (DRIVER_ARRIVING → PICKED_UP)
 // ─────────────────────────────────────────────
 
-export async function markPickedUp(bookingId: string, userId: string) {
-    const { booking, driver } = await getDriverBooking(bookingId, userId);
-    assertTransition(booking.status, BookingStatus.PICKED_UP);
-
-    const pickedUpAt = new Date();
-    const arrivalTime = booking.arrivalTime ?? pickedUpAt;
-    
-    // Calculate waiting charge (10 mins free)
-    let waitingCharge = 0;
-    const diffMins = Math.floor((pickedUpAt.getTime() - arrivalTime.getTime()) / 60000);
-    if (diffMins > 10) {
-        waitingCharge = (diffMins - 10) * 5; // e.g. 5 rupees per min
+export async function markPickedUp(bookingId: string, userId: string, otp?: string) {
+    if (!otp || !otp.trim()) {
+        throw AppError.badRequest(
+            'Pickup verification requires customer OTP. Please ask customer for the code or use POST /bookings/:id/verify-pickup-otp',
+            'OTP_REQUIRED'
+        );
     }
-
-    const updated = await prisma.booking.update({
-        where: { id: bookingId },
-        data: {
-            status: BookingStatus.PICKED_UP,
-            actualPickupTime: pickedUpAt,
-            ...(waitingCharge > 0 && { waitingCharge }),
-            pickupOtp: null, // Clear OTP after use for security
-        },
-        select: bookingDetailSelect,
-    });
-
-    eventBus.emit('booking.goods_loaded', { bookingId, customerId: updated.customerId });
-    return updated;
+    return verifyPickupOtp(bookingId, userId, otp.trim());
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -999,11 +1016,17 @@ export async function requestPodOtp(
     }
 
     // Emit over socket so Customer App can show it in UI immediately
-    const { emitToBookingRoom } = await import('@shared/socket/socket.instance');
+    const { emitToBookingRoom, emitToCustomerRoom } = await import('@shared/socket/socket.instance');
+    // Sanitize room broadcast: do NOT leak customer delivery OTP into the shared booking room!
     emitToBookingRoom(bookingId, 'delivery_otp_requested', {
         bookingId,
         stopId,
-        otp
+    });
+    // Deliver secret OTP exclusively to customer private channel
+    emitToCustomerRoom(booking.customerId, 'delivery_otp_generated', {
+        bookingId,
+        stopId,
+        otp,
     });
 
     return { success: true, message: 'OTP sent to customer' };
@@ -1107,60 +1130,85 @@ export async function completeBooking(bookingId: string, userId: string) {
     const { booking, driver } = await getDriverBooking(bookingId, userId);
     assertTransition(booking.status, BookingStatus.COMPLETED);
 
+    const grandTotal = booking.grandTotal ?? booking.totalFare ?? 0;
+    const paymentMethod = booking.paymentMethod ?? PaymentMethod.CASH;
+
+    // FIN-003: Require confirmed online payment before completing non-cash bookings.
+    // Completing an unpaid online booking would disburse platform/driver funds for money never collected.
+    if (paymentMethod !== PaymentMethod.CASH && booking.paymentStatus !== PaymentStatus.PAID) {
+        throw AppError.badRequest('Cannot complete booking: Online payment has not been received or confirmed.', 'PAYMENT_REQUIRED');
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
-        const completed = await tx.booking.update({
-            where: { id: bookingId },
-            data: { status: BookingStatus.COMPLETED },
-            select: bookingDetailSelect,
+        // Atomic conditional state claim: only transition from DELIVERED or IN_TRANSIT
+        const claim = await tx.booking.updateMany({
+            where: {
+                id: bookingId,
+                status: { in: [BookingStatus.DELIVERED, BookingStatus.IN_TRANSIT] },
+            },
+            data: {
+                status: BookingStatus.COMPLETED,
+                ...(paymentMethod === PaymentMethod.CASH ? {
+                    paymentStatus: PaymentStatus.PAID,
+                    paymentRef: `CASH_COLLECTED_${Date.now()}`,
+                } : {}),
+            },
         });
+
+        if (claim.count === 0) {
+            throw AppError.conflict('Booking is already completed or not in a deliverable state', 'INVALID_TRANSITION');
+        }
+
         await tx.driver.updateMany({
             where: { id: driver.id, status: DriverStatus.ON_TRIP },
             data: { status: DriverStatus.AVAILABLE },
         });
+
+        const completed = await tx.booking.findUnique({
+            where: { id: bookingId },
+            select: bookingDetailSelect,
+        });
+
         return completed;
     });
+
+    if (!updated) {
+        throw AppError.notFound('Booking not found after completion');
+    }
 
     logger.info(`Booking completed: ${updated.bookingNumber}`);
 
     // Generate a scratch card reward for the customer
     await generateScratchCard(updated.customerId, updated.id, updated.grandTotal ?? updated.totalFare ?? 0);
 
-    // â”€â”€ PHASE 9: Commission Settlement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Settle earnings and commissions asynchronously after status update.
-    // We use fire-and-forget here so that a settlement error never blocks the
-    // driver from marking the trip complete. Any error is logged + monitored.
-    const grandTotal = booking.grandTotal ?? booking.totalFare ?? 0;
-    const paymentMethod = booking.paymentMethod ?? PaymentMethod.CASH;
-
-    if (paymentMethod === PaymentMethod.CASH) {
-        await prisma.booking.update({
-            where: { id: bookingId },
-            data: {
-                paymentStatus: 'PAID',
-                paymentRef: `CASH_COLLECTED_${Date.now()}`,
-            },
-        });
-    }
-
+    // ── PHASE 9: Commission Settlement ──────────────────────────────────
+    // Settle earnings and commissions. With FIN-003, settlement is idempotent and safe against retries.
     if (grandTotal > 0 && driver) {
-        // Find if this is a fleet booking
-        const fleetMembership = await prisma.fleetDriver.findFirst({
-            where: { driverId: driver.id, isActive: true },
-            select: { fleetOwnerId: true },
-        });
+        // Settle against the commercial booking award:
+        // Only trips explicitly awarded to a fleet owner or with an explicit truck assignment entitle the fleet owner to settlement.
+        // Independent driver trips (awardedFleetOwnerId === null) settle 100% to the driver.
+        let fleetOwnerId = booking.awardedFleetOwnerId ?? null;
+        if (!fleetOwnerId) {
+            const assignment = await prisma.truckAssignment.findUnique({
+                where: { bookingId },
+                select: { fleetOwnerId: true },
+            });
+            fleetOwnerId = assignment?.fleetOwnerId ?? null;
+        }
 
-        settleTripEarnings({
-            bookingId,
-            driverId:    driver.id,
-            grossAmount: grandTotal,
-            paymentMethod,
-            fleetOwnerId: fleetMembership?.fleetOwnerId,
-        }).catch((err) => {
+        try {
+            await settleTripEarnings({
+                bookingId,
+                driverId:    driver.id,
+                grossAmount: grandTotal,
+                paymentMethod,
+                fleetOwnerId: fleetOwnerId ?? undefined,
+            });
+        } catch (err) {
             logger.error(`[Settlement] Failed for booking ${bookingId}:`, err);
-            // TODO: Push to a dead-letter queue for manual reconciliation
-        });
+        }
     } else {
-        logger.warn(`[Settlement] Skipped for booking ${bookingId} â€” no fare amount or driver`);
+        logger.warn(`[Settlement] Skipped for booking ${bookingId} — no fare amount or driver`);
     }
 
     return updated;
@@ -1286,11 +1334,11 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
             pickupOtp,
             vehicleNumber: booking.driver?.vehicle?.registrationNo,
         });
+        // Sanitize booking room broadcast: do NOT leak customer's secret pickupOtp to driver socket!
         emitToBookingRoom(bookingId, 'booking_assigned', {
             bookingId,
             driverId: driver.id,
             driverName: booking.driver?.user?.name ?? '',
-            pickupOtp,
         });
 
         // Also inform any other drivers who were reviewing/bidding that the load is claimed
@@ -1314,8 +1362,12 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
         );
     }
 
-    logger.info(`Driver ${driver.id} accepted booking ${bookingId} — OTP: ${pickupOtp}`);
-    return prisma.booking.findUnique({ where: { id: bookingId }, select: bookingDetailSelect });
+    logger.info(`Driver ${driver.id} accepted booking ${bookingId}`);
+    const acceptedBooking = await prisma.booking.findUnique({ where: { id: bookingId }, select: bookingDetailSelect });
+    if (acceptedBooking) {
+        (acceptedBooking as any).pickupOtp = null; // Do not disclose customer OTP to driver in response payload
+    }
+    return acceptedBooking;
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

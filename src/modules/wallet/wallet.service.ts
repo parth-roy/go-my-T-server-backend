@@ -5,20 +5,15 @@ import {
     BookingMode,
     PaymentMethod,
     PaymentStatus,
+    PaymentType,
     Prisma,
     PrismaClient,
     WalletTransactionReason,
     WalletTransactionType,
 } from '@prisma/client';
 import { AppError } from '@shared/errors/AppError';
-import Razorpay from 'razorpay';
+import { razorpay } from '@modules/payment/razorpay.client';
 import crypto from 'crypto';
-
-
-const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID || '',
-    key_secret: process.env.RAZORPAY_KEY_SECRET || '',
-});
 
 // ─────────────────────────────────────────────
 // GET WALLET (with summary)
@@ -82,30 +77,36 @@ export async function getTransactionHistory(userId: string, page: number, limit:
 // ADD MONEY (direct, used by admin or legacy)
 // ─────────────────────────────────────────────
 
-export async function addMoney(userId: string, amount: number, referenceId?: string) {
+export async function addMoney(userId: string, amount: number, referenceId?: string, adminActorId?: string) {
+    if (amount <= 0) {
+        throw AppError.badRequest('Amount must be greater than zero');
+    }
+
     const wallet = await prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw AppError.notFound('Wallet not found');
 
-    const newBalance = wallet.cachedBalance + amount;
+    const effectiveRefId = referenceId || (adminActorId ? `ADMIN_CREDIT_${adminActorId}` : 'ADMIN_MANUAL_CREDIT');
 
-    const [updatedWallet, transaction] = await prisma.$transaction([
-        prisma.wallet.update({
+    return prisma.$transaction(async (tx) => {
+        // FIN-004: Atomic increment prevents lost updates under concurrent credits
+        const updatedWallet = await tx.wallet.update({
             where: { userId },
-            data: { cachedBalance: newBalance },
-        }),
-        prisma.walletTransaction.create({
-            data: {
-                walletId: wallet.id,
-                type: WalletTransactionType.CREDIT,
-                reason: WalletTransactionReason.TOP_UP,
-                amount,
-                balanceAfter: newBalance,
-                referenceId,
-            }
-        })
-    ]);
+            data: { cachedBalance: { increment: amount } },
+        });
 
-    return { wallet: updatedWallet, transaction };
+        const transaction = await tx.walletTransaction.create({
+            data: {
+                walletId: updatedWallet.id,
+                type: WalletTransactionType.CREDIT,
+                reason: WalletTransactionReason.ADMIN_CREDIT,
+                amount,
+                balanceAfter: updatedWallet.cachedBalance,
+                referenceId: effectiveRefId,
+            },
+        });
+
+        return { wallet: updatedWallet, transaction };
+    });
 }
 
 // ─────────────────────────────────────────────
@@ -113,33 +114,44 @@ export async function addMoney(userId: string, amount: number, referenceId?: str
 // ─────────────────────────────────────────────
 
 export async function deductMoney(userId: string, amount: number, reason: WalletTransactionReason, referenceId?: string) {
-    const wallet = await prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw AppError.notFound('Wallet not found');
-
-    if (wallet.cachedBalance < amount) {
-        throw AppError.badRequest('Insufficient wallet balance', 'INSUFFICIENT_BALANCE');
+    if (amount <= 0) {
+        throw AppError.badRequest('Amount must be greater than zero');
     }
 
-    const newBalance = wallet.cachedBalance - amount;
+    return prisma.$transaction(async (tx) => {
+        // FIN-004: Atomic conditional decrement prevents race conditions and overdraft
+        const deductResult = await tx.wallet.updateMany({
+            where: { userId, cachedBalance: { gte: amount } },
+            data: { cachedBalance: { decrement: amount } },
+        });
 
-    const [updatedWallet, transaction] = await prisma.$transaction([
-        prisma.wallet.update({
-            where: { userId },
-            data: { cachedBalance: newBalance },
-        }),
-        prisma.walletTransaction.create({
+        if (deductResult.count === 0) {
+            const currentWallet = await tx.wallet.findUnique({ where: { userId } });
+            if (!currentWallet) {
+                throw AppError.notFound('Wallet not found');
+            }
+            throw AppError.badRequest(
+                `Insufficient wallet balance. Required: ₹${amount.toFixed(2)}, Available: ₹${currentWallet.cachedBalance.toFixed(2)}`,
+                'INSUFFICIENT_BALANCE'
+            );
+        }
+
+        const updatedWallet = await tx.wallet.findUnique({ where: { userId } });
+        if (!updatedWallet) throw AppError.notFound('Wallet not found');
+
+        const transaction = await tx.walletTransaction.create({
             data: {
-                walletId: wallet.id,
+                walletId: updatedWallet.id,
                 type: WalletTransactionType.DEBIT,
                 reason,
                 amount,
-                balanceAfter: newBalance,
+                balanceAfter: updatedWallet.cachedBalance,
                 referenceId,
-            }
-        })
-    ]);
+            },
+        });
 
-    return { wallet: updatedWallet, transaction };
+        return { wallet: updatedWallet, transaction };
+    });
 }
 
 // ─────────────────────────────────────────────
@@ -276,6 +288,11 @@ export async function createTopUpOrder(userId: string, amount: number) {
         amount: amountInPaise,
         currency: 'INR',
         receipt: `W_${userId.slice(0, 8)}_${Date.now()}`,
+        notes: {
+            userId,
+            purpose: 'WALLET_TOPUP',
+            paymentType: PaymentType.WALLET_TOPUP,
+        },
     });
 
     return {
@@ -296,13 +313,17 @@ export async function verifyTopUp(
     razorpay_payment_id: string,
     razorpay_signature: string,
 ) {
+    if (!process.env.RAZORPAY_KEY_SECRET) {
+        throw AppError.internal('Payment gateway is not configured');
+    }
+
     // Validate all fields
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
         throw AppError.badRequest('razorpay_order_id, razorpay_payment_id, and razorpay_signature are all required');
     }
 
     // Verify HMAC signature
-    const secret = process.env.RAZORPAY_KEY_SECRET || '';
+    const secret = process.env.RAZORPAY_KEY_SECRET;
     const generatedSignature = crypto
         .createHmac('sha256', secret)
         .update(razorpay_order_id + '|' + razorpay_payment_id)
@@ -312,48 +333,69 @@ export async function verifyTopUp(
         throw AppError.badRequest('Payment signature is invalid. Possible tampering detected.');
     }
 
-    // Fetch order from Razorpay to get the actual amount paid
-    const order = await razorpay.orders.fetch(razorpay_order_id);
-    // FIX HIGH-16: Use amount_paid (what was actually captured), not order.amount.
-    // Prevents crediting the full order amount when only a partial payment was made.
-    const creditAmount = Number((order as any).amount_paid || order.amount) / 100;
+    // Fetch order from Razorpay to get the actual amount paid and verify ownership
+    const order = await razorpay.orders.fetch(razorpay_order_id) as any;
+    if (order.notes?.userId && order.notes.userId !== userId) {
+        throw AppError.forbidden('Payment order belongs to another account');
+    }
+    if (order.notes?.purpose && order.notes.purpose !== 'WALLET_TOPUP') {
+        throw AppError.badRequest('Payment order was not created for wallet top-up');
+    }
+
+    // Fetch payment from Razorpay to verify capture status and order association
+    const payment = await razorpay.payments.fetch(razorpay_payment_id) as any;
+    if (payment.order_id !== razorpay_order_id) {
+        throw AppError.badRequest('Payment ID does not match the provided order ID');
+    }
+    if (payment.status !== 'captured') {
+        throw AppError.badRequest('Payment has not been captured successfully');
+    }
+
+    // Strict amount check: Only credit what was actually captured, never fall back to order.amount
+    const amountPaidPaise = Number(order.amount_paid);
+    if (!amountPaidPaise || amountPaidPaise <= 0 || order.status !== 'paid') {
+        throw AppError.badRequest('Order has not been fully paid or verified');
+    }
+    const creditAmount = amountPaidPaise / 100;
 
     if (creditAmount <= 0) {
         throw AppError.badRequest('Invalid payment amount');
     }
 
-    const wallet = await prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) throw AppError.notFound('Wallet not found');
+    return prisma.$transaction(async (tx) => {
+        // FIN-004: In-transaction idempotency prevents duplicate top-up credits under concurrent webhooks
+        const existing = await tx.walletTransaction.findFirst({
+            where: { referenceId: razorpay_payment_id },
+        });
+        if (existing) {
+            const currentWallet = await tx.wallet.findUnique({ where: { userId } });
+            return { message: 'Already credited', wallet: currentWallet, amountCredited: existing.amount };
+        }
 
-    // Idempotency: check if this payment_id was already processed
-    const existing = await prisma.walletTransaction.findFirst({
-        where: { referenceId: razorpay_payment_id },
-    });
-    if (existing) {
-        return { message: 'Already credited', wallet };
-    }
+        let wallet = await tx.wallet.findUnique({ where: { userId } });
+        if (!wallet) {
+            wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+        }
 
-    const newBalance = wallet.cachedBalance + creditAmount;
-
-    const [updatedWallet] = await prisma.$transaction([
-        prisma.wallet.update({
+        const updatedWallet = await tx.wallet.update({
             where: { userId },
-            data: { cachedBalance: newBalance },
-        }),
-        prisma.walletTransaction.create({
+            data: { cachedBalance: { increment: creditAmount } },
+        });
+
+        const transaction = await tx.walletTransaction.create({
             data: {
-                walletId: wallet.id,
+                walletId: updatedWallet.id,
                 type: WalletTransactionType.CREDIT,
                 reason: WalletTransactionReason.TOP_UP,
                 amount: creditAmount,
-                balanceAfter: newBalance,
+                balanceAfter: updatedWallet.cachedBalance,
                 referenceId: razorpay_payment_id,
                 note: `Wallet top-up via Razorpay`,
-            }
-        }),
-    ]);
+            },
+        });
 
-    return { message: 'Wallet topped up successfully', wallet: updatedWallet, amountCredited: creditAmount };
+        return { message: 'Wallet topped up successfully', wallet: updatedWallet, amountCredited: creditAmount, transaction };
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -362,40 +404,44 @@ export async function verifyTopUp(
 export async function refundToWallet(userId: string, bookingId: string, amount: number) {
     if (amount <= 0) throw AppError.badRequest('Refund amount must be positive');
 
-    // Idempotency: never double-refund the same booking
-    const existingRefund = await prisma.walletTransaction.findFirst({
-        where: {
-            referenceId: `REFUND_${bookingId}`,
-            reason: WalletTransactionReason.REFUND,
-        },
-    });
-    if (existingRefund) {
-        return { message: 'Already refunded', refundAmount: amount };
-    }
+    return prisma.$transaction(async (tx) => {
+        // FIN-004: In-transaction idempotency prevents duplicate refunds for the same cancelled booking
+        const referenceId = `REFUND_${bookingId}`;
+        const existingRefund = await tx.walletTransaction.findFirst({
+            where: {
+                referenceId,
+                reason: WalletTransactionReason.REFUND,
+            },
+        });
+        if (existingRefund) {
+            const currentWallet = await tx.wallet.findUnique({ where: { userId } });
+            return { message: 'Already refunded', wallet: currentWallet, refundAmount: amount };
+        }
 
-    let wallet = await prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) {
-        wallet = await prisma.wallet.create({ data: { userId, cachedBalance: 0 } });
-    }
+        let wallet = await tx.wallet.findUnique({ where: { userId } });
+        if (!wallet) {
+            wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+        }
 
-    const newBalance = wallet.cachedBalance + amount;
+        const updatedWallet = await tx.wallet.update({
+            where: { userId },
+            data: { cachedBalance: { increment: amount } },
+        });
 
-    const [updatedWallet] = await prisma.$transaction([
-        prisma.wallet.update({ where: { userId }, data: { cachedBalance: newBalance } }),
-        prisma.walletTransaction.create({
+        const transaction = await tx.walletTransaction.create({
             data: {
-                walletId: wallet.id,
+                walletId: updatedWallet.id,
                 type: WalletTransactionType.CREDIT,
                 reason: WalletTransactionReason.REFUND,
                 amount,
-                balanceAfter: newBalance,
-                referenceId: `REFUND_${bookingId}`,
+                balanceAfter: updatedWallet.cachedBalance,
+                referenceId,
                 note: `Refund for cancelled booking`,
             },
-        }),
-    ]);
+        });
 
-    return { message: 'Refund credited to wallet', wallet: updatedWallet, refundAmount: amount };
+        return { message: 'Refund credited to wallet', wallet: updatedWallet, refundAmount: amount, transaction };
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -404,31 +450,33 @@ export async function refundToWallet(userId: string, bookingId: string, amount: 
 export async function creditCashback(userId: string, amount: number, referenceId: string, note?: string) {
     if (amount <= 0) return;
 
-    // Idempotency: never double-credit the same reward
-    const existing = await prisma.walletTransaction.findFirst({
-        where: { referenceId, reason: WalletTransactionReason.CASHBACK },
-    });
-    if (existing) return;
+    return prisma.$transaction(async (tx) => {
+        // FIN-004: In-transaction idempotency prevents duplicate reward credits
+        const existing = await tx.walletTransaction.findFirst({
+            where: { referenceId, reason: WalletTransactionReason.CASHBACK },
+        });
+        if (existing) return;
 
-    let wallet = await prisma.wallet.findUnique({ where: { userId } });
-    if (!wallet) {
-        wallet = await prisma.wallet.create({ data: { userId, cachedBalance: 0 } });
-    }
+        let wallet = await tx.wallet.findUnique({ where: { userId } });
+        if (!wallet) {
+            wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+        }
 
-    const newBalance = wallet.cachedBalance + amount;
+        const updatedWallet = await tx.wallet.update({
+            where: { userId },
+            data: { cachedBalance: { increment: amount } },
+        });
 
-    await prisma.$transaction([
-        prisma.wallet.update({ where: { userId }, data: { cachedBalance: newBalance } }),
-        prisma.walletTransaction.create({
+        await tx.walletTransaction.create({
             data: {
-                walletId: wallet.id,
+                walletId: updatedWallet.id,
                 type: WalletTransactionType.CREDIT,
                 reason: WalletTransactionReason.CASHBACK,
                 amount,
-                balanceAfter: newBalance,
+                balanceAfter: updatedWallet.cachedBalance,
                 referenceId,
                 note: note ?? `Cashback credited`,
             },
-        }),
-    ]);
+        });
+    });
 }

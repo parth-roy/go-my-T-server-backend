@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticate, optionalAuth } from '@shared/middleware/auth.middleware';
+import { authenticate, optionalAuth, requireRole } from '@shared/middleware/auth.middleware';
+import { UserRole } from '@prisma/client';
 import * as PaymentController from './payment.controller';
 
 export const paymentRouter = Router();
@@ -17,11 +18,11 @@ paymentRouter.post('/cashfree-verify', PaymentController.verifyDirectContactCash
 paymentRouter.post('/submit-direct-contact-request', PaymentController.submitDirectContactRequest);
 paymentRouter.get('/check-direct-contact-status', optionalAuth, PaymentController.checkDirectContactStatus);
 
-// Admin Direct Contact & Multi-Platform Payment Management
-paymentRouter.get('/admin/direct-contact-requests', PaymentController.getAdminDirectContactRequests);
-paymentRouter.post('/admin/verify-direct-contact-request', PaymentController.adminVerifyDirectContactRequest);
-paymentRouter.post('/admin-approve-utr', PaymentController.adminApproveUtr);
-paymentRouter.get('/admin/transactions', PaymentController.getAdminPaymentTransactions);
+// Admin Direct Contact & Multi-Platform Payment Management (Restricted to authenticated ADMIN)
+paymentRouter.get('/admin/direct-contact-requests', authenticate, requireRole(UserRole.ADMIN), PaymentController.getAdminDirectContactRequests);
+paymentRouter.post('/admin/verify-direct-contact-request', authenticate, requireRole(UserRole.ADMIN), PaymentController.adminVerifyDirectContactRequest);
+paymentRouter.post('/admin-approve-utr', authenticate, requireRole(UserRole.ADMIN), PaymentController.adminApproveUtr);
+paymentRouter.get('/admin/transactions', authenticate, requireRole(UserRole.ADMIN), PaymentController.getAdminPaymentTransactions);
 
 paymentRouter.use(authenticate);
 

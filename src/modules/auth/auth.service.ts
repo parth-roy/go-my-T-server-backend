@@ -481,15 +481,32 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
 // REFRESH TOKENS
 // ─────────────────────────────────────────────
 export async function refreshTokens({ refreshToken }: RefreshInput) {
-  // Extract contextual role if the refreshToken is a JWT
+  // Extract contextual role and verify token type
   let contextualRole: string | undefined;
   try {
-    const decoded = jwt.decode(refreshToken) as any;
+    const decoded = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as any;
+    if (decoded.type && decoded.type !== 'refresh') {
+      throw AppError.unauthorized('Invalid token type');
+    }
     if (decoded && decoded.role) {
       contextualRole = decoded.role;
     }
-  } catch (e) {
-    // Legacy UUID token, ignore
+  } catch (err: any) {
+    if (err instanceof AppError) throw err;
+    // Fallback: If verification with JWT_REFRESH_SECRET failed, check if an access token was provided or legacy token
+    try {
+      const decodedLegacy = jwt.decode(refreshToken) as any;
+      if (decodedLegacy) {
+        if (decodedLegacy.type === 'access') {
+          throw AppError.unauthorized('Invalid token type: cannot use access token to refresh');
+        }
+        if (decodedLegacy.role) {
+          contextualRole = decodedLegacy.role;
+        }
+      }
+    } catch (legacyErr: any) {
+      if (legacyErr instanceof AppError) throw legacyErr;
+    }
   }
 
   // Look up the refresh token in DB
@@ -536,7 +553,7 @@ export async function logout(refreshToken: string) {
 // ─────────────────────────────────────────────
 async function issueTokenPair(userId: string, phone: string | null | undefined, role: string) {
   const accessToken = jwt.sign(
-    { userId, phone: phone || '', role },
+    { userId, phone: phone || '', role, type: 'access' },
     env.JWT_ACCESS_SECRET,
     { expiresIn: env.JWT_ACCESS_EXPIRES as any }  // '15m'
   );
@@ -546,9 +563,9 @@ async function issueTokenPair(userId: string, phone: string | null | undefined, 
   const jti = uuidv4();
   
   const rawRefreshToken = jwt.sign(
-    { userId, role, jti },
-    env.JWT_ACCESS_SECRET,
-    { expiresIn: '30d' }
+    { userId, role, jti, type: 'refresh' },
+    env.JWT_REFRESH_SECRET,
+    { expiresIn: (env.JWT_REFRESH_EXPIRES || '30d') as any }
   );
 
   const expiresAt = new Date();
@@ -863,6 +880,17 @@ export async function socialLogin(input: SocialLoginInput) {
     });
     logger.info(`[Social Auth] Created new user: ${user.id} (${normalizedEmail || uid}) with role ${input.role}`);
   } else {
+    // Existing user status checks
+    if (!user.isActive) {
+      throw AppError.forbidden('Your account has been deactivated by an administrator.');
+    }
+    if (user.role === 'FLEET_OWNER') {
+      const fleet = await prisma.fleetOwner.findUnique({ where: { userId: user.id } });
+      if (fleet && !fleet.isActive) {
+        throw AppError.forbidden('Your fleet account has been deactivated by an administrator.');
+      }
+    }
+
     // Update existing user's details if needed
     const updateData: any = {};
     if (!user.firebaseUid) updateData.firebaseUid = uid;
@@ -880,6 +908,11 @@ export async function socialLogin(input: SocialLoginInput) {
   }
 
   if (user.role === 'WORKER') {
+    const existingWorker = await prisma.worker.findUnique({ where: { userId: user.id } });
+    if (existingWorker && !existingWorker.isActive) {
+      throw AppError.forbidden('Your workforce account has been deactivated by an administrator.');
+    }
+
     await prisma.worker.upsert({
       where: { userId: user.id },
       update: {},

@@ -38,8 +38,9 @@ export async function getTransactions(req: Request, res: Response, next: NextFun
 
 export async function addMoney(req: Request, res: Response, next: NextFunction) {
     try {
-        const { amount, referenceId } = req.body;
-        const result = await WalletService.addMoney(req.user!.id, amount, referenceId);
+        const { amount, referenceId, targetUserId } = req.body;
+        const recipientUserId = targetUserId || req.user!.id;
+        const result = await WalletService.addMoney(recipientUserId, amount, referenceId, req.user!.id);
         sendSuccess(res, result, 'Money added to wallet successfully');
     } catch (err) {
         next(err);

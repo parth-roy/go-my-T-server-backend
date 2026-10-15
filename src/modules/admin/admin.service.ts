@@ -18,6 +18,7 @@ import type {
   AnnouncementInput, BroadcastInput, SubscriptionUpdate, UlipLogsQuery, DriverBidsQuery,
 } from './admin.schema';
 import { cancelBookingBySystem, assertTransition } from '../booking/booking.service';
+import { s3Service } from '@modules/upload/upload.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
@@ -25,7 +26,7 @@ import { cancelBookingBySystem, assertTransition } from '../booking/booking.serv
 
 function issueTokenPair(userId: string, phone: string, role: UserRole) {
   const accessToken = jwt.sign(
-    { userId, phone, role },
+    { userId, phone, role, type: 'access' },
     env.JWT_ACCESS_SECRET,
     { expiresIn: env.JWT_ACCESS_EXPIRES as any }
   );
@@ -80,7 +81,7 @@ export async function refreshAdminToken(input: RefreshInput) {
     include: { user: true },
   });
 
-  if (!stored || stored.expiresAt < new Date() || stored.user.role !== UserRole.ADMIN) {
+  if (!stored || stored.expiresAt < new Date() || stored.user.role !== UserRole.ADMIN || !stored.user.isActive) {
     throw AppError.unauthorized('Invalid or expired refresh token');
   }
 
@@ -863,14 +864,17 @@ export async function getDrivers(q: DriversQuery) {
     }),
   ]);
 
-  const drivers = rawDrivers.map(d => {
-    let complianceScore = 0;
-    if (d.dlVerifStatus === 'VERIFIED') complianceScore += 30;
-    if (d.isDocVerified) complianceScore += 40;
-    if (d.user?.isActive) complianceScore += 10;
-    if (d.vehicle?.rcVerifStatus === 'VERIFIED') complianceScore += 20;
-    return { ...d, complianceScore };
-  });
+  const drivers = await Promise.all(
+    rawDrivers.map(async (d) => {
+      let complianceScore = 0;
+      if (d.dlVerifStatus === 'VERIFIED') complianceScore += 30;
+      if (d.isDocVerified) complianceScore += 40;
+      if (d.user?.isActive) complianceScore += 10;
+      if (d.vehicle?.rcVerifStatus === 'VERIFIED') complianceScore += 20;
+      const resolvedDocs = await s3Service.resolveDocumentsUrls(d.documents);
+      return { ...d, complianceScore, documents: resolvedDocs };
+    })
+  );
 
   return { total, page: q.page, limit: q.limit, data: drivers };
 }
@@ -888,7 +892,8 @@ export async function getDriverById(id: string) {
     },
   });
   if (!driver) throw AppError.notFound('Driver not found');
-  return driver;
+  const resolvedDocs = await s3Service.resolveDocumentsUrls(driver.documents);
+  return { ...driver, documents: resolvedDocs };
 }
 
 export async function updateDocumentStatus(driverId: string, docId: string, input: DocStatusInput) {

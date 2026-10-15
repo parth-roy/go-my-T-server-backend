@@ -10,6 +10,8 @@ import {
     PlatformSource,
     PaymentType,
     TransactionPaymentStatus,
+    WalletTransactionReason,
+    WalletTransactionType,
 } from '@prisma/client';
 import { sendSuccess } from '@shared/utils/response';
 import { AppError } from '@shared/errors/AppError';
@@ -318,17 +320,14 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
 
         console.log(`WEBHOOK: Received event [${event}] (eventId: ${eventId})`);
 
-        // 1. Webhook Idempotency Check — drop duplicate webhook delivery
-        try {
-            await prisma.processedWebhook.create({
-                data: { eventId, eventType: event },
-            });
-        } catch (dupErr: any) {
-            if (dupErr.code === 'P2002') {
-                console.log(`WEBHOOK: Duplicate event [${eventId}] ignored (already processed)`);
-                res.status(200).json({ status: 'ok', message: 'Duplicate event already processed' });
-                return;
-            }
+        // 1. FIN-006: Webhook Idempotency Check — check if event was already durably processed
+        const existingEvent = await prisma.processedWebhook.findUnique({
+            where: { eventId },
+        });
+        if (existingEvent) {
+            console.log(`WEBHOOK: Duplicate event [${eventId}] ignored (already processed)`);
+            res.status(200).json({ status: 'ok', message: 'Duplicate event already processed' });
+            return;
         }
 
         if (event === 'payment.captured' || event === 'order.paid') {
@@ -355,7 +354,17 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
                 }
             }
 
-            const paymentType = orderNotes.paymentType || (orderReceipt?.startsWith('dc_') ? PaymentType.DIRECT_CONTACT_UNLOCK : PaymentType.LOGISTICS_BOOKING);
+            // FIN-006: Accurately resolve paymentType including wallet top-ups
+            let paymentType = orderNotes.paymentType;
+            if (!paymentType) {
+                if (orderNotes.purpose === 'WALLET_TOPUP' || orderReceipt?.startsWith('W_')) {
+                    paymentType = PaymentType.WALLET_TOPUP;
+                } else if (orderReceipt?.startsWith('dc_')) {
+                    paymentType = PaymentType.DIRECT_CONTACT_UNLOCK;
+                } else {
+                    paymentType = PaymentType.LOGISTICS_BOOKING;
+                }
+            }
             const platform = orderNotes.platform || PlatformSource.CUSTOMER_APP;
 
             // Update central PaymentTransaction record
@@ -456,21 +465,24 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
                 const userId = orderNotes.userId;
                 if (userId && payment?.amount) {
                     const topupAmount = Number(payment.amount) / 100;
-                    const existingTx = await prisma.walletTransaction.findFirst({
-                        where: { referenceId: payment.id },
-                    });
-                    if (!existingTx) {
-                        const wallet = await prisma.wallet.findUnique({ where: { userId } });
-                        if (wallet) {
-                            const updatedWallet = await prisma.wallet.update({
+                    await prisma.$transaction(async (tx) => {
+                        const existingTx = await tx.walletTransaction.findFirst({
+                            where: { referenceId: payment.id },
+                        });
+                        if (!existingTx) {
+                            let wallet = await tx.wallet.findUnique({ where: { userId } });
+                            if (!wallet) {
+                                wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+                            }
+                            const updatedWallet = await tx.wallet.update({
                                 where: { userId },
                                 data: { cachedBalance: { increment: topupAmount } },
                             });
-                            await prisma.walletTransaction.create({
+                            await tx.walletTransaction.create({
                                 data: {
                                     walletId: wallet.id,
-                                    type: 'CREDIT' as any,
-                                    reason: 'TOPUP' as any,
+                                    type: WalletTransactionType.CREDIT,
+                                    reason: WalletTransactionReason.TOP_UP,
                                     amount: topupAmount,
                                     balanceAfter: updatedWallet.cachedBalance,
                                     referenceId: payment.id,
@@ -479,7 +491,7 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
                             });
                             logger.info(`WEBHOOK: Wallet credited ₹${topupAmount} for user ${userId}`);
                         }
-                    }
+                    });
                 }
             }
 
@@ -523,11 +535,18 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
             console.log(`WEBHOOK: Unhandled event [${event}] — acknowledged`);
         }
 
+        // FIN-006: Durably record event ONLY after business processing succeeds
+        await prisma.processedWebhook.upsert({
+            where: { eventId },
+            create: { eventId, eventType: event },
+            update: {},
+        });
+
         res.status(200).json({ status: 'ok' });
-    } catch (err) {
-        console.error('WEBHOOK: Unhandled error:', err);
-        // FIX HIGH-14: Return 200 even on internal errors to prevent Razorpay retry storms.
-        res.status(200).json({ status: 'ok', warning: 'Internal processing acknowledged — check server logs' });
+    } catch (err: any) {
+        logger.error('WEBHOOK: Unhandled error during event processing:', err);
+        // FIN-006: Return 500 so payment gateway retries rather than blackholing the payment
+        res.status(500).json({ error: 'Webhook processing failed', message: err?.message });
     }
 }
 
@@ -776,7 +795,13 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
             redeemedUpiUtrs.add(cleanUtr);
             isAuthentic = true;
             logger.info(`[UPI_QR_DIRECT_CONTACT] Verified unlock for phone: ${cleanPhone}, UTR: ${cleanUtr}, service: ${serviceCategory}, city: ${city}`);
-        } else if (process.env.RAZORPAY_KEY_SECRET && razorpay_signature && razorpay_order_id && razorpay_payment_id) {
+        } else if (razorpay_signature || razorpay_order_id || razorpay_payment_id) {
+            if (!process.env.RAZORPAY_KEY_SECRET) {
+                throw AppError.internal('Payment gateway is not configured');
+            }
+            if (!razorpay_signature || !razorpay_order_id || !razorpay_payment_id) {
+                throw AppError.badRequest('Incomplete Razorpay payment verification details');
+            }
             const expectedSignature = crypto
                 .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
                 .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -845,8 +870,6 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                     logger.warn(`[verifyDirectContactPayment] Error updating DirectContactRequest: ${dcErr?.message}`);
                 }
             }
-        } else if (razorpay_payment_id && (process.env.NODE_ENV === 'development' || razorpay_payment_id.startsWith('mock_') || razorpay_payment_id.startsWith('pay_test_'))) {
-            isAuthentic = true;
         }
 
         if (!isAuthentic) {
@@ -1236,6 +1259,11 @@ export async function getAdminDirectContactRequests(req: Request, res: Response,
 // ─────────────────────────────────────────────
 export async function adminVerifyDirectContactRequest(req: Request, res: Response, next: NextFunction) {
     try {
+        const adminUser = req.user;
+        if (!adminUser || adminUser.role !== 'ADMIN') {
+            throw AppError.forbidden('Admin authorization required');
+        }
+
         const { id, status, rejectionReason } = req.body;
         if (!id) {
             throw AppError.badRequest('Request ID is required');
@@ -1244,17 +1272,19 @@ export async function adminVerifyDirectContactRequest(req: Request, res: Respons
             throw AppError.badRequest('Status must be VERIFIED or REJECTED');
         }
 
+        const verifiedBy = adminUser.phone || adminUser.id;
+
         const updated = await prisma.directContactRequest.update({
             where: { id },
             data: {
                 status,
                 verifiedAt: new Date(),
-                verifiedBy: (req as any).user?.email || 'admin',
+                verifiedBy,
                 rejectionReason: status === 'REJECTED' ? rejectionReason : null,
             },
         });
 
-        logger.info(`[ADMIN_DIRECT_CONTACT] Request ${id} marked as ${status}`);
+        logger.info(`[ADMIN_DIRECT_CONTACT] Request ${id} marked as ${status} by admin ${verifiedBy}`);
         sendSuccess(res, updated, `Request marked as ${status}`);
     } catch (err) {
         next(err);
@@ -1266,15 +1296,19 @@ export async function adminVerifyDirectContactRequest(req: Request, res: Respons
 // ─────────────────────────────────────────────
 export async function adminApproveUtr(req: Request, res: Response, next: NextFunction) {
     try {
-        const { utr, adminKey } = req.body;
+        const adminUser = req.user;
+        if (!adminUser || adminUser.role !== 'ADMIN') {
+            throw AppError.forbidden('Admin authorization required');
+        }
+
+        const { utr } = req.body;
         const clean = String(utr || '').replace(/\D/g, '');
         if (clean.length !== 12) {
             throw AppError.badRequest('12-digit numeric UTR is required');
         }
-        if (adminKey !== (process.env.ADMIN_API_KEY || 'parther4949')) {
-            throw AppError.unauthorized('Invalid admin key');
-        }
+
         verifiedUpiUtrs.add(clean);
+        logger.info(`[ADMIN_UTR] UTR ${clean} approved by admin ${adminUser.id}`);
         sendSuccess(res, { utr: clean }, `UTR ${clean} added to verified bank ledger`);
     } catch (err) {
         next(err);
@@ -1550,14 +1584,15 @@ export async function verifyDirectContactCashfreePayment(req: Request, res: Resp
             }
         }
 
-        if (cashfreeClient.isConfigured()) {
-            if (!isPaid) {
-                throw AppError.badRequest('Payment has not been completed or is still pending on Cashfree.', 'PAYMENT_PENDING');
-            }
-            if (Number(cfOrder.order_amount) < 49.0) {
-                logger.warn(`[verifyDirectContactCashfreePayment] Suspicious order amount ${cfOrder.order_amount} for order ${orderId}`);
-                throw AppError.badRequest('Invalid order amount recorded on payment gateway.', 'INVALID_PAYMENT_AMOUNT');
-            }
+        if (!cashfreeClient.isConfigured()) {
+            throw AppError.internal('Payment gateway is not configured');
+        }
+        if (!isPaid) {
+            throw AppError.badRequest('Payment has not been completed or is still pending on Cashfree.', 'PAYMENT_PENDING');
+        }
+        if (Number(cfOrder.order_amount) < 49.0) {
+            logger.warn(`[verifyDirectContactCashfreePayment] Suspicious order amount ${cfOrder.order_amount} for order ${orderId}`);
+            throw AppError.badRequest('Invalid order amount recorded on payment gateway.', 'INVALID_PAYMENT_AMOUNT');
         }
 
         if (!paymentId) {

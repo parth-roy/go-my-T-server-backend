@@ -8,6 +8,7 @@ export interface JwtPayload {
   userId: string;
   phone: string;
   role: UserRole;
+  type?: 'access' | 'refresh';
 }
 
 export function authenticate(req: Request, _res: Response, next: NextFunction) {
@@ -19,6 +20,9 @@ export function authenticate(req: Request, _res: Response, next: NextFunction) {
   const token = authHeader.split(' ')[1];
   try {
     const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as JwtPayload;
+    if (payload.type && payload.type !== 'access') {
+      return next(AppError.unauthorized('Invalid token type'));
+    }
     req.user = { id: payload.userId || (payload as any).id, phone: payload.phone, role: payload.role };
     next();
   } catch (err) {
@@ -46,7 +50,9 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   const token = authHeader.split(' ')[1];
   try {
     const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as JwtPayload;
-    req.user = { id: payload.userId || (payload as any).id, phone: payload.phone, role: payload.role };
+    if (!payload.type || payload.type === 'access') {
+      req.user = { id: payload.userId || (payload as any).id, phone: payload.phone, role: payload.role };
+    }
   } catch {
     // Invalid token — continue without user (optional auth)
   }

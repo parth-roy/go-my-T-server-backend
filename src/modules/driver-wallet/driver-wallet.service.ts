@@ -1,4 +1,4 @@
-import Razorpay from 'razorpay';
+import { razorpay } from '@modules/payment/razorpay.client';
 import crypto from 'crypto';
 import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
@@ -10,6 +10,7 @@ import {
   WithdrawalEntityType,
   WithdrawalStatus,
   PaymentMethod,
+  PaymentStatus,
 } from '@prisma/client';
 
 const COMMISSION_RATE = Number(process.env.PLATFORM_COMMISSION_RATE ?? 0.20); // 20%
@@ -17,11 +18,6 @@ const COMMISSION_SOFT_ALERT = Number(process.env.COMMISSION_SOFT_ALERT_THRESHOLD
 const COMMISSION_HARD_BLOCK  = Number(process.env.COMMISSION_HARD_BLOCK_THRESHOLD ?? -2000);
 const MIN_WITHDRAWAL         = Number(process.env.MIN_WITHDRAWAL_AMOUNT ?? 50);
 const INSTANT_WITHDRAWAL_FEE = Number(process.env.INSTANT_WITHDRAWAL_FEE ?? 5);
-
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID!,
-  key_secret: process.env.RAZORPAY_KEY_SECRET!,
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERNAL HELPERS
@@ -127,11 +123,35 @@ export async function settleTripEarnings(input: TripSettlementInput) {
   const isCash      = paymentMethod === PaymentMethod.CASH;
 
   return prisma.$transaction(async (tx) => {
-    // 1. Always create the DriverEarning audit record
-    await tx.driverEarning.upsert({
-      where: { bookingId },
-      create: { driverId, bookingId, grossAmount, commission, netAmount: driverNet },
-      update: {},  // idempotent — never overwrite
+    // 1. FIN-003 Idempotency guard: if this booking has already been settled, return early.
+    // Never allow repeated settlement calls to double-credit or double-debit wallets.
+    const existingEarning = await tx.driverEarning.findUnique({ where: { bookingId } });
+    if (existingEarning) {
+      logger.warn(`[Settlement] Booking ${bookingId} has already been settled. Skipping duplicate settlement.`);
+      return {
+        type: 'ALREADY_SETTLED',
+        commission: existingEarning.commission,
+        driverNet: existingEarning.netAmount,
+        bookingId,
+      };
+    }
+
+    // 2. Validate payment eligibility on server side:
+    // Non-cash trips MUST be confirmed as PAID before disbursing platform liabilities
+    if (!isCash) {
+      const booking = await tx.booking.findUnique({
+        where: { id: bookingId },
+        select: { paymentStatus: true },
+      });
+      if (booking && booking.paymentStatus && booking.paymentStatus !== PaymentStatus.PAID) {
+        logger.error(`[Settlement] Booking ${bookingId} paymentStatus is ${booking.paymentStatus}. Cannot settle unpaid trip.`);
+        throw AppError.badRequest('Cannot settle earnings: Online payment has not been received or confirmed.', 'PAYMENT_REQUIRED');
+      }
+    }
+
+    // 3. Create the DriverEarning audit record (unique per booking)
+    await tx.driverEarning.create({
+      data: { driverId, bookingId, grossAmount, commission, netAmount: driverNet },
     });
 
     if (isCash) {
@@ -157,30 +177,17 @@ export async function settleTripEarnings(input: TripSettlementInput) {
 
       return { type: 'CASH', commission, driverNet, walletBalance: wallet.cachedBalance };
     } else {
-      // 2b. ONLINE TRIP: Credit net earnings to driver wallet
-      const wallet = await creditDriverWallet(
-        tx, driverId, driverNet, DriverWalletReason.TRIP_EARNING,
-        { bookingId, note: `Online trip earnings — Booking ${bookingId.substring(0, 8)}` }
-      );
-
-      // If driver had outstanding commission debt, auto-offset from this earning
-      const freshWallet = await tx.driverWallet.findUnique({ where: { driverId } });
-      if (freshWallet && freshWallet.commissionDue > 0) {
-        const offset = Math.min(freshWallet.commissionDue, driverNet);
-        const isFullyPaid = offset === freshWallet.commissionDue;
-        await tx.driverWallet.update({
-          where: { driverId },
-          data: { 
-            commissionDue: { decrement: offset },
-            ...(isFullyPaid && { commissionDeadline: null })
-          },
-        });
-        logger.info(`[DriverWallet] Auto-offset ₹${offset} of commission debt for driver ${driverId}`);
-      }
-
-      // 3. Fleet split (if fleet trip)
+      // 2b. ONLINE TRIP: Single Beneficiary Model (FIN-002 remediation)
+      // Contractual net amount is credited exactly ONCE to either:
+      // (a) Fleet owner wallet (for fleet trips), OR
+      // (b) Driver wallet (for independent trips).
       if (fleetOwnerId) {
-        const fleetNet = driverNet; // Fleet owner gets the driver's portion (they pay driver separately)
+        // FLEET TRIP:
+        // The fleet owner is the primary commercial beneficiary of the fleet truck/booking.
+        // Net earnings are credited to the fleet wallet. The driver is compensated separately
+        // by the fleet owner via the fleet salary system (POST /fleet-wallet/transfer or offline cash).
+        // Driver performance analytics are preserved via tx.driverEarning created in Step 1.
+        const fleetNet = driverNet;
         await tx.fleetWallet.upsert({
           where: { fleetOwnerId },
           create: { fleetOwnerId, cachedBalance: fleetNet },
@@ -203,10 +210,35 @@ export async function settleTripEarnings(input: TripSettlementInput) {
           create: { fleetOwnerId, bookingId, grossAmount, driverPayout: driverNet, netAmount: fleetNet },
           update: {},
         });
-      }
 
-      logger.info(`[DriverWallet] Online trip credited: ₹${driverNet} to driver ${driverId}. Balance: ${wallet.cachedBalance}`);
-      return { type: 'ONLINE', commission, driverNet, walletBalance: wallet.cachedBalance };
+        logger.info(`[FleetWallet] Online fleet trip credited: ₹${fleetNet} to fleet ${fleetOwnerId} (Driver ${driverId}). Balance: ${freshFleetWallet!.cachedBalance}`);
+        return { type: 'ONLINE_FLEET', commission, fleetNet, driverNet, fleetBalance: freshFleetWallet!.cachedBalance };
+      } else {
+        // INDEPENDENT DRIVER TRIP:
+        // Driver is the direct beneficiary. Credit driver wallet.
+        const wallet = await creditDriverWallet(
+          tx, driverId, driverNet, DriverWalletReason.TRIP_EARNING,
+          { bookingId, note: `Online trip earnings — Booking ${bookingId.substring(0, 8)}` }
+        );
+
+        // If driver had outstanding commission debt, auto-offset from this earning
+        const freshWallet = await tx.driverWallet.findUnique({ where: { driverId } });
+        if (freshWallet && freshWallet.commissionDue > 0) {
+          const offset = Math.min(freshWallet.commissionDue, driverNet);
+          const isFullyPaid = offset === freshWallet.commissionDue;
+          await tx.driverWallet.update({
+            where: { driverId },
+            data: { 
+              commissionDue: { decrement: offset },
+              ...(isFullyPaid && { commissionDeadline: null })
+            },
+          });
+          logger.info(`[DriverWallet] Auto-offset ₹${offset} of commission debt for driver ${driverId}`);
+        }
+
+        logger.info(`[DriverWallet] Online trip credited: ₹${driverNet} to driver ${driverId}. Balance: ${wallet.cachedBalance}`);
+        return { type: 'ONLINE', commission, driverNet, walletBalance: wallet.cachedBalance };
+      }
     }
   });
 }
@@ -250,9 +282,13 @@ export async function verifyCommissionPayment(
   razorpay_payment_id: string,
   razorpay_signature: string
 ) {
+  if (!process.env.RAZORPAY_KEY_SECRET) {
+    throw AppError.internal('Payment gateway is not configured');
+  }
+
   // 1. Verify HMAC signature
   const expectedSig = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET!)
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
     .update(`${razorpay_order_id}|${razorpay_payment_id}`)
     .digest('hex');
 
@@ -266,8 +302,21 @@ export async function verifyCommissionPayment(
   });
   if (existing) return prisma.driverWallet.findUnique({ where: { driverId } });
 
-  // 3. Fetch actual amount from Razorpay (never trust client)
+  // 3. Fetch actual payment from Razorpay and verify capture status and driver ownership
   const payment = await razorpay.payments.fetch(razorpay_payment_id) as any;
+  if (payment.order_id !== razorpay_order_id) {
+    throw AppError.badRequest('Payment ID does not match the provided order ID');
+  }
+  if (payment.status !== 'captured') {
+    throw AppError.badRequest('Payment has not been captured successfully');
+  }
+  if (payment.notes?.driverId && payment.notes.driverId !== driverId) {
+    throw AppError.forbidden('Payment belongs to another driver');
+  }
+  if (payment.notes?.purpose && payment.notes.purpose !== 'commission_payment') {
+    throw AppError.badRequest('Payment was not created for commission payment');
+  }
+
   const amountPaid = payment.amount / 100; // Convert paise to INR
 
   // 4. Atomic: credit wallet + clear commissionDue

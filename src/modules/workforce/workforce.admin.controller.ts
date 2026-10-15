@@ -3,6 +3,7 @@ import { prisma } from '@shared/db/prisma';
 import { AppError } from '@shared/errors/AppError';
 import { sendSuccess } from '@shared/utils/response';
 import { z } from 'zod';
+import { s3Service } from '@modules/upload/upload.service';
 import * as adminService from '@modules/admin/admin.service';
 import { deleteEntitySchema, bulkDeleteSchema } from '@modules/admin/admin.schema';
 
@@ -68,7 +69,8 @@ export const getWorker = async (req: Request, res: Response, next: NextFunction)
       },
     });
     if (!worker) throw AppError.notFound('Worker not found');
-    sendSuccess(res, worker);
+    const resolvedDocs = await s3Service.resolveDocumentsUrls(worker.documents);
+    sendSuccess(res, { ...worker, documents: resolvedDocs });
   } catch (err) { next(err); }
 };
 

@@ -10,6 +10,7 @@ import { gamificationService } from '@modules/gamification/gamification.service'
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { NotificationType, UserRole, WorkerStatus, WorkerJobStatus, WalletTransactionType, WalletTransactionReason, LaborType, Prisma } from '@prisma/client';
 import { emitToWorkerRoom, emitToBookingRoom } from '@shared/socket/socket.instance';
+import { s3Service } from '@modules/upload/upload.service';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import type {
@@ -275,7 +276,7 @@ export async function verifyOtp(input: VerifyOtpInput) {
   // Find existing user by email or phone
   let user = await prisma.user.findFirst({
     where: isEmail ? { email: input.phone } : { phone: input.phone },
-    select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true },
+    select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true, isActive: true },
   });
 
   if (!user) {
@@ -290,17 +291,19 @@ export async function verifyOtp(input: VerifyOtpInput) {
         ...(input.fcmToken && { fcmToken: input.fcmToken }),
         ...(finalName && { name: finalName }),
       },
-      select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true },
+      select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true, isActive: true },
     });
   } else {
+    if (!user.isActive) {
+      throw AppError.forbidden('Your account has been deactivated by an administrator.');
+    }
     user = await prisma.user.update({
       where: { id: user.id },
       data: {
-        isActive: true,
         ...(input.fcmToken && { fcmToken: input.fcmToken }),
         ...(finalName && { name: finalName }),
       },
-      select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true },
+      select: { id: true, phone: true, email: true, role: true, name: true, profileComplete: true, isActive: true },
     });
   }
 
@@ -310,19 +313,21 @@ export async function verifyOtp(input: VerifyOtpInput) {
     worker = await prisma.worker.create({
       data: { userId: user.id },
     });
+  } else if (!worker.isActive) {
+    throw AppError.forbidden('Your workforce account has been deactivated by an administrator.');
   }
 
   // Issue JWT pair
   const accessToken = jwt.sign(
-    { userId: user.id, phone: user.phone || user.email || '', email: user.email, role: UserRole.WORKER },
+    { userId: user.id, phone: user.phone || user.email || '', email: user.email, role: UserRole.WORKER, type: 'access' },
     env.JWT_ACCESS_SECRET,
     { expiresIn: env.JWT_ACCESS_EXPIRES as any }
   );
   const jti = crypto.randomUUID();
   const refreshTokenValue = jwt.sign(
-    { userId: user.id, role: UserRole.WORKER, jti },
-    env.JWT_ACCESS_SECRET,
-    { expiresIn: '30d' }
+    { userId: user.id, role: UserRole.WORKER, jti, type: 'refresh' },
+    env.JWT_REFRESH_SECRET,
+    { expiresIn: (env.JWT_REFRESH_EXPIRES || '30d') as any }
   );
 
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
@@ -351,8 +356,11 @@ export async function getMe(userId: string) {
   });
   if (!worker) throw AppError.notFound('Worker profile not found');
   
+  const resolvedDocs = await s3Service.resolveDocumentsUrls(worker.documents);
+
   return {
     ...worker,
+    documents: resolvedDocs,
     aadhaarStatus: worker.isDocVerified ? 'VERIFIED' : worker.aadhaarVerifStatus,
     panStatus: worker.isDocVerified ? 'VERIFIED' : worker.panVerifStatus,
     bankVerified: worker.isDocVerified ? true : worker.bankVerified,
@@ -725,9 +733,6 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
   if (!worker) throw AppError.notFound('Worker not found');
 
   const { page, limit, laborType, sortBy, minPayout, maxDistance, category, search, city, state } = query as any;
-  if (worker.status !== WorkerStatus.AVAILABLE) {
-    return { jobs: [], meta: { page, limit, hasMore: false, total: 0 } };
-  }
   const skip = (page - 1) * limit;
 
   // Build robust category & search filter
@@ -1729,6 +1734,10 @@ export async function completeJob(userId: string, assignmentId: string, input: C
       },
     });
     if (wa && wa.assignedWorkerId === worker.id) {
+      // FIN-005: Check persisted status — never allow completed WhatsApp jobs to be re-completed
+      if (wa.status === 'COMPLETED') {
+        throw AppError.conflict('Workforce WhatsApp job is already completed', 'INVALID_TRANSITION');
+      }
       assignment = {
         id: wa.id,
         workerId: worker.id,
@@ -1742,25 +1751,33 @@ export async function completeJob(userId: string, assignmentId: string, input: C
   }
 
   if (!assignment || assignment.workerId !== worker.id) throw AppError.notFound('Assignment not found');
-  if (assignment.status !== WorkerJobStatus.IN_PROGRESS && !isWa) {
+  if (assignment.status !== WorkerJobStatus.IN_PROGRESS) {
     throw AppError.conflict('Work must be IN_PROGRESS to complete', 'INVALID_TRANSITION');
   }
 
-  const now = new Date();
-
-  if (isWa) {
-    await prisma.workforceWhatsAppInquiry.update({ where: { id: assignment.id }, data: { status: 'COMPLETED' } });
-  } else if (isGig) {
-    await prisma.gigAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.COMPLETED, completedAt: now } });
-    await prisma.gigJob.update({ where: { id: assignment.bookingId }, data: { completionOtp: null } });
-  } else {
-    await prisma.jobAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.COMPLETED, completedAt: now, completionOtp: null, otpExpiresAt: null } });
+  // SEC-009: Verify customer completion OTP before transitioning and releasing payout
+  if (!isWa) {
+    if (!assignment.completionOtp) {
+      throw AppError.badRequest(
+        'Completion OTP must be requested from the customer before completing the job',
+        'OTP_REQUIRED'
+      );
+    }
+    if (!input.otp || input.otp.trim() !== assignment.completionOtp.trim()) {
+      throw AppError.badRequest(
+        'Invalid completion OTP. Please ask the customer for the correct code.',
+        'INVALID_OTP'
+      );
+    }
+    if (assignment.otpExpiresAt && new Date() > new Date(assignment.otpExpiresAt)) {
+      throw AppError.badRequest(
+        'Completion OTP has expired. Please request a new OTP.',
+        'OTP_EXPIRED'
+      );
+    }
   }
 
-  await prisma.worker.update({ where: { id: worker.id }, data: { totalJobs: { increment: 1 }, status: WorkerStatus.AVAILABLE } });
-
-  const workerRecord = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
-  if (!workerRecord) throw AppError.notFound('Worker record not found');
+  const now = new Date();
 
   const WORKFORCE_COMMISSION_RATE = Number(process.env.WORKFORCE_COMMISSION_RATE ?? 0.15);
   const commission = Math.round(assignment.payoutAmount * WORKFORCE_COMMISSION_RATE * 100) / 100;
@@ -1769,24 +1786,75 @@ export async function completeJob(userId: string, assignmentId: string, input: C
   const deadline = new Date();
   deadline.setHours(deadline.getHours() + 24);
 
-  const workerWallet = await prisma.workerWallet.upsert({
-    where: { workerId: workerRecord.id },
-    create: { workerId: workerRecord.id, cachedBalance: workerNet, commissionDue: commission, commissionDeadline: deadline },
-    update: { cachedBalance: { increment: workerNet }, commissionDue: { increment: commission }, commissionDeadline: deadline },
-  });
-  const freshWorkerWallet = await prisma.workerWallet.findUnique({ where: { workerId: workerRecord.id } });
+  // FIN-005: Execute assignment completion, worker counters, and wallet credits in an atomic transaction
+  const settlementResult = await prisma.$transaction(async (tx) => {
+    // 1. Atomic conditional state claim
+    if (isWa) {
+      const claim = await tx.workforceWhatsAppInquiry.updateMany({
+        where: { id: assignment.id, assignedWorkerId: worker.id, status: { not: 'COMPLETED' } },
+        data: { status: 'COMPLETED' },
+      });
+      if (claim.count === 0) {
+        throw AppError.conflict('Workforce WhatsApp job is already completed or not assigned to you', 'INVALID_TRANSITION');
+      }
+    } else if (isGig) {
+      const claim = await tx.gigAssignment.updateMany({
+        where: { id: assignment.id, workerId: worker.id, status: WorkerJobStatus.IN_PROGRESS },
+        data: { status: WorkerJobStatus.COMPLETED, completedAt: now },
+      });
+      if (claim.count === 0) {
+        throw AppError.conflict('Gig assignment is already completed or not in progress', 'INVALID_TRANSITION');
+      }
+      await tx.gigJob.update({ where: { id: assignment.bookingId }, data: { completionOtp: null } });
+    } else {
+      const claim = await tx.jobAssignment.updateMany({
+        where: { id: assignment.id, workerId: worker.id, status: WorkerJobStatus.IN_PROGRESS },
+        data: { status: WorkerJobStatus.COMPLETED, completedAt: now, completionOtp: null, otpExpiresAt: null },
+      });
+      if (claim.count === 0) {
+        throw AppError.conflict('Job assignment is already completed or not in progress', 'INVALID_TRANSITION');
+      }
+    }
 
-  await prisma.workerWalletTransaction.create({
-    data: {
-      walletId: workerWallet.id,
-      type: WalletTransactionType.CREDIT,
-      reason: 'JOB_EARNING' as any,
-      amount: workerNet,
-      balanceAfter: freshWorkerWallet!.cachedBalance,
-      bookingId: assignment.bookingId,
-      referenceId: assignmentId,
-      note: `Job completed — Assignment ${assignmentId.substring(0, 8)}`,
-    },
+    // 2. Increment worker statistics and reset availability
+    await tx.worker.update({
+      where: { id: worker.id },
+      data: { totalJobs: { increment: 1 }, status: WorkerStatus.AVAILABLE },
+    });
+
+    const workerRecord = await tx.worker.findUnique({ where: { userId }, select: { id: true } });
+    if (!workerRecord) throw AppError.notFound('Worker record not found');
+
+    // 3. Idempotency guard: never credit the same assignment twice
+    const existingTx = await tx.workerWalletTransaction.findFirst({
+      where: { referenceId: assignmentId, reason: 'JOB_EARNING' as any },
+    });
+    if (existingTx) {
+      logger.warn(`[Workforce] Assignment ${assignmentId} already credited. Skipping duplicate settlement.`);
+      return { workerNet: existingTx.amount, alreadySettled: true };
+    }
+
+    const workerWallet = await tx.workerWallet.upsert({
+      where: { workerId: workerRecord.id },
+      create: { workerId: workerRecord.id, cachedBalance: workerNet, commissionDue: commission, commissionDeadline: deadline },
+      update: { cachedBalance: { increment: workerNet }, commissionDue: { increment: commission }, commissionDeadline: deadline },
+    });
+    const freshWorkerWallet = await tx.workerWallet.findUnique({ where: { workerId: workerRecord.id } });
+
+    await tx.workerWalletTransaction.create({
+      data: {
+        walletId: workerWallet.id,
+        type: WalletTransactionType.CREDIT,
+        reason: 'JOB_EARNING' as any,
+        amount: workerNet,
+        balanceAfter: freshWorkerWallet!.cachedBalance,
+        bookingId: assignment.bookingId,
+        referenceId: assignmentId,
+        note: `Job completed — Assignment ${assignmentId.substring(0, 8)}`,
+      },
+    });
+
+    return { workerNet, alreadySettled: false };
   });
 
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } });
@@ -1809,13 +1877,13 @@ export async function completeJob(userId: string, assignmentId: string, input: C
     if (pendingWorkers === 0) {
       await prisma.gigJob.update({ where: { id: assignment.bookingId }, data: { status: 'COMPLETED' } });
     }
-  } else {
+  } else if (!isWa) {
     pendingWorkers = await prisma.jobAssignment.count({
       where: { bookingId: assignment.bookingId, status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS, WorkerJobStatus.PENDING_ACCEPTANCE] } },
     });
   }
   
-  if (pendingWorkers === 0) {
+  if (!isWa && pendingWorkers === 0) {
     emitToBookingRoom(assignment.bookingId, 'all_workers_completed', { bookingId: assignment.bookingId });
     logger.info(`[Workforce] All workers completed for booking ${assignment.bookingId}`);
 

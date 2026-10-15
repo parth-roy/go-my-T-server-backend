@@ -9,7 +9,10 @@ const authMiddleware = (socket: Socket, next: (err?: Error) => void) => {
   const token = socket.handshake.auth.token || socket.handshake.query.token;
   if (!token) return next(new Error('Authentication error: Missing token'));
   try {
-    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET);
+    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as any;
+    if (decoded.type && decoded.type !== 'access') {
+      return next(new Error('Authentication error: Invalid token type'));
+    }
     (socket as any).user = decoded;
     next();
   } catch {
@@ -53,10 +56,27 @@ export function setupWorkforceGateway(io: SocketServer): void {
 
       // ── GIG ROOM JOIN / LEAVE ───────────────────────────────────────────
       // Worker joins/leaves active gig chat rooms for real-time delivery
-      socket.on('join', (room: string) => {
+      socket.on('join', async (room: unknown) => {
         if (typeof room === 'string' && room.startsWith('gig:')) {
+          const gigId = room.slice(4).trim();
+          if (!gigId) return;
+
+          // Verify worker is actually assigned to this gig
+          const assignment = await prisma.gigAssignment.findFirst({
+            where: {
+              gigId,
+              workerId: worker.id,
+              status: { notIn: ['DECLINED'] },
+            },
+          });
+
+          if (!assignment) {
+            logger.warn(`[WorkforceSocket] Worker ${worker.id} attempted unauthorized join to room ${room}`);
+            return;
+          }
+
           socket.join(room);
-          logger.debug(`[WorkforceSocket] Worker ${worker.id} joined room ${room}`);
+          logger.debug(`[WorkforceSocket] Worker ${worker.id} authorized and joined room ${room}`);
         }
       });
 

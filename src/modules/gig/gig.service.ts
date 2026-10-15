@@ -215,7 +215,7 @@ export async function createGig(customerId: string, data: any) {
 
         status:        'PENDING',
         paymentMethod: (data.paymentMethod as any) || (data.isCash ? PaymentMethod.CASH : PaymentMethod.UPI),
-        paymentStatus: (data.paymentStatus as any) || PaymentStatus.PENDING,
+        paymentStatus: PaymentStatus.PENDING,
         isTaskBased:   data.isTaskBased || false,
         scheduledSlot: data.scheduledSlot,
         tipAmount:     data.tipAmount || 0,
@@ -256,7 +256,7 @@ export async function createGig(customerId: string, data: any) {
         fareBreakdown: breakdown as any,
         status:        'PENDING',
         paymentMethod: (data.paymentMethod as any) || (data.isCash ? PaymentMethod.CASH : PaymentMethod.UPI),
-        paymentStatus: (data.paymentStatus as any) || PaymentStatus.PENDING,
+        paymentStatus: PaymentStatus.PENDING,
       },
     });
   }
@@ -487,9 +487,10 @@ export async function getNearbyGigs(lat: number, lng: number, _radiusKm: number)
   });
 }
 
-export async function getGigById(id: string) {
+export async function getGigById(id: string, requestingUserId?: string, requestingUserRole?: string) {
+  let gig: any;
   try {
-    const gig = await prisma.gigJob.findUnique({
+    gig = await prisma.gigJob.findUnique({
       where: { id },
       include: {
         customer: true,
@@ -512,17 +513,28 @@ export async function getGigById(id: string) {
         },
       },
     });
-    if (!gig) throw AppError.notFound('Gig job not found');
-    return gig;
   } catch (err: any) {
     logger.warn(`[getGigById] Full query failed, falling back: ${err.message}`);
-    const gig = await prisma.gigJob.findUnique({
+    gig = await prisma.gigJob.findUnique({
       where: { id },
       include: { customer: true },
     });
-    if (!gig) throw AppError.notFound('Gig job not found');
-    return gig;
   }
+
+  if (!gig) throw AppError.notFound('Gig job not found');
+
+  // Object-level authorization check: customer who created it, assigned worker, or admin
+  if (requestingUserId && requestingUserRole !== 'ADMIN') {
+    const isCustomer = gig.customerId === requestingUserId;
+    const isAssigned = gig.assignments?.some((a: any) =>
+      a.worker?.userId === requestingUserId || a.worker?.user?.id === requestingUserId
+    );
+    if (!isCustomer && !isAssigned) {
+      throw AppError.forbidden('Access denied to this gig');
+    }
+  }
+
+  return gig;
 }
 
 export async function getAllGigs() {
@@ -640,21 +652,26 @@ export async function createGigPaymentOrder(userId: string, gigId: string) {
 export async function verifyGigPayment(
   userId: string,
   gigId: string,
-  input: { razorpayPaymentId: string; razorpayOrderId: string; razorpaySignature: string; isMock?: boolean }
+  input: { razorpayPaymentId: string; razorpayOrderId: string; razorpaySignature: string }
 ) {
   const gig = await prisma.gigJob.findUnique({ where: { id: gigId } });
   if (!gig) throw AppError.notFound('Gig job not found');
   if (gig.customerId !== userId) throw AppError.forbidden('Access denied');
 
-  if (input.isMock || !process.env.RAZORPAY_KEY_SECRET) {
-    const updated = await prisma.gigJob.update({
-      where: { id: gigId },
-      data: {
-        paymentStatus: 'PAID',
-        paymentMethod: PaymentMethod.UPI,
-      },
-    });
-    return { success: true, gig: updated };
+  if (!process.env.RAZORPAY_KEY_SECRET) {
+    throw AppError.internal('Payment gateway is not configured');
+  }
+
+  if (!input.razorpayPaymentId || !input.razorpayOrderId || !input.razorpaySignature) {
+    throw AppError.badRequest('Missing payment verification details');
+  }
+
+  // Ensure submitted order matches this gig's stored order
+  if (!gig.razorpayOrderId) {
+    throw AppError.badRequest('Payment order was not initiated for this gig');
+  }
+  if (gig.razorpayOrderId !== input.razorpayOrderId) {
+    throw AppError.badRequest('Provided order ID does not match this gig booking order');
   }
 
   const text = `${input.razorpayOrderId}|${input.razorpayPaymentId}`;

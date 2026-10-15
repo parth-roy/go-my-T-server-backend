@@ -22,6 +22,7 @@ import { env } from '@config/env';
 import { logger } from '@shared/logger';
 import { verifyDriverWithSarathi } from './sarathi.service';
 import { verifyVehicleWithVahan } from './vahan.service';
+import { s3Service } from '@modules/upload/upload.service';
 import type {
   RegisterDriverInput,
   RegisterVehicleInput,
@@ -1037,10 +1038,14 @@ export async function getOnboardingStatus(userId: string): Promise<object> {
 
   const formattedDob = driver?.dob ? driver.dob.toISOString().split('T')[0] : null;
 
+  const resolvedDocs = driver?.documents
+    ? await s3Service.resolveDocumentsUrls(driver.documents)
+    : [];
+
   return {
     isDocVerified: driver?.isDocVerified ?? false,
     profileComplete: user.profileComplete,
-    documents: driver?.documents ?? [],
+    documents: resolvedDocs,
     vehicle: driver?.vehicle ?? null,
     driver: driver ? _formatDriverProfile(driver) : null,
     user: {

@@ -104,6 +104,9 @@ class CashfreeClient {
     };
 
     if (!this.isConfigured()) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('Cashfree gateway credentials not configured');
+      }
       logger.warn('[Cashfree] API keys not configured in .env. Returning mock session for development.');
       return {
         cf_order_id: `cf_mock_${Date.now()}`,
@@ -136,6 +139,9 @@ class CashfreeClient {
    */
   public async getOrder(orderId: string): Promise<CashfreeOrderResponse> {
     if (!this.isConfigured()) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('Cashfree gateway credentials not configured');
+      }
       return {
         cf_order_id: `cf_mock_${orderId}`,
         order_id: orderId,
@@ -166,6 +172,9 @@ class CashfreeClient {
    */
   public async getOrderPayments(orderId: string): Promise<CashfreePaymentEntity[]> {
     if (!this.isConfigured()) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('Cashfree gateway credentials not configured');
+      }
       return [
         {
           cf_payment_id: `cf_pay_mock_${Date.now()}`,

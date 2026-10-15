@@ -23,6 +23,7 @@ import {
 } from '@prisma/client';
 import { assertTransition } from '@modules/booking/booking.transition';
 import { AppError } from '@shared/errors/AppError';
+import { s3Service } from '@modules/upload/upload.service';
 import { logger } from '@shared/logger';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
@@ -277,6 +278,37 @@ export async function addFleetDriver(
     throw AppError.badRequest(
       'This phone number is not a registered driver account',
       'NOT_A_DRIVER'
+    );
+  }
+
+  // SEC-010: Prevent imposing fleet membership if driver is already active in another fleet
+  const existingOtherFleetMembership = await prisma.fleetDriver.findFirst({
+    where: {
+      driverId: targetUser.driver.id,
+      isActive: true,
+      fleetOwnerId: { not: fleetOwner.id },
+    },
+    include: { fleetOwner: true },
+  });
+  if (existingOtherFleetMembership) {
+    throw AppError.conflict(
+      `This driver is already an active member of another fleet (${existingOtherFleetMembership.fleetOwner?.companyName || 'another fleet'}). A driver can only be active in one fleet at a time.`,
+      'DRIVER_ALREADY_IN_ANOTHER_FLEET'
+    );
+  }
+
+  // Prevent imposing fleet membership while driver has active independent trips in progress
+  const activeIndependentTrips = await prisma.booking.count({
+    where: {
+      driverId: targetUser.driver.id,
+      status: { in: ['CONFIRMED', 'DRIVER_ASSIGNED', 'DRIVER_ARRIVING', 'PICKED_UP', 'IN_TRANSIT'] },
+      awardedFleetOwnerId: null,
+    },
+  });
+  if (activeIndependentTrips > 0) {
+    throw AppError.conflict(
+      'Cannot add driver to fleet while they have active independent trips in progress.',
+      'DRIVER_HAS_ACTIVE_TRIPS'
     );
   }
 
@@ -921,10 +953,11 @@ export async function deleteFuelLog(userId: string, id: string) {
 export async function listTruckDocuments(userId: string, truckId: string) {
   const fo = await _requireFleetOwner(userId);
   await _requireTruckOwnership(truckId, fo.id);
-  return prisma.fleetTruckDocument.findMany({
+  const docs = await prisma.fleetTruckDocument.findMany({
     where: { truckId },
     orderBy: { uploadedAt: 'desc' },
   });
+  return s3Service.resolveDocumentsUrls(docs);
 }
 
 export async function addTruckDocument(userId: string, truckId: string, input: any) {

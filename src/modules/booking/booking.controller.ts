@@ -101,7 +101,8 @@ export async function markDriverArriving(
 
 export async function markPickedUp(req: Request, res: Response, next: NextFunction) {
     try {
-        const booking = await BookingService.markPickedUp(req.params.id as string, req.user!.id);
+        const otp = (req.body?.otp || req.query?.otp) as string | undefined;
+        const booking = await BookingService.markPickedUp(req.params.id as string, req.user!.id, otp);
         sendSuccess(res, booking, 'Status updated: goods picked up');
     } catch (err) {
         next(err);

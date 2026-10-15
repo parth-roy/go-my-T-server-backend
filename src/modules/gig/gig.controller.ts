@@ -37,10 +37,10 @@ export async function cancelGig(req: Request, res: Response) {
 
 export async function getCustomerGigById(req: Request, res: Response) {
   try {
-    const gig = await gigService.getGigById(req.params.id as string);
+    const gig = await gigService.getGigById(req.params.id as string, req.user?.id, req.user?.role);
     return sendSuccess(res, gig);
   } catch (err: any) {
-    return res.status(404).json({ success: false, message: err.message });
+    return res.status(err.statusCode || 404).json({ success: false, message: err.message });
   }
 }
 

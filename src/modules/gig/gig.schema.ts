@@ -24,7 +24,6 @@ export const createGigSchema = z.object({
   scheduledSlot:  z.string().optional(),
   tipAmount:      z.number().min(0).optional().default(0),
   paymentMethod:  z.enum(['CASH', 'ONLINE', 'UPI', 'WALLET', 'CARD', 'NETBANKING']).optional(),
-  paymentStatus:  z.enum(['PENDING', 'PAID', 'FAILED']).optional(),
   tasks: z.array(z.object({
     title: z.string(),
     category: z.string(),
@@ -39,7 +38,6 @@ export const verifyGigPaymentSchema = z.object({
   razorpayPaymentId: z.string().min(1),
   razorpayOrderId:   z.string().min(1),
   razorpaySignature: z.string().min(1),
-  isMock:            z.boolean().optional(),
 });
 
 export const estimateGigSchema = z.object({

@@ -11,7 +11,11 @@ function authenticateSocket(socket: MarketplaceSocket, next: (error?: Error) => 
   const token = socket.handshake.auth.token || socket.handshake.query.token;
   if (!token || typeof token !== 'string') return next(new Error('Authentication error: Missing token'));
   try {
-    socket.user = jwt.verify(token, env.JWT_ACCESS_SECRET) as { userId: string; role: UserRole };
+    const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as { userId: string; role: UserRole; type?: string };
+    if (payload.type && payload.type !== 'access') {
+      return next(new Error('Authentication error: Invalid token type'));
+    }
+    socket.user = { userId: payload.userId, role: payload.role };
     next();
   } catch {
     next(new Error('Authentication error: Invalid token'));

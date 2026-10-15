@@ -11,10 +11,9 @@ export const InitiateLeadUnlockSchema = z.object({
 export type InitiateLeadUnlockInput = z.infer<typeof InitiateLeadUnlockSchema>;
 
 export const VerifyLeadUnlockSchema = z.object({
-  transactionId: z.string(),
-  razorpayPaymentId: z.string().optional(),
-  razorpaySignature: z.string().optional(),
-  isMock: z.boolean().optional().default(false),
+  transactionId: z.string().min(1, 'transactionId is required'),
+  razorpayPaymentId: z.string().min(1, 'razorpayPaymentId is required'),
+  razorpaySignature: z.string().min(1, 'razorpaySignature is required'),
 });
 
 export type VerifyLeadUnlockInput = z.infer<typeof VerifyLeadUnlockSchema>;

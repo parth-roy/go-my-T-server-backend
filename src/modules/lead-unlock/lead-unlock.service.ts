@@ -101,19 +101,25 @@ export async function verifyLeadUnlock(userId: string, input: VerifyLeadUnlockIn
     };
   }
 
-  if (!input.isMock && process.env.RAZORPAY_KEY_SECRET && input.razorpayPaymentId && input.razorpaySignature && tx.razorpayOrderId) {
-    const expectedSig = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(tx.razorpayOrderId + '|' + input.razorpayPaymentId)
-      .digest('hex');
+  if (!process.env.RAZORPAY_KEY_SECRET) {
+    throw AppError.internal('Payment gateway is not configured');
+  }
 
-    if (expectedSig !== input.razorpaySignature) {
-      await prisma.leadUnlockTransaction.update({
-        where: { id: tx.id },
-        data: { status: 'FAILED' },
-      });
-      throw AppError.badRequest('Invalid payment signature');
-    }
+  if (!input.razorpayPaymentId || !input.razorpaySignature || !tx.razorpayOrderId) {
+    throw AppError.badRequest('Missing required payment verification details');
+  }
+
+  const expectedSig = crypto
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .update(`${tx.razorpayOrderId}|${input.razorpayPaymentId}`)
+    .digest('hex');
+
+  if (expectedSig !== input.razorpaySignature) {
+    await prisma.leadUnlockTransaction.update({
+      where: { id: tx.id },
+      data: { status: 'FAILED' },
+    });
+    throw AppError.badRequest('Invalid payment signature');
   }
 
   const categoryTerm = (tx.serviceCategory || '').toLowerCase();
@@ -159,7 +165,7 @@ export async function verifyLeadUnlock(userId: string, input: VerifyLeadUnlockIn
     where: { id: tx.id },
     data: {
       status: 'SUCCESS',
-      razorpayPaymentId: input.razorpayPaymentId || ('pay_mock_' + Date.now()),
+      razorpayPaymentId: input.razorpayPaymentId,
     },
   });
 
