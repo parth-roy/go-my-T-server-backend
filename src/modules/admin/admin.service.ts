@@ -17,7 +17,7 @@ import type {
   WalletCreditInput, DocStatusInput, DocVerifiedInput, PricingUpdateInput,
   AnnouncementInput, BroadcastInput, SubscriptionUpdate, UlipLogsQuery, DriverBidsQuery,
 } from './admin.schema';
-import { cancelBookingBySystem, assertTransition } from '../booking/booking.service';
+import { cancelBookingBySystem, assertTransition, assignDriverToBooking } from '../booking/booking.service';
 import { s3Service } from '@modules/upload/upload.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -513,38 +513,12 @@ export async function getBookingById(id: string) {
 }
 
 export async function adminAssignDriver(bookingId: string, input: AssignDriverInput) {
-  const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
-  if (!booking) throw AppError.notFound('Booking not found');
-  if (booking.status !== 'CONFIRMED') throw AppError.badRequest('Can only assign driver to CONFIRMED bookings');
-
-  const driver = await prisma.driver.findUnique({ where: { id: input.driverId }, include: { user: true } });
-  if (!driver) throw AppError.notFound('Driver not found');
-  if (driver.status !== 'AVAILABLE') throw AppError.badRequest('Driver is not available');
-
-  assertTransition(booking.status, BookingStatus.DRIVER_ASSIGNED);
-
-  const updated = await prisma.booking.update({
-    where: { id: bookingId },
-    data: { driverId: input.driverId, status: 'DRIVER_ASSIGNED' },
-  });
-
-  // Notify driver via FCM & in-app
-  if (driver.user.fcmToken) {
-    await notificationService.sendToDevice(driver.user.fcmToken, {
-      title: 'New Booking Assigned',
-      body: `Booking ${booking.bookingNumber} has been assigned to you by admin.`,
-      data: { bookingId, type: 'BOOKING_ASSIGNED' },
-    });
-  }
-  await createNotification(
-    driver.user.id,
-    'New Booking Assigned',
-    `Booking ${booking.bookingNumber} has been assigned to you by admin.`,
-    NotificationType.BOOKING_STATUS,
+  return assignDriverToBooking({
     bookingId,
-  );
-
-  return updated;
+    driverId: input.driverId,
+    assignedBy: 'ADMIN',
+    requireMatchingVehicle: false,
+  });
 }
 
 export async function adminAssignAgentDriver(bookingId: string, quoteId?: string) {
@@ -623,13 +597,12 @@ export async function adminAssignAgentDriver(bookingId: string, quoteId?: string
     });
   }
 
-  // Update booking
-  const updatedBooking = await prisma.booking.update({
-    where: { id: bookingId },
-    data: {
-      driverId: driver.id,
-      status: BookingStatus.DRIVER_ASSIGNED,
-    }
+  // Update booking via canonical assignment service
+  const updatedBooking = await assignDriverToBooking({
+    bookingId,
+    driverId: driver.id,
+    assignedBy: 'ADMIN_AGENT',
+    requireMatchingVehicle: false,
   });
 
   // Update quote & load
@@ -698,6 +671,12 @@ export async function adminRefundBooking(bookingId: string, input: RefundInput) 
     prisma.wallet.update({ where: { id: wallet.id }, data: { cachedBalance: newBalance } }),
     prisma.booking.update({ where: { id: bookingId }, data: { paymentStatus: 'REFUNDED' } }),
   ]);
+
+  if (booking.status !== BookingStatus.COMPLETED && booking.status !== BookingStatus.CANCELLED) {
+    await cancelBookingBySystem(bookingId, input.note || 'Admin refunded booking', 'ADMIN').catch(err => {
+      logger.warn(`[Admin] Post-refund cancellation failed for ${bookingId}:`, err);
+    });
+  }
 
   return { success: true, refunded: input.amount, newBalance };
 }
@@ -1801,6 +1780,10 @@ export async function blockDriver(driverId: string, isActive: boolean) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function creditFleetOwnerWallet(fleetOwnerId: string, input: { amount: number; note: string }) {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    throw AppError.badRequest('Credit amount must be a positive number', 'INVALID_AMOUNT');
+  }
+
   const fleetOwner = await prisma.fleetOwner.findUnique({ where: { id: fleetOwnerId } });
   if (!fleetOwner) throw AppError.notFound('Fleet owner not found');
 

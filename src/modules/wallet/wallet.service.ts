@@ -78,35 +78,56 @@ export async function getTransactionHistory(userId: string, page: number, limit:
 // ─────────────────────────────────────────────
 
 export async function addMoney(userId: string, amount: number, referenceId?: string, adminActorId?: string) {
-    if (amount <= 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
         throw AppError.badRequest('Amount must be greater than zero');
     }
 
     const wallet = await prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw AppError.notFound('Wallet not found');
 
-    const effectiveRefId = referenceId || (adminActorId ? `ADMIN_CREDIT_${adminActorId}` : 'ADMIN_MANUAL_CREDIT');
+    const effectiveRefId = referenceId || undefined;
 
-    return prisma.$transaction(async (tx) => {
-        // FIN-004: Atomic increment prevents lost updates under concurrent credits
-        const updatedWallet = await tx.wallet.update({
-            where: { userId },
-            data: { cachedBalance: { increment: amount } },
+    try {
+        return await prisma.$transaction(async (tx) => {
+            if (effectiveRefId) {
+                const existingTx = await tx.walletTransaction.findFirst({
+                    where: { walletId: wallet.id, referenceId: effectiveRefId },
+                });
+                if (existingTx) {
+                    return { wallet, transaction: existingTx, idempotent: true };
+                }
+            }
+
+            // FIN-004: Atomic increment prevents lost updates under concurrent credits
+            const updatedWallet = await tx.wallet.update({
+                where: { userId },
+                data: { cachedBalance: { increment: amount } },
+            });
+
+            const transaction = await tx.walletTransaction.create({
+                data: {
+                    walletId: updatedWallet.id,
+                    type: WalletTransactionType.CREDIT,
+                    reason: WalletTransactionReason.ADMIN_CREDIT,
+                    amount,
+                    balanceAfter: updatedWallet.cachedBalance,
+                    referenceId: effectiveRefId,
+                    note: adminActorId ? `Admin credit by ${adminActorId}` : undefined,
+                },
+            });
+
+            return { wallet: updatedWallet, transaction, idempotent: false };
         });
-
-        const transaction = await tx.walletTransaction.create({
-            data: {
-                walletId: updatedWallet.id,
-                type: WalletTransactionType.CREDIT,
-                reason: WalletTransactionReason.ADMIN_CREDIT,
-                amount,
-                balanceAfter: updatedWallet.cachedBalance,
-                referenceId: effectiveRefId,
-            },
-        });
-
-        return { wallet: updatedWallet, transaction };
-    });
+    } catch (err: any) {
+        if (err.code === 'P2002' && effectiveRefId) {
+            const existingTx = await prisma.walletTransaction.findFirst({
+                where: { walletId: wallet.id, referenceId: effectiveRefId },
+            });
+            const currentWallet = await prisma.wallet.findUnique({ where: { userId } });
+            return { wallet: currentWallet!, transaction: existingTx!, idempotent: true };
+        }
+        throw err;
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -362,40 +383,51 @@ export async function verifyTopUp(
         throw AppError.badRequest('Invalid payment amount');
     }
 
-    return prisma.$transaction(async (tx) => {
-        // FIN-004: In-transaction idempotency prevents duplicate top-up credits under concurrent webhooks
-        const existing = await tx.walletTransaction.findFirst({
-            where: { referenceId: razorpay_payment_id },
+    try {
+        return await prisma.$transaction(async (tx) => {
+            // FIN-004: In-transaction idempotency prevents duplicate top-up credits under concurrent webhooks
+            const existing = await tx.walletTransaction.findFirst({
+                where: { referenceId: razorpay_payment_id },
+            });
+            if (existing) {
+                const currentWallet = await tx.wallet.findUnique({ where: { userId } });
+                return { message: 'Already credited', wallet: currentWallet, amountCredited: existing.amount };
+            }
+
+            let wallet = await tx.wallet.findUnique({ where: { userId } });
+            if (!wallet) {
+                wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+            }
+
+            const updatedWallet = await tx.wallet.update({
+                where: { userId },
+                data: { cachedBalance: { increment: creditAmount } },
+            });
+
+            const transaction = await tx.walletTransaction.create({
+                data: {
+                    walletId: updatedWallet.id,
+                    type: WalletTransactionType.CREDIT,
+                    reason: WalletTransactionReason.TOP_UP,
+                    amount: creditAmount,
+                    balanceAfter: updatedWallet.cachedBalance,
+                    referenceId: razorpay_payment_id,
+                    note: `Wallet top-up via Razorpay`,
+                },
+            });
+
+            return { message: 'Wallet topped up successfully', wallet: updatedWallet, amountCredited: creditAmount, transaction };
         });
-        if (existing) {
-            const currentWallet = await tx.wallet.findUnique({ where: { userId } });
-            return { message: 'Already credited', wallet: currentWallet, amountCredited: existing.amount };
+    } catch (err: any) {
+        if (err.code === 'P2002') {
+            const currentWallet = await prisma.wallet.findUnique({ where: { userId } });
+            const existing = await prisma.walletTransaction.findFirst({
+                where: { referenceId: razorpay_payment_id },
+            });
+            return { message: 'Already credited', wallet: currentWallet, amountCredited: existing?.amount ?? creditAmount };
         }
-
-        let wallet = await tx.wallet.findUnique({ where: { userId } });
-        if (!wallet) {
-            wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
-        }
-
-        const updatedWallet = await tx.wallet.update({
-            where: { userId },
-            data: { cachedBalance: { increment: creditAmount } },
-        });
-
-        const transaction = await tx.walletTransaction.create({
-            data: {
-                walletId: updatedWallet.id,
-                type: WalletTransactionType.CREDIT,
-                reason: WalletTransactionReason.TOP_UP,
-                amount: creditAmount,
-                balanceAfter: updatedWallet.cachedBalance,
-                referenceId: razorpay_payment_id,
-                note: `Wallet top-up via Razorpay`,
-            },
-        });
-
-        return { message: 'Wallet topped up successfully', wallet: updatedWallet, amountCredited: creditAmount, transaction };
-    });
+        throw err;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -404,44 +436,52 @@ export async function verifyTopUp(
 export async function refundToWallet(userId: string, bookingId: string, amount: number) {
     if (amount <= 0) throw AppError.badRequest('Refund amount must be positive');
 
-    return prisma.$transaction(async (tx) => {
-        // FIN-004: In-transaction idempotency prevents duplicate refunds for the same cancelled booking
-        const referenceId = `REFUND_${bookingId}`;
-        const existingRefund = await tx.walletTransaction.findFirst({
-            where: {
-                referenceId,
-                reason: WalletTransactionReason.REFUND,
-            },
+    const referenceId = `REFUND_${bookingId}`;
+    try {
+        return await prisma.$transaction(async (tx) => {
+            // FIN-004: In-transaction idempotency prevents duplicate refunds for the same cancelled booking
+            const existingRefund = await tx.walletTransaction.findFirst({
+                where: {
+                    referenceId,
+                    reason: WalletTransactionReason.REFUND,
+                },
+            });
+            if (existingRefund) {
+                const currentWallet = await tx.wallet.findUnique({ where: { userId } });
+                return { message: 'Already refunded', wallet: currentWallet, refundAmount: amount };
+            }
+
+            let wallet = await tx.wallet.findUnique({ where: { userId } });
+            if (!wallet) {
+                wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+            }
+
+            const updatedWallet = await tx.wallet.update({
+                where: { userId },
+                data: { cachedBalance: { increment: amount } },
+            });
+
+            const transaction = await tx.walletTransaction.create({
+                data: {
+                    walletId: updatedWallet.id,
+                    type: WalletTransactionType.CREDIT,
+                    reason: WalletTransactionReason.REFUND,
+                    amount,
+                    balanceAfter: updatedWallet.cachedBalance,
+                    referenceId,
+                    note: `Refund for cancelled booking`,
+                },
+            });
+
+            return { message: 'Refund credited to wallet', wallet: updatedWallet, refundAmount: amount, transaction };
         });
-        if (existingRefund) {
-            const currentWallet = await tx.wallet.findUnique({ where: { userId } });
+    } catch (err: any) {
+        if (err.code === 'P2002') {
+            const currentWallet = await prisma.wallet.findUnique({ where: { userId } });
             return { message: 'Already refunded', wallet: currentWallet, refundAmount: amount };
         }
-
-        let wallet = await tx.wallet.findUnique({ where: { userId } });
-        if (!wallet) {
-            wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
-        }
-
-        const updatedWallet = await tx.wallet.update({
-            where: { userId },
-            data: { cachedBalance: { increment: amount } },
-        });
-
-        const transaction = await tx.walletTransaction.create({
-            data: {
-                walletId: updatedWallet.id,
-                type: WalletTransactionType.CREDIT,
-                reason: WalletTransactionReason.REFUND,
-                amount,
-                balanceAfter: updatedWallet.cachedBalance,
-                referenceId,
-                note: `Refund for cancelled booking`,
-            },
-        });
-
-        return { message: 'Refund credited to wallet', wallet: updatedWallet, refundAmount: amount, transaction };
-    });
+        throw err;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -450,33 +490,40 @@ export async function refundToWallet(userId: string, bookingId: string, amount: 
 export async function creditCashback(userId: string, amount: number, referenceId: string, note?: string) {
     if (amount <= 0) return;
 
-    return prisma.$transaction(async (tx) => {
-        // FIN-004: In-transaction idempotency prevents duplicate reward credits
-        const existing = await tx.walletTransaction.findFirst({
-            where: { referenceId, reason: WalletTransactionReason.CASHBACK },
-        });
-        if (existing) return;
+    try {
+        return await prisma.$transaction(async (tx) => {
+            // FIN-004: In-transaction idempotency prevents duplicate reward credits
+            const existing = await tx.walletTransaction.findFirst({
+                where: { referenceId, reason: WalletTransactionReason.CASHBACK },
+            });
+            if (existing) return;
 
-        let wallet = await tx.wallet.findUnique({ where: { userId } });
-        if (!wallet) {
-            wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+            let wallet = await tx.wallet.findUnique({ where: { userId } });
+            if (!wallet) {
+                wallet = await tx.wallet.create({ data: { userId, cachedBalance: 0 } });
+            }
+
+            const updatedWallet = await tx.wallet.update({
+                where: { userId },
+                data: { cachedBalance: { increment: amount } },
+            });
+
+            await tx.walletTransaction.create({
+                data: {
+                    walletId: updatedWallet.id,
+                    type: WalletTransactionType.CREDIT,
+                    reason: WalletTransactionReason.CASHBACK,
+                    amount,
+                    balanceAfter: updatedWallet.cachedBalance,
+                    referenceId,
+                    note: note ?? `Cashback credited`,
+                },
+            });
+        });
+    } catch (err: any) {
+        if (err.code === 'P2002') {
+            return;
         }
-
-        const updatedWallet = await tx.wallet.update({
-            where: { userId },
-            data: { cachedBalance: { increment: amount } },
-        });
-
-        await tx.walletTransaction.create({
-            data: {
-                walletId: updatedWallet.id,
-                type: WalletTransactionType.CREDIT,
-                reason: WalletTransactionReason.CASHBACK,
-                amount,
-                balanceAfter: updatedWallet.cachedBalance,
-                referenceId,
-                note: note ?? `Cashback credited`,
-            },
-        });
-    });
+        throw err;
+    }
 }

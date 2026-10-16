@@ -132,7 +132,8 @@ export async function verifyPod(
     next: NextFunction
 ) {
     try {
-        const { otp, photoUrl } = req.body;
+        const { otp } = req.body;
+        const photoUrl = req.body.photoUrl || req.body.podPhotoUrl;
         const booking = await BookingService.verifyPodAndDeliverStop(
             req.params.id as string,
             req.params.stopId as string,
@@ -212,7 +213,7 @@ export async function getInvoice(req: Request, res: Response, next: NextFunction
         const insuranceGst  = parseFloat((insuranceCharge * 0.18).toFixed(2));
         const waitingGst    = 0; // Waiting charges are not subject to GST (compensation to driver)
         const totalGst      = parseFloat((freightGst + loadingGst + insuranceGst).toFixed(2));
-        const grandTotal    = parseFloat((booking.totalFare + totalGst + waitingCharge + tollCharge).toFixed(2));
+        const grandTotal    = booking.grandTotal ?? parseFloat((booking.totalFare + totalGst + waitingCharge + tollCharge).toFixed(2));
 
         const invoice = {
             invoiceNumber:   'INV-' + booking.bookingNumber,

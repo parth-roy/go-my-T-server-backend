@@ -190,3 +190,11 @@ adminRouter.get('/worker-documents/pending-count', ctrl.getPendingWorkerDocument
 adminRouter.get('/worker-documents/pending', ctrl.getPendingWorkerDocuments);
 adminRouter.post('/worker-documents/:workerId/verify', validate(VerifyWorkerDocumentSchema), ctrl.verifyWorkerDocuments);
 adminRouter.post('/workforce/:workerId/wallet-credit', ctrl.creditWorkerWallet);
+
+// ── Reconciliation & Exception Queue (Point 6) ────────────────────────────────
+import * as reconCtrl from '@modules/reconciliation/reconciliation.controller';
+adminRouter.post('/reconciliation/run', reconCtrl.runReconciliationNow);
+adminRouter.get('/reconciliation/exceptions', reconCtrl.listExceptions);
+adminRouter.get('/reconciliation/exceptions/:id', reconCtrl.getExceptionById);
+adminRouter.post('/reconciliation/exceptions/:id/resolve', reconCtrl.resolveException);
+

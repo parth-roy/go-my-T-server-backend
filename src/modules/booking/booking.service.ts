@@ -26,7 +26,7 @@ import { getRedis } from '@config/redis';
 import { notificationService } from '@modules/notifications/notification.service';
 import { pricingService } from '@modules/pricing/pricing.service';
 import type { FareEstimateResponse } from '@modules/pricing/pricing.types';
-import { handleDriverDecline } from '@modules/dispatch/dispatch.service';
+import { handleDriverDecline, enqueueDispatch } from '@modules/dispatch/dispatch.service';
 import { checkServiceability } from '@modules/maps/serviceability.service';
 import { settleTripEarnings } from '@modules/driver-wallet/driver-wallet.service';
 import { refundToWallet } from '@modules/wallet/wallet.service';
@@ -39,8 +39,8 @@ import type {
 } from './booking.schema';
 import { env } from '@config/env';
 import * as MarketplaceService from '@modules/marketplace/marketplace.service';
-import { assertTransition } from './booking.transition';
-export { assertTransition };
+import { assertTransition, canTransition, getAllowedTransitions, logTransition } from './booking.transition';
+export { assertTransition, canTransition, getAllowedTransitions, logTransition };
 import { extractCityFromAddress, getCityAliases } from '@modules/broker/broker.service';
 import { ConcurrencyLockService } from '@modules/dispatch/concurrency_lock.service';
 import { DynamicModalService } from '@modules/dispatch/sdui.service';
@@ -236,27 +236,40 @@ export async function createBooking(customerId: string, data: CreateBookingInput
                 'SAME_LOCATION'
             );
         }
+        for (let i = 0; i < stops.length - 1; i++) {
+            const legLat = Math.abs(stops[i + 1].latitude - stops[i].latitude);
+            const legLng = Math.abs(stops[i + 1].longitude - stops[i].longitude);
+            if (legLat < 0.0005 && legLng < 0.0005) {
+                throw AppError.badRequest(
+                    `Stop ${i + 1} and Stop ${i + 2} cannot be the same location`,
+                    'SAME_LOCATION'
+                );
+            }
+        }
     }
 
     // â”€â”€ SERVICE AREA CHECK (Mapbox reverse geocode â†’ country = India) â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Primary: Mapbox reverse geocode. Fallback: bounding box (if Mapbox down).
-    // Both pickup AND first stop must be in serviceable area.
-    const [pickupServiceability, dropServiceability] = await Promise.all([
+    // Pickup AND all delivery stops must be in serviceable area.
+    const serviceabilityChecks = await Promise.all([
         checkServiceability(data.pickupLat, data.pickupLng),
-        checkServiceability(stops[0].latitude, stops[0].longitude),
+        ...stops.map((s: any) => checkServiceability(s.latitude, s.longitude)),
     ]);
 
-    if (!pickupServiceability.allowed) {
+    if (!serviceabilityChecks[0].allowed) {
         throw AppError.badRequest(
-            pickupServiceability.reason ?? 'Pickup location is outside our service area',
+            serviceabilityChecks[0].reason ?? 'Pickup location is outside our service area',
             'OUT_OF_SERVICE_AREA'
         );
     }
-    if (!dropServiceability.allowed) {
-        throw AppError.badRequest(
-            dropServiceability.reason ?? 'Delivery location is outside our service area',
-            'OUT_OF_SERVICE_AREA'
-        );
+    for (let i = 0; i < stops.length; i++) {
+        const stopCheck = serviceabilityChecks[i + 1];
+        if (!stopCheck.allowed) {
+            throw AppError.badRequest(
+                stopCheck.reason ?? `Stop ${i + 1} (${stops[i].address}) is outside our service area`,
+                'OUT_OF_SERVICE_AREA'
+            );
+        }
     }
 
     // â”€â”€ FIX HIGH-8: Driver availability check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -279,11 +292,17 @@ export async function createBooking(customerId: string, data: CreateBookingInput
     // â”€â”€ FIX CRITICAL-1: Server-side fare recalculation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let serverFare: FareEstimateResponse;
     try {
+        const lastStop = stops[stops.length - 1];
         serverFare = await pricingService.estimateFare({
             pickupLat: data.pickupLat,
             pickupLng: data.pickupLng,
-            dropLat: stops[0].latitude,
-            dropLng: stops[0].longitude,
+            dropLat: lastStop.latitude,
+            dropLng: lastStop.longitude,
+            stops: stops.map((s: any) => ({
+                latitude: s.latitude,
+                longitude: s.longitude,
+                address: s.address,
+            })),
             vehicleType: data.vehicleType,
             hasLoadingService: data.laborRequired || data.hasLoadingService,
             helperCount: data.laborRequired ? data.laborersCount : undefined,
@@ -637,11 +656,25 @@ export async function confirmBooking(bookingId: string, customerId: string) {
         return confirmed;
     });
 
+    // ARCH-002: Durably schedule dispatch in BullMQ queue (survives process crashes/restarts)
+    if (updated.bookingMode !== 'PRIVATE_BID') {
+        enqueueDispatch(updated.id, { reason: 'BOOKING_COMMITTED_CONFIRMED' }).catch(err =>
+            logger.error(`[BookingService] Failed to durably enqueue dispatch for ${updated.id}:`, err)
+        );
+    }
+
     // Phase 7 (Dispatch Engine) will listen for this event and assign a driver
     eventBus.emit('booking.confirmed', {
         bookingId: updated.id,
         customerId,
         vehicleType: updated.vehicleType,
+    });
+
+    logTransition({
+        bookingId: updated.id,
+        fromStatus: booking.status,
+        toStatus: BookingStatus.CONFIRMED,
+        actor: { id: customerId, role: 'CUSTOMER' },
     });
 
     logger.info(`Booking confirmed: ${updated.bookingNumber} (${updated.bookingChannel})`);
@@ -676,9 +709,11 @@ export async function cancelBooking(
         throw AppError.forbidden('You do not have access to cancel this booking');
     }
 
+    let previousStatus: BookingStatus | null = null;
     const updated = await prisma.$transaction(async (tx) => {
         const current = await tx.booking.findUnique({ where: { id: bookingId } });
         if (!current) throw AppError.notFound('Booking not found');
+        previousStatus = current.status;
         if (role === UserRole.CUSTOMER && current.customerId !== userId) {
             throw AppError.forbidden('You do not have access to this booking');
         }
@@ -795,6 +830,14 @@ export async function cancelBooking(
         });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
+    logTransition({
+        bookingId: updated.id,
+        fromStatus: previousStatus ?? BookingStatus.DRAFT,
+        toStatus: BookingStatus.CANCELLED,
+        actor: { id: userId, role },
+        reason: data.reason,
+    });
+
     // Phase 11 (Notifications) will listen to alert the other party
     eventBus.emit('booking.cancelled', {
         bookingId: updated.id,
@@ -891,6 +934,7 @@ export async function getDriverActiveBooking(userId: string) {
         BookingStatus.DRIVER_ARRIVING,
         BookingStatus.PICKED_UP,
         BookingStatus.IN_TRANSIT,
+        BookingStatus.DELIVERED,
     ];
 
     const booking = await prisma.booking.findFirst({
@@ -929,6 +973,13 @@ export async function markDriverArriving(bookingId: string, userId: string) {
         where: { id: bookingId },
         data: updateData,
         select: bookingDetailSelect,
+    });
+
+    logTransition({
+        bookingId: updated.id,
+        fromStatus: booking.status,
+        toStatus: BookingStatus.DRIVER_ARRIVING,
+        actor: { id: userId, role: 'DRIVER' },
     });
 
     // Notify customer — driver is arriving
@@ -1095,6 +1146,8 @@ export async function verifyPodAndDeliverStop(
     const newStatus =
         remainingCount === 0 ? BookingStatus.DELIVERED : BookingStatus.IN_TRANSIT;
 
+    assertTransition(booking.status, newStatus);
+
     const updateData: { status: BookingStatus; actualDeliveryTime?: Date } = {
         status: newStatus,
     };
@@ -1106,6 +1159,13 @@ export async function verifyPodAndDeliverStop(
         where: { id: bookingId },
         data: updateData,
         select: bookingDetailSelect,
+    });
+
+    logTransition({
+        bookingId: updated.id,
+        fromStatus: booking.status,
+        toStatus: newStatus,
+        actor: { id: userId, role: 'DRIVER' },
     });
 
     if (newStatus === BookingStatus.DELIVERED) {
@@ -1127,6 +1187,13 @@ export async function verifyPodAndDeliverStop(
 
 export async function completeBooking(bookingId: string, userId: string) {
     const { booking, driver } = await getDriverBooking(bookingId, userId);
+
+    // BUG-012: Idempotent return if already completed
+    if (booking.status === BookingStatus.COMPLETED) {
+        logger.info(`Booking ${bookingId} already completed; returning idempotent result`);
+        return booking;
+    }
+
     assertTransition(booking.status, BookingStatus.COMPLETED);
 
     const grandTotal = booking.grandTotal ?? booking.totalFare ?? 0;
@@ -1155,6 +1222,13 @@ export async function completeBooking(bookingId: string, userId: string) {
         });
 
         if (claim.count === 0) {
+            const alreadyDone = await tx.booking.findUnique({
+                where: { id: bookingId },
+                select: bookingDetailSelect,
+            });
+            if (alreadyDone && alreadyDone.status === BookingStatus.COMPLETED) {
+                return alreadyDone;
+            }
             throw AppError.conflict('Booking is already completed or not in a deliverable state', 'INVALID_TRANSITION');
         }
 
@@ -1209,6 +1283,13 @@ export async function completeBooking(bookingId: string, userId: string) {
     } else {
         logger.warn(`[Settlement] Skipped for booking ${bookingId} — no fare amount or driver`);
     }
+
+    logTransition({
+        bookingId: updated.id,
+        fromStatus: booking.status,
+        toStatus: BookingStatus.COMPLETED,
+        actor: { id: userId, role: 'DRIVER' },
+    });
 
     return updated;
 }
@@ -1361,12 +1442,136 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
         );
     }
 
+    logTransition({
+        bookingId,
+        fromStatus: booking?.status ?? BookingStatus.CONFIRMED,
+        toStatus: BookingStatus.DRIVER_ARRIVING,
+        actor: { id: driver.id, role: 'DRIVER' },
+    });
+
     logger.info(`Driver ${driver.id} accepted booking ${bookingId}`);
     const acceptedBooking = await prisma.booking.findUnique({ where: { id: bookingId }, select: bookingDetailSelect });
     if (acceptedBooking) {
         (acceptedBooking as any).pickupOtp = null; // Do not disclose customer OTP to driver in response payload
     }
     return acceptedBooking;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// CANONICAL DRIVER ASSIGNMENT (CONFIRMED → DRIVER_ASSIGNED)
+// Single canonical entrypoint used by Admin, Fleet, and System
+// ─────────────────────────────────────────────────────────────────
+export interface AssignDriverToBookingInput {
+    bookingId: string;
+    driverId: string;
+    assignedBy?: string;
+    requireMatchingVehicle?: boolean;
+}
+
+export async function assignDriverToBooking(input: AssignDriverToBookingInput) {
+    const { bookingId, driverId, assignedBy = 'ADMIN', requireMatchingVehicle = true } = input;
+
+    const booking = await prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: { id: true, status: true, bookingNumber: true, vehicleType: true, customerId: true },
+    });
+    if (!booking) throw AppError.notFound('Booking not found');
+
+    // Canonical lifecycle transition assertion: only CONFIRMED bookings may transition to DRIVER_ASSIGNED
+    assertTransition(booking.status, BookingStatus.DRIVER_ASSIGNED);
+
+    const driver = await prisma.driver.findUnique({
+        where: { id: driverId },
+        include: { user: true, vehicle: true },
+    });
+    if (!driver) throw AppError.notFound('Driver not found');
+    if (!driver.isActive || !driver.isDocVerified) {
+        throw AppError.badRequest('Driver documents are not verified or driver is inactive', 'DRIVER_NOT_VERIFIED');
+    }
+    if (driver.status !== DriverStatus.AVAILABLE) {
+        throw AppError.conflict('Driver is not available', 'DRIVER_NOT_AVAILABLE');
+    }
+    if (requireMatchingVehicle && booking.vehicleType && driver.vehicle) {
+        if (driver.vehicle.type !== booking.vehicleType) {
+            throw AppError.badRequest(
+                `Driver vehicle type (${driver.vehicle.type}) does not match required booking vehicle type (${booking.vehicleType})`,
+                'VEHICLE_TYPE_MISMATCH',
+            );
+        }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+        // Atomically claim the driver
+        const reservedDriver = await tx.driver.updateMany({
+            where: {
+                id: driverId,
+                status: DriverStatus.AVAILABLE,
+                isActive: true,
+                isDocVerified: true,
+            },
+            data: { status: DriverStatus.ON_TRIP },
+        });
+        if (reservedDriver.count !== 1) {
+            throw AppError.conflict('Driver is no longer available', 'DRIVER_NOT_AVAILABLE');
+        }
+
+        // Atomically transition booking
+        const assigned = await tx.booking.updateMany({
+            where: {
+                id: bookingId,
+                status: BookingStatus.CONFIRMED,
+                driverId: null,
+            },
+            data: {
+                driverId,
+                status: BookingStatus.DRIVER_ASSIGNED,
+                marketplaceVersion: { increment: 1 },
+            },
+        });
+        if (assigned.count !== 1) {
+            throw AppError.conflict('Booking changed before driver assignment', 'BOOKING_STATE_CONFLICT');
+        }
+
+        return tx.booking.findUniqueOrThrow({
+            where: { id: bookingId },
+            select: bookingDetailSelect,
+        });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    logTransition({
+        bookingId,
+        fromStatus: booking.status,
+        toStatus: BookingStatus.DRIVER_ASSIGNED,
+        actor: { id: assignedBy, role: assignedBy },
+        metadata: { driverId },
+    });
+
+    // Notify driver via FCM & in-app
+    if (driver.user?.fcmToken) {
+        await notificationService.sendToDevice(driver.user.fcmToken, {
+            title: 'New Booking Assigned',
+            body: `Booking ${booking.bookingNumber} has been assigned to you.`,
+            data: { bookingId, type: 'BOOKING_ASSIGNED' },
+        }).catch(err => logger.debug(`[Booking] FCM notify failed for driver ${driver.id}:`, err?.message));
+    }
+    if (driver.user?.id) {
+        await createNotification(
+            driver.user.id,
+            'New Booking Assigned',
+            `Booking ${booking.bookingNumber} has been assigned to you.`,
+            NotificationType.BOOKING_STATUS,
+            bookingId,
+        ).catch(err => logger.debug(`[Booking] In-app notify failed for driver ${driver.id}:`, err?.message));
+    }
+
+    eventBus.emit('booking.driver_assigned', {
+        bookingId: updated.id,
+        driverId: driver.id,
+        customerId: booking.customerId,
+    });
+
+    logger.info(`[Booking] Driver ${driver.id} assigned to booking ${booking.bookingNumber} by ${assignedBy}`);
+    return updated;
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1376,12 +1581,7 @@ export async function driverAcceptBooking(bookingId: string, userId: string) {
 export async function verifyPickupOtp(bookingId: string, userId: string, otp: string) {
     const { booking, driver } = await getDriverBooking(bookingId, userId);
 
-    if (booking.status !== BookingStatus.DRIVER_ARRIVING) {
-        throw AppError.badRequest(
-            'Booking must be in DRIVER_ARRIVING status to verify pickup OTP',
-            'INVALID_BOOKING_STATUS'
-        );
-    }
+    assertTransition(booking.status, BookingStatus.PICKED_UP);
 
     const storedOtp = (booking as any).pickupOtp as string | null;
     if (!storedOtp) {
@@ -1414,15 +1614,27 @@ export async function verifyPickupOtp(bookingId: string, userId: string, otp: st
         }
     }
 
+    const updatedGrandTotal = (booking.grandTotal ?? booking.totalFare ?? 0) + waitingCharge;
+
     const updated = await prisma.booking.update({
         where: { id: bookingId },
         data: {
             status: BookingStatus.PICKED_UP,
             actualPickupTime: pickedUpAt,
             pickupOtp: null, // Clear OTP after use for security
-            ...(waitingCharge > 0 && { waitingCharge }),
+            ...(waitingCharge > 0 && {
+                waitingCharge,
+                grandTotal: updatedGrandTotal,
+            }),
         },
         select: bookingDetailSelect,
+    });
+
+    logTransition({
+        bookingId: updated.id,
+        fromStatus: booking.status,
+        toStatus: BookingStatus.PICKED_UP,
+        actor: { id: userId, role: 'DRIVER' },
     });
 
     // Emit socket event so customer UI transitions immediately
@@ -1533,6 +1745,13 @@ export async function driverDeclineBooking(bookingId: string, userId: string) {
             status: BookingStatus.CONFIRMED,
             declineCount: { increment: 1 },
         },
+    });
+
+    logTransition({
+        bookingId,
+        fromStatus: booking.status,
+        toStatus: BookingStatus.CONFIRMED,
+        actor: { id: driver.id, role: 'DRIVER' },
     });
 
     // Driver back to AVAILABLE

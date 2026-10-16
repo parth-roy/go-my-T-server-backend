@@ -11,6 +11,10 @@ driverWalletRouter.use(authenticate);
 // ── Driver routes (DRIVER role only) ────────────────────────────────────────
 driverWalletRouter.get('/',                        requireRole(UserRole.DRIVER), DriverWalletController.getWallet);
 driverWalletRouter.get('/transactions',            requireRole(UserRole.DRIVER), DriverWalletController.getTransactions);
+driverWalletRouter.get('/bank-details',             requireRole(UserRole.DRIVER), DriverWalletController.getBankDetails);
+driverWalletRouter.put('/bank-details',             requireRole(UserRole.DRIVER), DriverWalletController.updateBankDetails);
+driverWalletRouter.post('/bank-details',            requireRole(UserRole.DRIVER), DriverWalletController.updateBankDetails);
 driverWalletRouter.post('/pay-commission',         requireRole(UserRole.DRIVER), DriverWalletController.createCommissionOrder);
 driverWalletRouter.post('/pay-commission/verify',  requireRole(UserRole.DRIVER), DriverWalletController.verifyCommissionPayment);
 driverWalletRouter.post('/withdraw',               requireRole(UserRole.DRIVER), DriverWalletController.requestWithdrawal);
+

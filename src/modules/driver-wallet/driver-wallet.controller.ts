@@ -3,6 +3,7 @@ import { sendSuccess, sendCreated } from '@shared/utils/response';
 import * as DriverWalletService from './driver-wallet.service';
 import { WithdrawalEntityType } from '@prisma/client';
 import { assertRazorpayXPayoutsEnabled } from '@shared/payments/outbound-payment.policy';
+import { AppError } from '@shared/errors/AppError';
 
 // GET /driver/wallet
 export async function getWallet(req: Request, res: Response, next: NextFunction) {
@@ -10,6 +11,42 @@ export async function getWallet(req: Request, res: Response, next: NextFunction)
     const driver = await getDriverFromUser(req.user!.id);
     const wallet = await DriverWalletService.getDriverWallet(driver.id);
     sendSuccess(res, wallet, 'Wallet fetched');
+  } catch (err) { next(err); }
+}
+
+// GET /driver-wallet/bank-details
+export async function getBankDetails(req: Request, res: Response, next: NextFunction) {
+  try {
+    const driver = await getDriverFromUser(req.user!.id);
+    const details = await DriverWalletService.getDriverBankDetails(driver.id);
+    sendSuccess(res, details, 'Bank details fetched');
+  } catch (err) { next(err); }
+}
+
+// PUT /driver-wallet/bank-details
+export async function updateBankDetails(req: Request, res: Response, next: NextFunction) {
+  try {
+    const driver = await getDriverFromUser(req.user!.id);
+    const { accountNumber, bankAccountNo, ifsc, bankIfsc, bankName, accountHolderName, bankAccountHolderName } = req.body ?? {};
+    const finalAcc = String(accountNumber || bankAccountNo || '').trim();
+    const finalIfsc = String(ifsc || bankIfsc || '').trim().toUpperCase();
+    const finalBankName = String(bankName || 'Bank Account').trim();
+    const finalHolder = String(accountHolderName || bankAccountHolderName || '').trim();
+
+    if (!finalAcc || finalAcc.length < 5 || finalAcc.length > 30) {
+      throw AppError.badRequest('Valid bank account number is required (5-30 digits)', 'INVALID_ACCOUNT_NUMBER');
+    }
+    if (!finalIfsc || !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(finalIfsc)) {
+      throw AppError.badRequest('Valid 11-character Indian IFSC code is required (e.g. SBIN0001234)', 'INVALID_IFSC');
+    }
+
+    const updated = await DriverWalletService.updateDriverBankDetails(driver.id, {
+      accountNumber: finalAcc,
+      ifsc: finalIfsc,
+      bankName: finalBankName,
+      accountHolderName: finalHolder || driver.licenseNumber,
+    });
+    sendSuccess(res, updated, 'Bank details updated successfully');
   } catch (err) { next(err); }
 }
 
@@ -49,8 +86,10 @@ export async function verifyCommissionPayment(req: Request, res: Response, next:
 export async function requestWithdrawal(req: Request, res: Response, next: NextFunction) {
   try {
     const driver  = await getDriverFromUser(req.user!.id);
-    const { amount } = req.body;
-    const result = await DriverWalletService.requestWithdrawal(driver.id, Number(amount));
+    const { amount, idempotencyKey } = req.body;
+    const headerKey = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
+    const key = (typeof idempotencyKey === 'string' && idempotencyKey) || (typeof headerKey === 'string' && headerKey) || undefined;
+    const result = await DriverWalletService.requestWithdrawal(driver.id, Number(amount), key);
     sendCreated(res, result, 'Withdrawal request created. Processing in progress.');
   } catch (err) { next(err); }
 }

@@ -26,6 +26,7 @@ userRouter.patch('/me', validate(updateProfileSchema), UserController.updateProf
 userRouter.put('/me', validate(updateProfileSchema), UserController.updateProfile);
 userRouter.patch('/me/fcm-token', validate(updateFcmTokenSchema), UserController.updateFcmToken);
 userRouter.put('/me/fcm-token', validate(updateFcmTokenSchema), UserController.updateFcmToken);
+userRouter.delete('/me/fcm-token', UserController.clearFcmToken);
 
 // POST /api/v1/users/me/avatar — upload profile picture (max 3 MB JPEG/PNG/WEBP)
 // uploadAvatar is the multer middleware (3 MB limit + image-only filter)

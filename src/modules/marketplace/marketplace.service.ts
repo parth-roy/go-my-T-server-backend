@@ -283,7 +283,7 @@ function validatePickupCommitment(value: Date): void {
 
 async function resolveParticipantIdentity(actor: Actor): Promise<ParticipantIdentity> {
   if (actor.role === UserRole.DRIVER) {
-    let driver = await prisma.driver.findUnique({
+    const driver = await prisma.driver.findUnique({
       where: { userId: actor.userId },
       include: {
         user: { select: { id: true, name: true, phone: true, fcmToken: true } },
@@ -292,25 +292,6 @@ async function resolveParticipantIdentity(actor: Actor): Promise<ParticipantIden
       },
     });
     if (!driver) throw AppError.notFound('Driver profile not found');
-
-    if (!driver.vehicle) {
-      const defaultVehicle = await prisma.vehicle.create({
-        data: {
-          registrationNo: `GMT${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 90 + 10)}`,
-          type: 'TATA_ACE',
-          make: 'Commercial',
-          model: 'Standard',
-          year: 2024,
-          capacityKg: 1000,
-          isActive: true,
-        },
-      });
-      await prisma.driver.update({
-        where: { id: driver.id },
-        data: { vehicleId: defaultVehicle.id },
-      });
-      driver = { ...driver, vehicle: defaultVehicle };
-    }
 
     return {
       partyType: BidPartyType.DRIVER,
@@ -357,19 +338,35 @@ function validateParticipantEligibility(
     if (!driver.isActive) {
       throw AppError.forbidden('Driver account is inactive');
     }
-    if (driver.fleetMemberships.length > 0) {
+    if (!driver.isDocVerified) {
+      throw AppError.forbidden('Driver documents must be verified before participating in marketplace bidding');
+    }
+    if (driver.fleetMemberships && driver.fleetMemberships.length > 0) {
       throw AppError.forbidden('Fleet-attached drivers cannot bid commercially; the fleet owner must bid');
     }
 
-    const vehicle = driver.vehicle ?? {
-      id: `fallback-${driver.id}`,
-      type: booking.vehicleType || 'TATA_ACE',
-      make: 'Commercial',
-      model: 'Standard',
-      registrationNo: 'GMT-VERIFIED',
-      capacityKg: 1000,
-      isActive: true,
-    };
+    if (!driver.vehicle || !driver.vehicle.isActive) {
+      throw AppError.badRequest('Driver must have an active registered vehicle to bid', 'VEHICLE_REQUIRED');
+    }
+
+    const vehicle = driver.vehicle;
+    if (booking.vehicleType && vehicle.type !== booking.vehicleType) {
+      throw AppError.badRequest(
+        `Driver vehicle type (${vehicle.type}) does not match required booking vehicle type (${booking.vehicleType})`,
+        'VEHICLE_TYPE_MISMATCH',
+      );
+    }
+
+    if (
+      typeof booking.goodsWeightKg === 'number' &&
+      typeof vehicle.capacityKg === 'number' &&
+      vehicle.capacityKg < booking.goodsWeightKg
+    ) {
+      throw AppError.badRequest(
+        `Driver vehicle capacity (${vehicle.capacityKg} kg) is insufficient for cargo weight (${booking.goodsWeightKg} kg)`,
+        'INSUFFICIENT_VEHICLE_CAPACITY',
+      );
+    }
 
     return {
       vehicleId: vehicle.id,
@@ -389,14 +386,43 @@ function validateParticipantEligibility(
   if (!fleet.isActive) {
     throw AppError.forbidden('Fleet account is inactive');
   }
-  const truck = requestedVehicleId
-    ? fleet.trucks.find((item: any) => item.id === requestedVehicleId)
-    : fleet.trucks.find((item: any) => item.type === booking.vehicleType) ||
-      fleet.trucks.find((item: any) => item.isActive) ||
-      fleet.trucks[0];
+
+  let truck: any = null;
+  if (requestedVehicleId) {
+    truck = fleet.trucks.find((item: any) => item.id === requestedVehicleId);
+    if (!truck) {
+      throw AppError.notFound('Requested fleet truck was not found');
+    }
+  } else {
+    // Strictly find an active truck matching the requested booking vehicle type
+    truck = fleet.trucks.find(
+      (item: any) => item.isActive && item.type === booking.vehicleType,
+    );
+  }
 
   if (!truck || !truck.isActive) {
-    throw AppError.badRequest('Select an active fleet truck for this offer', 'VEHICLE_REQUIRED');
+    throw AppError.badRequest(
+      'An active fleet truck matching the required vehicle type must be selected',
+      'VEHICLE_REQUIRED',
+    );
+  }
+
+  if (booking.vehicleType && truck.type !== booking.vehicleType) {
+    throw AppError.badRequest(
+      `Fleet truck type (${truck.type}) does not match required booking vehicle type (${booking.vehicleType})`,
+      'VEHICLE_TYPE_MISMATCH',
+    );
+  }
+
+  if (
+    typeof booking.goodsWeightKg === 'number' &&
+    typeof truck.capacityKg === 'number' &&
+    truck.capacityKg < booking.goodsWeightKg
+  ) {
+    throw AppError.badRequest(
+      `Fleet truck capacity (${truck.capacityKg} kg) is insufficient for cargo weight (${booking.goodsWeightKg} kg)`,
+      'INSUFFICIENT_VEHICLE_CAPACITY',
+    );
   }
 
   return {
@@ -432,6 +458,9 @@ async function ensureParticipantOperationalAvailability(
   const reservedBookingStatuses = [BookingStatus.CONFIRMED, ...activeTripStatuses];
 
   if (participant.partyType === BidPartyType.DRIVER) {
+    if (participant.driver.status !== DriverStatus.AVAILABLE) {
+      throw AppError.conflict('Driver is not currently available to take trips', 'DRIVER_NOT_AVAILABLE');
+    }
     const [activeBooking, otherAward] = await Promise.all([
       prisma.booking.findFirst({
         where: { driverId: participant.driverId, status: { in: activeTripStatuses } },
@@ -666,11 +695,18 @@ export async function listOpportunities(actor: Actor, query: OpportunitiesQuery)
 
 function mapMarketplaceVehicleType(v: string | null | undefined): VehicleType {
   const s = (v || '').toUpperCase();
-  if (s.includes('32') || s.includes('CONTAINER') || s.includes('TRAILER')) return VehicleType.CONTAINER_32FT;
+  if (s.includes('FLATBED')) return VehicleType.TRAILER_40FT_FLATBED;
+  if (s.includes('TRAILER')) return VehicleType.TRAILER_40FT_SEMI;
+  if (s.includes('32')) return s.includes('OPEN') ? VehicleType.TRUCK_32FT_OPEN : VehicleType.CONTAINER_32FT;
+  if (s.includes('CONTAINER')) return VehicleType.CONTAINER_32FT;
+  if (s.includes('30')) return VehicleType.TRUCK_30FT_OPEN;
+  if (s.includes('28')) return VehicleType.TRUCK_28FT_OPEN;
+  if (s.includes('24')) return VehicleType.TRUCK_24FT_OPEN;
+  if (s.includes('22')) return s.includes('CONTAINER') || s.includes('CLOSED') ? VehicleType.TRUCK_22FT_CLOSED : VehicleType.TRUCK_22FT_OPEN;
   if (s.includes('20')) return VehicleType.TRUCK_20FT;
   if (s.includes('19')) return VehicleType.TRUCK_19FT;
-  if (s.includes('17')) return VehicleType.TRUCK_17FT;
-  if (s.includes('14')) return VehicleType.TRUCK_14FT;
+  if (s.includes('17')) return s.includes('CLOSED') ? VehicleType.TRUCK_17FT_CLOSED : VehicleType.TRUCK_17FT;
+  if (s.includes('14')) return s.includes('CLOSED') ? VehicleType.TRUCK_14FT_CLOSED : VehicleType.TRUCK_14FT_OPEN;
   if (s.includes('BOLERO')) return VehicleType.BOLERO_PICKUP;
   if (s.includes('DOST')) return VehicleType.ASHOK_LEYLAND_DOST;
   if (s.includes('JEETO')) return VehicleType.MAHINDRA_JEETO;
@@ -1600,13 +1636,119 @@ export async function secureCashAward(bookingId: string, actor: Actor) {
   return finalizeSecuredAward(targetId);
 }
 
+async function handleFailedSecuredAward(award: any, error: any) {
+  const now = new Date();
+  logger.warn('[Marketplace] Handling failed secured award', {
+    awardId: award.id,
+    bookingId: award.bookingId,
+    error: error?.message,
+  });
+
+  // 1. Release award lock & update status
+  await prisma.bidAward.updateMany({
+    where: { id: award.id, activeKey: award.bookingId },
+    data: { status: BidAwardStatus.CANCELLED, activeKey: null, expiredAt: now },
+  });
+
+  // 2. Mark winning bid as EXPIRED
+  await prisma.marketplaceBid.updateMany({
+    where: { id: award.bidId },
+    data: { status: MarketplaceBidStatus.EXPIRED, closedAt: now },
+  });
+
+  const isPaid = award.booking.paymentStatus === PaymentStatus.PAID;
+
+  if (isPaid) {
+    // Customer already paid online or via wallet. Issue wallet refund.
+    const amountToRefund = Number(award.customerTotal);
+    if (amountToRefund > 0) {
+      try {
+        const { refundToWallet } = await import('@modules/wallet/wallet.service');
+        await refundToWallet(award.customerId, award.bookingId, amountToRefund);
+      } catch (refundErr: any) {
+        logger.error('[Marketplace] Automatic wallet refund failed', {
+          bookingId: award.bookingId,
+          error: refundErr?.message,
+        });
+      }
+    }
+  }
+
+  // Canonically cancel booking using unified lifecycle cancellation
+  try {
+    const { cancelBookingBySystem } = await import('@modules/booking/booking.service');
+    await cancelBookingBySystem(
+      award.bookingId,
+      error?.message || 'Selected provider is no longer available',
+      'MARKETPLACE_SYSTEM',
+    );
+  } catch (cancelErr: any) {
+    logger.warn('[Marketplace] Canonical cancellation fallback in handleFailedSecuredAward:', cancelErr?.message);
+    await prisma.booking.update({
+      where: { id: award.bookingId },
+      data: {
+        driverId: null,
+        awardedFleetOwnerId: null,
+        status: BookingStatus.CANCELLED,
+        marketplaceVersion: { increment: 1 },
+      },
+    });
+  }
+
+  if (isPaid) {
+    await prisma.booking.update({
+      where: { id: award.bookingId },
+      data: {
+        paymentStatus: PaymentStatus.REFUNDED,
+      },
+    });
+
+    await notifyUser(
+      award.customerId,
+      'Trip Assignment Failed - Refund Issued',
+      'The selected provider is no longer available. Your payment has been refunded to your wallet.',
+      { type: 'BID_AWARD_FAILED', bookingId: award.bookingId },
+    );
+  } else {
+    await notifyUser(
+      award.customerId,
+      'Trip Assignment Failed',
+      'The selected provider is no longer available to accept this trip.',
+      { type: 'BID_AWARD_FAILED', bookingId: award.bookingId },
+    );
+  }
+
+  emitToMarketplaceCustomer(award.bookingId, 'bid_award_failed', {
+    bookingId: award.bookingId,
+    awardId: award.id,
+    reason: error?.message || 'Selected provider is no longer available',
+    refunded: isPaid,
+  });
+}
+
 export async function finalizePaidAward(bookingId: string) {
   const booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { bookingMode: true, paymentStatus: true } });
   if (!booking || booking.bookingMode !== BookingMode.PRIVATE_BID) return null;
   if (booking.paymentStatus !== PaymentStatus.PAID) {
     throw AppError.conflict('Payment is not secured for this bid award', 'PAYMENT_NOT_SECURED');
   }
-  return finalizeSecuredAward(bookingId);
+
+  try {
+    return await finalizeSecuredAward(bookingId);
+  } catch (error: any) {
+    logger.error('[Marketplace] Finalize paid award failed; triggering safe failure handling', {
+      bookingId,
+      error: error?.message,
+    });
+    const award = await prisma.bidAward.findFirst({
+      where: { bookingId, activeKey: bookingId },
+      include: { bid: true, booking: true },
+    });
+    if (award) {
+      await handleFailedSecuredAward(award, error);
+    }
+    throw error;
+  }
 }
 
 async function finalizeSecuredAward(bookingId: string) {
@@ -1659,10 +1801,11 @@ async function finalizeSecuredAward(bookingId: string) {
       if (reservedDriver.count !== 1) {
         throw AppError.conflict('Winning driver is no longer available', 'DRIVER_NOT_AVAILABLE');
       }
+      assertTransition(award.booking.status, BookingStatus.DRIVER_ASSIGNED);
       const assigned = await tx.booking.updateMany({
         where: {
           id: bookingId,
-          status: award.booking.status,
+          status: BookingStatus.CONFIRMED,
           driverId: null,
         },
         data: {
@@ -1821,7 +1964,12 @@ export async function expireMarketplaceState() {
   });
   for (const award of overdueAwards) {
     if (award.booking.paymentStatus === PaymentStatus.PAID || award.booking.paymentMethod === PaymentMethod.CASH) {
-      await finalizeSecuredAward(award.bookingId).catch((error) => logger.error('[Marketplace] Late finalization failed', { awardId: award.id, error }));
+      try {
+        await finalizeSecuredAward(award.bookingId);
+      } catch (error: any) {
+        logger.error('[Marketplace] Late finalization failed for secured award', { awardId: award.id, error });
+        await handleFailedSecuredAward(award, error);
+      }
       continue;
     }
     let canExpire = !award.booking.razorpayOrderId;
@@ -1852,7 +2000,15 @@ export async function expireMarketplaceState() {
             amountPaise: Number(inspection.exactCapturedPayment.amount),
             currency: inspection.exactCapturedPayment.currency,
           });
-          await finalizeSecuredAward(award.bookingId);
+          try {
+            await finalizeSecuredAward(award.bookingId);
+          } catch (error: any) {
+            logger.error('[Marketplace] Late finalization after payment capture failed', {
+              awardId: award.id,
+              error,
+            });
+            await handleFailedSecuredAward(award, error);
+          }
           continue;
         }
 
@@ -1922,9 +2078,12 @@ export async function expireMarketplaceState() {
       return true;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     if (!reopened) {
-      await finalizeSecuredAward(award.bookingId).catch((error) => {
+      try {
+        await finalizeSecuredAward(award.bookingId);
+      } catch (error: any) {
         logger.error('[Marketplace] Secured award finalization retry failed', { awardId: award.id, error });
-      });
+        await handleFailedSecuredAward(award, error);
+      }
       continue;
     }
     const event = { bookingId: award.bookingId, bidId: award.bidId, awardId: award.id, closesAt };

@@ -53,11 +53,24 @@ export async function getFleetTransactionHistory(
 // WITHDRAWAL REQUEST
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function requestFleetWithdrawal(fleetOwnerId: string, amount: number) {
+export async function requestFleetWithdrawal(fleetOwnerId: string, amount: number, idempotencyKey?: string) {
+  if (!Number.isFinite(amount) || amount < MIN_WITHDRAWAL) {
+    throw AppError.badRequest(`Minimum withdrawal is Rs.${MIN_WITHDRAWAL}`, 'BELOW_MIN_WITHDRAWAL');
+  }
+
   assertRazorpayXPayoutsEnabled();
 
-  if (amount < MIN_WITHDRAWAL) {
-    throw AppError.badRequest(`Minimum withdrawal is Rs.${MIN_WITHDRAWAL}`, 'BELOW_MIN_WITHDRAWAL');
+  // FIN-004: Fast-path return for duplicate client retries with an idempotency key
+  if (idempotencyKey) {
+    const existingReq = await prisma.withdrawalRequest.findUnique({
+      where: { idempotencyKey },
+    });
+    if (existingReq) {
+      if (existingReq.amount !== amount) {
+        throw AppError.conflict('Idempotency key reused with different amount', 'IDEMPOTENCY_CONFLICT');
+      }
+      return existingReq;
+    }
   }
 
   const [wallet, fleetOwner] = await Promise.all([
@@ -82,58 +95,81 @@ export async function requestFleetWithdrawal(fleetOwnerId: string, amount: numbe
     );
   }
 
-  const pending = await prisma.withdrawalRequest.findFirst({
-    where: {
-      entityType: WithdrawalEntityType.FLEET,
-      entityId:   fleetOwnerId,
-      status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.AUTO_PROCESSING] },
-    },
-  });
-  if (pending) {
-    throw AppError.badRequest(
-      'A withdrawal is already in progress. Please wait for it to complete.',
-      'WITHDRAWAL_IN_PROGRESS'
-    );
+  try {
+    const withdrawalRequest = await prisma.$transaction(async (tx) => {
+      // 1. In-transaction pending check prevents concurrent duplicate withdrawals
+      const pending = await tx.withdrawalRequest.findFirst({
+        where: {
+          entityType: WithdrawalEntityType.FLEET,
+          entityId:   fleetOwnerId,
+          status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.AUTO_PROCESSING] },
+        },
+      });
+      if (pending) {
+        throw AppError.badRequest(
+          'A withdrawal is already in progress. Please wait for it to complete.',
+          'WITHDRAWAL_IN_PROGRESS'
+        );
+      }
+
+      // 2. Conditional balance decrement prevents overdraft
+      const deductResult = await tx.fleetWallet.updateMany({
+        where: { fleetOwnerId, cachedBalance: { gte: amount } },
+        data:  { cachedBalance: { decrement: amount } },
+      });
+      if (deductResult.count === 0) {
+        throw AppError.badRequest('Insufficient balance', 'INSUFFICIENT_BALANCE');
+      }
+
+      const freshWallet = await tx.fleetWallet.findUniqueOrThrow({ where: { fleetOwnerId } });
+
+      // 3. Create withdrawal request with optional database-unique idempotencyKey
+      const createdRequest = await tx.withdrawalRequest.create({
+        data: {
+          entityType:            WithdrawalEntityType.FLEET,
+          entityId:              fleetOwnerId,
+          amount,
+          idempotencyKey:        idempotencyKey ?? undefined,
+          bankAccountNo:         fleetOwner.bankAccountNo!,
+          bankIfsc:              fleetOwner.bankIfsc!,
+          bankName:              fleetOwner.bankName ?? 'Unknown',
+          bankAccountHolderName: fleetOwner.bankAccountHolderName ?? fleetOwner.user.name ?? 'Fleet Owner',
+          razorpayxContactId:    fleetOwner.razorpayxContactId,
+          razorpayxFundAccountId: fleetOwner.razorpayxFundAccountId,
+        },
+      });
+
+      // 4. Create ledger reservation with unique referenceId
+      await tx.fleetWalletTransaction.create({
+        data: {
+          walletId:     freshWallet.id,
+          type:         WalletTransactionType.DEBIT,
+          amount,
+          balanceAfter: freshWallet.cachedBalance,
+          referenceId:  `WITHDRAWAL_RESERVE_${createdRequest.id}`,
+          note:         `Withdrawal request`,
+        },
+      });
+
+      return createdRequest;
+    });
+
+    logger.info(`[FleetWallet] Withdrawal: Rs.${amount} for fleet ${fleetOwnerId}`);
+
+    processWithdrawalViaRazorpayX(withdrawalRequest.id).catch((err) => {
+      logger.error(`[FleetWallet] Auto-payout failed for ${withdrawalRequest.id}:`, err);
+    });
+
+    return withdrawalRequest;
+  } catch (err: any) {
+    if (err.code === 'P2002' && idempotencyKey) {
+      const existing = await prisma.withdrawalRequest.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) return existing;
+    }
+    throw err;
   }
-
-  const withdrawalRequest = await prisma.$transaction(async (tx) => {
-    const updatedWallet = await tx.fleetWallet.update({
-      where: { fleetOwnerId },
-      data:  { cachedBalance: { decrement: amount } },
-    });
-
-    await tx.fleetWalletTransaction.create({
-      data: {
-        walletId:    wallet.id,
-        type:        WalletTransactionType.DEBIT,
-        amount,
-        balanceAfter: updatedWallet.cachedBalance,
-        note:        `Withdrawal request`,
-      },
-    });
-
-    return tx.withdrawalRequest.create({
-      data: {
-        entityType:            WithdrawalEntityType.FLEET,
-        entityId:              fleetOwnerId,
-        amount,
-        bankAccountNo:         fleetOwner.bankAccountNo!,
-        bankIfsc:              fleetOwner.bankIfsc!,
-        bankName:              fleetOwner.bankName ?? 'Unknown',
-        bankAccountHolderName: fleetOwner.bankAccountHolderName ?? fleetOwner.user.name ?? 'Fleet Owner',
-        razorpayxContactId:    fleetOwner.razorpayxContactId,
-        razorpayxFundAccountId: fleetOwner.razorpayxFundAccountId,
-      },
-    });
-  });
-
-  logger.info(`[FleetWallet] Withdrawal: Rs.${amount} for fleet ${fleetOwnerId}`);
-
-  processWithdrawalViaRazorpayX(withdrawalRequest.id).catch((err) => {
-    logger.error(`[FleetWallet] Auto-payout failed for ${withdrawalRequest.id}:`, err);
-  });
-
-  return withdrawalRequest;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,11 +181,14 @@ export async function transferToDriver(
   fleetOwnerId: string,
   driverId:     string,
   amount:       number,
-  note?:        string
+  note?:        string,
+  idempotencyKey?: string
 ) {
-  assertMultiPartyTransfersEnabled();
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw AppError.badRequest('Transfer amount must be positive');
+  }
 
-  if (amount <= 0) throw AppError.badRequest('Transfer amount must be positive');
+  assertMultiPartyTransfersEnabled();
 
   const fleetWallet = await prisma.fleetWallet.findUnique({ where: { fleetOwnerId } });
   if (!fleetWallet) throw AppError.notFound('Fleet wallet not found');
@@ -168,21 +207,43 @@ export async function transferToDriver(
     throw AppError.forbidden('Driver does not belong to your fleet');
   }
 
+  const transferRef = idempotencyKey || `SALARY_${fleetOwnerId}_${driverId}_${Date.now()}`;
+
+  // If idempotency key provided, check if already completed
+  if (idempotencyKey) {
+    const existingDebit = await prisma.fleetWalletTransaction.findFirst({
+      where: { walletId: fleetWallet.id, referenceId: idempotencyKey },
+    });
+    if (existingDebit) {
+      const freshFleet = await prisma.fleetWallet.findUnique({ where: { fleetOwnerId } });
+      const freshDriver = await prisma.driverWallet.findUnique({ where: { driverId } });
+      return {
+        fleetBalance: freshFleet?.cachedBalance ?? fleetWallet.cachedBalance,
+        driverBalance: freshDriver?.cachedBalance ?? 0,
+        alreadyProcessed: true,
+      };
+    }
+  }
+
   return prisma.$transaction(async (tx) => {
-    // 1. Debit fleet wallet
-    const updatedFleetWallet = await tx.fleetWallet.update({
-      where: { fleetOwnerId },
+    // 1. Conditional debit fleet wallet prevents overdraft
+    const deductResult = await tx.fleetWallet.updateMany({
+      where: { fleetOwnerId, cachedBalance: { gte: amount } },
       data:  { cachedBalance: { decrement: amount } },
     });
+    if (deductResult.count === 0) {
+      throw AppError.badRequest('Insufficient fleet balance', 'INSUFFICIENT_BALANCE');
+    }
+    const freshFleetWallet = await tx.fleetWallet.findUniqueOrThrow({ where: { fleetOwnerId } });
 
     await tx.fleetWalletTransaction.create({
       data: {
-        walletId:    fleetWallet.id,
+        walletId:    freshFleetWallet.id,
         type:        WalletTransactionType.DEBIT,
         amount,
-        balanceAfter: updatedFleetWallet.cachedBalance,
+        balanceAfter: freshFleetWallet.cachedBalance,
         note:        note ?? `Driver salary transfer`,
-        referenceId: driverId,
+        referenceId: transferRef,
       },
     });
 
@@ -202,13 +263,13 @@ export async function transferToDriver(
         amount,
         balanceAfter: freshDriverWallet!.cachedBalance,
         note:        note ?? `Salary from fleet`,
-        referenceId: fleetOwnerId,
+        referenceId: transferRef,
       },
     });
 
     logger.info(`[FleetWallet] Rs.${amount} transferred: fleet ${fleetOwnerId} -> driver ${driverId}`);
     return {
-      fleetBalance:  updatedFleetWallet.cachedBalance,
+      fleetBalance:  freshFleetWallet.cachedBalance,
       driverBalance: freshDriverWallet!.cachedBalance,
     };
   });

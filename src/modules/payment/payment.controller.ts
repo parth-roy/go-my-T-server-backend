@@ -20,7 +20,7 @@ import crypto from 'crypto';
 import { finalizePaidAward } from '@modules/marketplace/marketplace.service';
 import { razorpay } from './razorpay.client';
 import { cashfreeClient } from './cashfree.client';
-import { secureCapturedBookingPayment } from './booking-payment.service';
+import { secureCapturedBookingPayment, markBookingPaymentFailed } from './booking-payment.service';
 import { logger } from '@shared/logger';
 
 
@@ -519,17 +519,8 @@ export async function razorpayWebhook(req: Request, res: Response, _next: NextFu
                     data: { status: 'FAILED' },
                 });
 
-                // Update booking if applicable
-                const booking = await prisma.booking.findFirst({
-                    where: { razorpayOrderId: orderId, paymentStatus: PaymentStatus.PENDING },
-                });
-                if (booking) {
-                    await prisma.booking.update({
-                        where: { id: booking.id },
-                        data: { paymentStatus: PaymentStatus.FAILED },
-                    });
-                    console.log(`WEBHOOK: Booking ${booking.id} marked FAILED`);
-                }
+                // Update booking payment status canonically if applicable
+                await markBookingPaymentFailed(orderId, payment?.error_description || payment?.error_code);
             }
         } else {
             console.log(`WEBHOOK: Unhandled event [${event}] — acknowledged`);
@@ -577,6 +568,10 @@ export async function mockPaymentSuccess(req: Request, res: Response, next: Next
 
         if (booking.paymentStatus === PaymentStatus.PAID) {
             throw AppError.conflict('Booking is already paid');
+        }
+
+        if (booking.status === BookingStatus.CANCELLED) {
+            throw AppError.badRequest('Cannot pay for a cancelled booking', 'BOOKING_CANCELLED');
         }
 
         const updatedBooking = await prisma.booking.update({

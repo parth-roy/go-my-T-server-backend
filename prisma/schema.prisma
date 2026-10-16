@@ -53,6 +53,14 @@ enum VehicleType {
   TRUCK_14FT_CLOSED
   TRUCK_17FT_CLOSED
   TRUCK_19FT
+  TRUCK_22FT_OPEN
+  TRUCK_24FT_OPEN
+  TRUCK_28FT_OPEN
+  TRUCK_30FT_OPEN
+  TRUCK_32FT_OPEN
+  TRUCK_22FT_CLOSED
+  TRAILER_40FT_SEMI
+  TRAILER_40FT_FLATBED
 }
 
 enum BookingStatus {
@@ -1154,7 +1162,7 @@ model WalletTransaction {
 
   @@index([walletId, createdAt])
   @@index([referenceId])
-  @@index([walletId, referenceId])
+  @@unique([walletId, referenceId])
   @@map("wallet_transactions")
 }
 
@@ -1652,7 +1660,7 @@ model DriverWalletTransaction {
   @@index([walletId, createdAt])
   @@index([bookingId])
   @@index([referenceId])
-  @@index([walletId, referenceId])
+  @@unique([walletId, referenceId])
   @@map("driver_wallet_transactions")
 }
 
@@ -1691,7 +1699,7 @@ model WorkerWalletTransaction {
   @@index([walletId, createdAt])
   @@index([bookingId])
   @@index([referenceId])
-  @@index([walletId, referenceId])
+  @@unique([walletId, referenceId])
   @@map("worker_wallet_transactions")
 }
 
@@ -1717,8 +1725,9 @@ model WithdrawalRequest {
   // RazorpayX tracking
   razorpayxContactId     String? // RazorpayX contact ID
   razorpayxFundAccountId String? // RazorpayX fund account ID
-  razorpayxPayoutId      String? // Payout ID returned by RazorpayX
+  razorpayxPayoutId      String?   @unique // Payout ID returned by RazorpayX
   razorpayxUtr           String? // UTR number for bank reconciliation
+  idempotencyKey         String?   @unique // Unique idempotency key to prevent double reservation
 
   // Admin override
   adminNote   String?
@@ -1731,7 +1740,6 @@ model WithdrawalRequest {
 
   @@index([entityType, entityId, status])
   @@index([status, requestedAt])
-  @@index([razorpayxPayoutId])
   @@map("withdrawal_requests")
 }
 
@@ -1802,7 +1810,7 @@ model FleetWalletTransaction {
 
   @@index([walletId, createdAt])
   @@index([referenceId])
-  @@index([walletId, referenceId])
+  @@unique([walletId, referenceId])
   @@map("fleet_wallet_transactions")
 }
 
@@ -2856,4 +2864,56 @@ model AdminDispatchAlert {
   @@index([createdAt])
   @@map("admin_dispatch_alerts")
 }
+
+// ─────────────────────────────────────────────
+// RECONCILIATION & EXCEPTION QUEUE (POINT 6)
+// ─────────────────────────────────────────────
+
+enum ReconciliationCategory {
+  PAID_UNCREDITED
+  COMPLETED_UNSETTLED
+  LEDGER_MISMATCH
+  PAYOUT_STUCK
+  COMMISSION_MISMATCH
+}
+
+enum ReconciliationSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ReconciliationStatus {
+  OPEN
+  INVESTIGATING
+  AUTO_RESOLVED
+  RESOLVED
+  IGNORED
+}
+
+model ReconciliationException {
+  id                String                 @id @default(uuid())
+  category          ReconciliationCategory
+  severity          ReconciliationSeverity @default(MEDIUM)
+  status            ReconciliationStatus   @default(OPEN)
+  entityType        String                 // BOOKING, PAYMENT_TRANSACTION, DRIVER_WALLET, USER_WALLET, WORKER_WALLET, FLEET_WALLET, WITHDRAWAL_REQUEST
+  entityId          String                 // bookingId, walletId, withdrawalRequestId, orderId, etc.
+  expectedAmount    Float?
+  actualAmount      Float?
+  discrepancyAmount Float?
+  details           Json?
+  resolvedAt        DateTime?
+  resolvedBy        String?                // adminId or 'SYSTEM_AUTO_RECONCILE'
+  resolutionNote    String?
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  @@index([category, status])
+  @@index([entityType, entityId])
+  @@index([severity, status])
+  @@index([status, createdAt])
+  @@map("reconciliation_exceptions")
+}
+
 

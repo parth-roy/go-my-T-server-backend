@@ -120,7 +120,11 @@ export async function getWalletTransactions(req: Request, res: Response, next: N
 
 export async function withdrawWallet(req: Request, res: Response, next: NextFunction) {
   try {
-    const result = await service.withdrawWallet(req.user!.id, req.body);
+    const headerKey = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
+    const idempotencyKey = (typeof req.body?.idempotencyKey === 'string' && req.body.idempotencyKey) ||
+      (typeof headerKey === 'string' && headerKey) ||
+      undefined;
+    const result = await service.withdrawWallet(req.user!.id, { ...req.body, idempotencyKey });
     sendSuccess(res, result);
   } catch (err) { next(err); }
 }

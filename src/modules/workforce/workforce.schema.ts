@@ -104,6 +104,7 @@ export const JobRadarQuerySchema = z.object({
 
 export const WithdrawSchema = z.object({
   amount: z.number().int().min(100, 'Minimum withdrawal is ₹100').max(100000, 'Maximum withdrawal is ₹100,000'),
+  idempotencyKey: z.string().optional(),
 });
 
 // ─────────────────────────────────────────────

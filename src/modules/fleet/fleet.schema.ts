@@ -100,6 +100,10 @@ export type VerifyVehicleRcInput = z.infer<typeof verifyVehicleRcSchema>;
 export const updateDriverStatusSchema = z.object({
   status: z.enum(['OFFLINE', 'AVAILABLE']),
   // Drivers cannot set themselves ON_TRIP or BREAK — only system does that
+  currentLat: z.number().min(-90).max(90).optional(),
+  currentLng: z.number().min(-180).max(180).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
 });
 
 export type UpdateDriverStatusInput = z.infer<typeof updateDriverStatusSchema>;

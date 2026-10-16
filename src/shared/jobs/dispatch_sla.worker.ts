@@ -16,6 +16,7 @@ import { emitToBookingRoom, emitToCustomerRoom, emitToAdminOpsRoom } from '@shar
 import { DynamicModalService } from '@modules/dispatch/sdui.service';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
+import { enqueueDispatch } from '@modules/dispatch/dispatch.service';
 
 const SLA_CHECK_INTERVAL_MS = 30 * 1000; // Run every 30 seconds
 
@@ -29,8 +30,10 @@ export async function checkExpiredDispatchBookings(): Promise<void> {
                     in: [BookingStatus.CONFIRMED, BookingStatus.DRAFT],
                 },
                 isOpsEscalated: false,
-                dispatchedAt: { not: null },
-                dispatchTimeoutAt: { lte: now },
+                OR: [
+                    { dispatchedAt: { not: null }, dispatchTimeoutAt: { lte: now } },
+                    { dispatchedAt: null, createdAt: { lte: new Date(now.getTime() - 5 * 60_000) } },
+                ],
             },
             include: {
                 customer: { select: { id: true, name: true, phone: true, fcmToken: true } },
@@ -121,12 +124,67 @@ export async function checkExpiredDispatchBookings(): Promise<void> {
     }
 }
 
+/**
+ * ARCH-002: Reconcile orphaned or unprocessed confirmed bookings.
+ *
+ * If the server crashed after booking creation or during a retry delay,
+ * this self-healing reconciler detects confirmed bookings that remain unassigned
+ * and have had no recent dispatch updates (> 45s), automatically re-enqueuing them
+ * to the durable BullMQ queue with a deterministic reconciliation job ID.
+ */
+export async function reconcileOrphanedDispatchBookings(): Promise<void> {
+    try {
+        const threshold = new Date(Date.now() - 45 * 1000); // untouched for at least 45 seconds
+        const orphaned = await prisma.booking.findMany({
+            where: {
+                status: BookingStatus.CONFIRMED,
+                driverId: null,
+                bookingMode: { not: 'PRIVATE_BID' as any },
+                isOpsEscalated: false,
+                updatedAt: { lte: threshold },
+                declineCount: { lt: 10 },
+            },
+            select: {
+                id: true,
+                bookingNumber: true,
+                declineCount: true,
+            },
+            take: 20,
+        });
+
+        if (orphaned.length === 0) return;
+
+        logger.info(`[DispatchReconciler] Found ${orphaned.length} orphaned/unprocessed bookings. Scheduling durable dispatch...`);
+
+        for (const booking of orphaned) {
+            try {
+                const round = (booking.declineCount ?? 0) + 1;
+                // Deterministic slot (1-minute window bucket) to prevent storming
+                const timeBucket = Math.floor(Date.now() / 60000);
+                const jobId = `dispatch-reconcile-${booking.id}-${timeBucket}`;
+
+                await enqueueDispatch(booking.id, {
+                    reason: 'ORPHANED_DISPATCH_RECONCILER',
+                    round,
+                    jobId,
+                });
+                logger.info(`[DispatchReconciler] Re-enqueued booking ${booking.bookingNumber} (${booking.id}) with job ${jobId}`);
+            } catch (err: any) {
+                logger.error(`[DispatchReconciler] Failed to re-enqueue booking ${booking.id}:`, err);
+            }
+        }
+    } catch (err: any) {
+        logger.error('[DispatchReconciler] Error running reconciliation loop:', err);
+    }
+}
+
 export function startDispatchSlaWorker(): void {
     const run = () => {
         checkExpiredDispatchBookings().catch(err => logger.error('[DispatchSLA] Run failed:', err));
+        reconcileOrphanedDispatchBookings().catch(err => logger.error('[DispatchReconciler] Run failed:', err));
     };
 
     run();
     setInterval(run, SLA_CHECK_INTERVAL_MS);
-    logger.info('✅ Dispatch 5-minute SLA worker started (30s interval)');
+    logger.info('✅ Dispatch 5-minute SLA & self-healing reconciliation worker started (30s interval)');
 }

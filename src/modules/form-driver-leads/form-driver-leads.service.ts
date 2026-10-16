@@ -825,7 +825,8 @@ export class FormDriverLeadService {
       '17ft': [VehicleType.TRUCK_17FT, VehicleType.TRUCK_17FT_CLOSED],
       '19ft': [VehicleType.TRUCK_19FT],
       '20ft': [VehicleType.TRUCK_20FT],
-      '32ft': [VehicleType.CONTAINER_32FT],
+      '32ft': [VehicleType.CONTAINER_32FT, VehicleType.TRUCK_32FT_OPEN],
+      '40ft-trailer': [VehicleType.TRAILER_40FT_SEMI, VehicleType.TRAILER_40FT_FLATBED],
     };
 
     const targetTypes = (vehicleCategory && categoryMapping[vehicleCategory.toLowerCase().trim()]) || [VehicleType.TATA_ACE];
@@ -842,6 +843,7 @@ export class FormDriverLeadService {
       '19ft': '19 Feet Multi-Axle Truck (8-9 Ton)',
       '20ft': '20 Feet Multi-Axle (10 Ton)',
       '32ft': '32ft Multi-Axle Container (15-18 Ton)',
+      '40ft-trailer': '40ft Semi / Flatbed Trailer (35 Ton)',
     };
     const displayVehicleName = categoryLabelMap[vehicleCategory?.toLowerCase().trim() || 'tata-ace'] || 'Commercial Freight Carrier';
 
@@ -858,6 +860,7 @@ export class FormDriverLeadService {
       '19ft': '₹2,800 Base',
       '20ft': '₹3,200 Base',
       '32ft': '₹5,500 Base',
+      '40ft-trailer': '₹8,500 Base',
     };
     const baseRate = baseRatesMap[vehicleCategory?.toLowerCase().trim() || 'tata-ace'] || '₹800 Base';
 

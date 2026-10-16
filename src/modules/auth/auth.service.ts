@@ -542,9 +542,27 @@ export async function refreshTokens({ refreshToken }: RefreshInput) {
 // ─────────────────────────────────────────────
 // LOGOUT
 // ─────────────────────────────────────────────
-export async function logout(refreshToken: string) {
+export async function logout(refreshToken: string, userId?: string) {
   // Silently succeed even if the token doesn't exist (idempotent)
-  await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
+  if (refreshToken) {
+    const tokenRecord = await prisma.refreshToken.findUnique({
+      where: { token: refreshToken },
+      select: { userId: true },
+    });
+    const targetUserId = userId || tokenRecord?.userId;
+    if (targetUserId) {
+      await prisma.user.update({
+        where: { id: targetUserId },
+        data: { fcmToken: null },
+      }).catch(() => {});
+    }
+    await prisma.refreshToken.deleteMany({ where: { token: refreshToken } });
+  } else if (userId) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { fcmToken: null },
+    }).catch(() => {});
+  }
   return { message: 'Logged out successfully' };
 }
 

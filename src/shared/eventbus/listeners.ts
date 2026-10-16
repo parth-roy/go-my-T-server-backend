@@ -1,5 +1,5 @@
 import { eventBus } from './index';
-import { dispatchBooking, dispatchWorkers } from '@modules/dispatch/dispatch.service';
+import { dispatchBooking, dispatchWorkers, enqueueDispatch } from '@modules/dispatch/dispatch.service';
 import { generateScratchCard } from '@modules/rewards/rewards.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
 import { notificationService } from '@modules/notifications/notification.service';
@@ -87,7 +87,7 @@ export function registerEventListeners(): void {
             if (mode?.bookingMode === 'PRIVATE_BID') {
                 await publishBidOpportunity(bookingId);
             } else {
-                await dispatchBooking(bookingId);
+                await enqueueDispatch(bookingId, { reason: 'EVENTBUS_BOOKING_CONFIRMED' });
             }
 
             const booking = await prisma.booking.findUnique({ where: { id: bookingId }, select: { customerId: true, bookingNumber: true } });

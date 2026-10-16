@@ -30,6 +30,45 @@ export function assertTransition(current: BookingStatus, next: BookingStatus): v
   }
 }
 
+export function canTransition(current: BookingStatus, next: BookingStatus): boolean {
+  const allowed = VALID_TRANSITIONS[current] ?? [];
+  return allowed.includes(next);
+}
+
+export function getAllowedTransitions(current: BookingStatus): BookingStatus[] {
+  return VALID_TRANSITIONS[current] ?? [];
+}
+
+export interface TransitionContext {
+  bookingId: string;
+  fromStatus: BookingStatus;
+  toStatus: BookingStatus;
+  actor?: { id?: string; role?: string };
+  reason?: string;
+  metadata?: Record<string, any>;
+  operationId?: string;
+}
+
+export function logTransition(ctx: TransitionContext): void {
+  const { CorrelationContext } = require('@shared/context/correlation.context');
+  const logger = require('@shared/logger').logger;
+  const opId = ctx.operationId || CorrelationContext.getOperationId() || 'op_system';
+
+  logger.info(`[StateTransition] BOOKING ${ctx.bookingId}: ${ctx.fromStatus} -> ${ctx.toStatus} [op:${opId}]`, {
+    type: 'STATE_TRANSITION',
+    entity: 'BOOKING',
+    entityId: ctx.bookingId,
+    fromStatus: ctx.fromStatus,
+    toStatus: ctx.toStatus,
+    operationId: opId,
+    actorId: ctx.actor?.id,
+    actorRole: ctx.actor?.role,
+    reason: ctx.reason,
+    metadata: ctx.metadata,
+    timestamp: new Date().toISOString(),
+  });
+}
+
 const VALID_BROKER_TRANSITIONS: Partial<Record<BrokerBookingStatus, BrokerBookingStatus[]>> = {
   [BrokerBookingStatus.SOURCING]: [
     BrokerBookingStatus.PENDING_REVIEW,

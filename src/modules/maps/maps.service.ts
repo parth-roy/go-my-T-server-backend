@@ -75,6 +75,21 @@ async function cacheSet(key: string, value: unknown, ttlSeconds: number): Promis
   }
 }
 
+function computeHaversineLeg(originLat: number, originLng: number, destLat: number, destLng: number) {
+  const R = 6371;
+  const dLat = ((destLat - originLat) * Math.PI) / 180;
+  const dLng = ((destLng - originLng) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((originLat * Math.PI) / 180) *
+    Math.cos((destLat * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  const straightLineKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const estimatedRoadKm = Math.round(straightLineKm * 1.25 * 10) / 10;
+  const estimatedMinutes = Math.round((estimatedRoadKm / 30) * 60);
+  return { distanceKm: estimatedRoadKm, durationMinutes: estimatedMinutes };
+}
+
 export const mapsService = {
   /**
    * Get autocomplete predictions for a given input string using Mapbox Geocoding API.
@@ -227,23 +242,28 @@ export const mapsService = {
   },
 
   /**
-   * Calculate distance and duration between two points using Mapbox Directions API.
+   * Calculate distance and duration across a multi-point route using Mapbox Directions API.
+   * Coordinates are ordered from origin -> stop 1 -> stop 2 -> ... -> destination.
    * NOTE: Directions are NOT cached (route depends on live traffic conditions).
    */
-  getDistanceMatrix: async (originLat: number, originLng: number, destLat: number, destLng: number) => {
+  getRouteDistanceMatrix: async (points: Array<{ lat: number; lng: number }>) => {
+    if (!points || points.length < 2) {
+      return { distanceKm: 0, durationMinutes: 0 };
+    }
     const MAX_RETRIES = 2;
     let lastError: any;
+    const coords = points.map(p => `${p.lng},${p.lat}`).join(';');
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const response = await axios.get(
-          `https://api.mapbox.com/directions/v5/mapbox/driving/${originLng},${originLat};${destLng},${destLat}`,
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}`,
           {
             params: { access_token: MAPBOX_API_KEY, geometries: 'geojson', overview: 'false' },
             timeout: 5000,
           }
         );
-        const route = response.data.routes[0];
+        const route = response.data.routes?.[0];
         if (!route) throw new Error('No route found');
         return {
           distanceKm: route.distance / 1000,
@@ -258,20 +278,29 @@ export const mapsService = {
       }
     }
 
-    // Fallback: Haversine straight-line distance with 25% road-factor approximation
-    logger.error('Mapbox Directions failed after retries — using Haversine fallback:', lastError?.message);
-    const R = 6371;
-    const dLat = ((destLat - originLat) * Math.PI) / 180;
-    const dLng = ((destLng - originLng) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos((originLat * Math.PI) / 180) *
-      Math.cos((destLat * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-    const straightLineKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const estimatedRoadKm = Math.round(straightLineKm * 1.25 * 10) / 10;
-    const estimatedMinutes = Math.round((estimatedRoadKm / 30) * 60);
-    return { distanceKm: estimatedRoadKm, durationMinutes: estimatedMinutes };
+    // Fallback: Haversine straight-line distance with 25% road-factor approximation across all legs
+    logger.error('Mapbox Directions failed after retries — using Haversine multi-leg fallback:', lastError?.message);
+    let totalRoadKm = 0;
+    let totalMinutes = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+      const leg = computeHaversineLeg(points[i].lat, points[i].lng, points[i + 1].lat, points[i + 1].lng);
+      totalRoadKm += leg.distanceKm;
+      totalMinutes += leg.durationMinutes;
+    }
+    return {
+      distanceKm: Math.round(totalRoadKm * 10) / 10,
+      durationMinutes: totalMinutes,
+    };
+  },
+
+  /**
+   * Calculate distance and duration between two points using Mapbox Directions API.
+   */
+  getDistanceMatrix: async (originLat: number, originLng: number, destLat: number, destLng: number) => {
+    return mapsService.getRouteDistanceMatrix([
+      { lat: originLat, lng: originLng },
+      { lat: destLat, lng: destLng },
+    ]);
   },
 
   /**

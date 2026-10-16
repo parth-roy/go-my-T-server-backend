@@ -46,7 +46,7 @@ export const prisma: PrismaClient =
 });
 
 // Graceful shutdown
-process.on('beforeExit', async () => {
+process.once('beforeExit', async () => {
   logger.info('[Prisma] Disconnecting...');
   await prisma.$disconnect();
 });

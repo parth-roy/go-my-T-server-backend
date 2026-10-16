@@ -218,3 +218,13 @@ export async function updateFcmToken(req: Request, res: Response, next: NextFunc
     next(error);
   }
 }
+
+export async function clearFcmToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    const id = req.user!.id;
+    await prisma.user.update({ where: { id }, data: { fcmToken: null } });
+    return res.status(200).json({ success: true, message: 'FCM token cleared' });
+  } catch (error) {
+    next(error);
+  }
+}

@@ -37,6 +37,23 @@ export async function selectPlan(
     throw AppError.badRequest(`Unknown plan: ${plan}`);
   }
 
+  if (paymentReference) {
+    const existing = await prisma.driverSubscription.findFirst({
+      where: {
+        paymentReference,
+        driverId: { not: driver.id },
+      },
+    });
+    if (existing) {
+      throw AppError.conflict('Payment reference has already been used', 'PAYMENT_REFERENCE_DUPLICATE');
+    }
+  } else {
+    const allowMock = process.env.NODE_ENV === 'test' || process.env.ALLOW_MOCK_PAYMENTS === 'true';
+    if (!allowMock) {
+      throw AppError.badRequest('Valid payment reference is required to activate subscription', 'PAYMENT_REQUIRED');
+    }
+  }
+
   const startDate = new Date();
   const endDate = new Date();
   endDate.setDate(endDate.getDate() + 30); // 30-day subscription

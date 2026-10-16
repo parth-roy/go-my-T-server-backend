@@ -6,6 +6,8 @@ import { createNotification } from '@modules/notifications/inapp.notification.se
 import { cancelBookingBySystem } from '@modules/booking/booking.service';
 import { emitToWorkerRoom, emitToDriverRoom } from '@shared/socket/socket.instance';
 import { DynamicModalService } from './sdui.service';
+import { getRedis } from '@config/redis';
+import { CorrelationContext } from '@shared/context/correlation.context';
 
 const MAX_DRIVERS_TO_NOTIFY = 5;
 const MAX_SEARCH_RADIUS_KM = 50;
@@ -25,15 +27,95 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+export interface EnqueueDispatchOptions {
+    delayMs?: number;
+    round?: number;
+    reason?: string;
+    jobId?: string;
+    operationId?: string;
+}
+
+/**
+ * ARCH-002: Durable Dispatch Enqueuer
+ *
+ * Enqueues a dispatch job to the durable BullMQ queue with a deterministic job ID
+ * and optional delay (replacing process-local setTimeout).
+ * Ensures dispatch operations survive server crashes, restarts, and autoscaling.
+ * Safely falls back to asynchronous in-process execution if Redis/Queue is offline.
+ */
+export async function enqueueDispatch(
+    bookingId: string,
+    options: EnqueueDispatchOptions = {}
+): Promise<{ success: boolean; jobId: string; mode: 'bullmq' | 'fallback' }> {
+    const round = options.round ?? 0;
+    const deterministicJobId = options.jobId || (
+        round === 0
+            ? `dispatch-init-${bookingId}`
+            : `dispatch-retry-${bookingId}-${round}`
+    );
+    const operationId = options.operationId || CorrelationContext.getOperationId() || `op_dispatch_${bookingId}`;
+
+    try {
+        const redisClient = getRedis();
+        const isRedisReady = redisClient && redisClient.status === 'ready';
+
+        if (isRedisReady) {
+            const { dispatchQueue } = await import('@shared/queue');
+            await Promise.race([
+                dispatchQueue.add(
+                    'dispatch-booking',
+                    { bookingId, reason: options.reason, round, operationId },
+                    {
+                        jobId: deterministicJobId,
+                        delay: options.delayMs || 0,
+                        removeOnComplete: true,
+                        removeOnFail: { count: 50 },
+                        attempts: 3,
+                        backoff: { type: 'exponential', delay: 2000 },
+                    }
+                ),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('BullMQ dispatchQueue.add timed out after 3000ms')), 3000)),
+            ]);
+            logger.info(`[DispatchQueue] Enqueued durable dispatch job ${deterministicJobId} (delay: ${options.delayMs || 0}ms, reason: ${options.reason || 'DISPATCH'}, op: ${operationId})`);
+            return { success: true, jobId: deterministicJobId, mode: 'bullmq' };
+        }
+    } catch (err: any) {
+        logger.warn(`[DispatchQueue] Redis enqueue failed for ${deterministicJobId}: ${err.message}. Operating in fallback mode.`);
+    }
+
+    // Graceful in-process fallback if Redis is offline
+    if (options.delayMs && options.delayMs > 0) {
+        const timer = setTimeout(() => {
+            CorrelationContext.run({ operationId, bookingId }, () => {
+                dispatchBooking(bookingId).catch(err =>
+                    logger.error(`[DispatchFallback] Delayed dispatch error for ${bookingId}:`, err)
+                );
+            });
+        }, options.delayMs);
+        if (timer.unref) timer.unref();
+    } else {
+        setImmediate(() => {
+            CorrelationContext.run({ operationId, bookingId }, () => {
+                dispatchBooking(bookingId).catch(err =>
+                    logger.error(`[DispatchFallback] Immediate dispatch error for ${bookingId}:`, err)
+                );
+            });
+        });
+    }
+
+    return { success: true, jobId: deterministicJobId, mode: 'fallback' };
+}
+
 // ─────────────────────────────────────────────
 // MAIN DISPATCH
-// Called when booking.confirmed event fires.
+// Called when booking.confirmed event fires or when BullMQ dispatch worker processes job.
 // Finds nearest available verified drivers and pushes FCM notifications.
 // Assignment is NOT done here — driver must explicitly call PATCH /bookings/:id/accept.
 // ─────────────────────────────────────────────
 export async function dispatchBooking(bookingId: string): Promise<void> {
-    const booking = await prisma.booking.findUnique({
-        where: { id: bookingId },
+    try {
+        const booking = await prisma.booking.findUnique({
+            where: { id: bookingId },
         select: {
             id: true,
             bookingNumber: true,
@@ -41,6 +123,8 @@ export async function dispatchBooking(bookingId: string): Promise<void> {
             pickupLat: true,
             pickupLng: true,
             status: true,
+            driverId: true,
+            dispatchedAt: true,
             declineCount: true,
             pickupAddress: true,
             totalFare: true,
@@ -57,6 +141,19 @@ export async function dispatchBooking(bookingId: string): Promise<void> {
     if (booking.status !== BookingStatus.CONFIRMED) {
         logger.warn(`[Dispatch] Booking ${bookingId} is not in CONFIRMED state. Current: ${booking.status}`);
         return;
+    }
+
+    if (booking.driverId) {
+        logger.info(`[Dispatch] Booking ${bookingId} already assigned to driver ${booking.driverId}. Skipping redundant dispatch.`);
+        return;
+    }
+
+    // Ensure dispatchedAt is recorded
+    if (!booking.dispatchedAt) {
+        await prisma.booking.update({
+            where: { id: bookingId },
+            data: { dispatchedAt: new Date() },
+        }).catch(err => logger.debug(`[Dispatch] Stamping dispatchedAt failed for ${bookingId}:`, err.message));
     }
 
     if (booking.declineCount !== null && booking.declineCount >= MAX_DECLINE_ROUNDS) {
@@ -167,6 +264,9 @@ export async function dispatchBooking(bookingId: string): Promise<void> {
     await notifyFleetOwners(booking, body);
 
     logger.info(`[Dispatch] Booking ${booking.bookingNumber} dispatched to ${ranked.length} drivers`);
+    } catch (err: any) {
+        logger.error(`[Dispatch] Unexpected error dispatching booking ${bookingId}:`, err);
+    }
 }
 
 // FIX HIGH-22: Notify fleet owners when a booking needs a driver
@@ -251,12 +351,12 @@ async function notifyNoDriverFound(booking: { customerId: string; id: string; bo
             booking.id,
         );
 
-        // Schedule retry
-        setTimeout(() => {
-            dispatchBooking(booking.id).catch(err =>
-                logger.error(`[Dispatch] Re-dispatch error for ${booking.id}:`, err)
-            );
-        }, 30000); // 30 seconds delay before retrying
+        // Schedule durable retry via BullMQ
+        await enqueueDispatch(booking.id, {
+            delayMs: 30000,
+            round: (booking.declineCount ?? 0) + 1,
+            reason: 'NO_DRIVER_FOUND_RETRY',
+        });
 
     } catch (err) {
         logger.error('[Dispatch] notifyNoDriverFound failed:', err);
@@ -276,13 +376,13 @@ export async function handleDriverDecline(bookingId: string): Promise<void> {
 
     if (!booking || booking.status !== BookingStatus.CONFIRMED) return;
 
-    logger.info(`[Dispatch] Booking ${bookingId} declined ${(booking.declineCount ?? 0)} time(s) — scheduling re-dispatch`);
+    logger.info(`[Dispatch] Booking ${bookingId} declined ${(booking.declineCount ?? 0)} time(s) — scheduling durable re-dispatch`);
 
-    setTimeout(() => {
-        dispatchBooking(bookingId).catch(err =>
-            logger.error(`[Dispatch] Re-dispatch error for ${bookingId}:`, err)
-        );
-    }, REDISPATCH_DELAY_MS);
+    await enqueueDispatch(bookingId, {
+        delayMs: REDISPATCH_DELAY_MS,
+        round: (booking.declineCount ?? 0) + 1,
+        reason: 'DRIVER_DECLINED_RETRY',
+    });
 }
 
 // ─────────────────────────────────────────────

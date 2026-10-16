@@ -10,10 +10,8 @@ export const subscriptionRouter = Router();
 subscriptionRouter.use(authenticate);
 
 const selectPlanSchema = z.object({
-  body: z.object({
-    plan: z.enum(['BASIC', 'STANDARD', 'PRO', 'PREMIUM']),
-    paymentReference: z.string().optional(), // Provided by Razorpay in Phase 2
-  }),
+  plan: z.enum(['BASIC', 'STANDARD', 'PRO', 'PREMIUM']),
+  paymentReference: z.string().trim().min(3).optional(),
 });
 
 // ── GET /api/v1/subscription — Get current subscription ─────────────────────

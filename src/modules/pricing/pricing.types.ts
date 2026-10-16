@@ -15,7 +15,7 @@ export interface FareEstimateRequest {
   hasLoadingService?: boolean;   // legacy: true = 1 helper
   helperCount?:    number;       // 0–4 helpers
   insuranceOpted?: boolean;
-  stops?:          Array<{ lat: number; lng: number }>;
+  stops?:          Array<{ lat?: number; lng?: number; latitude?: number; longitude?: number; address?: string }>;
   bookingId?:      string;       // present when re-validating on booking confirm
 }
 

@@ -11,6 +11,7 @@ const baseOptions = {
   enableReadyCheck: false,
   lazyConnect: true,
   ...(isUpstash && { tls: {} }),  // Upstash requires TLS
+  ...(process.env.NODE_ENV === 'test' && { retryStrategy: () => null }),
 };
 
 export function getRedis(): Redis {

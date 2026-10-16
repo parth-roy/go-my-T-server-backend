@@ -1,5 +1,5 @@
 import { prisma } from '@shared/db/prisma';
-import { BadgeTier, BadgeMetric } from '@prisma/client';
+import { BadgeTier, BadgeMetric, WorkerJobStatus } from '@prisma/client';
 
 export const gamificationService = {
   /**
@@ -9,7 +9,10 @@ export const gamificationService = {
   async evaluateWorkerMetrics(workerId: string) {
     const worker = await prisma.worker.findUnique({
       where: { userId: workerId },
-      include: { workerBadges: true }
+      include: {
+        workerBadges: true,
+        workerWallet: true,
+      },
     });
     if (!worker) return null;
 
@@ -30,12 +33,42 @@ export const gamificationService = {
         case BadgeMetric.ACCEPTANCE_RATE:
           currentProgress = worker.acceptanceRate ?? 0;
           break;
-        case BadgeMetric.ON_TIME_RATE:
-          // Assuming we add onTimeRate to Worker eventually, for now mock as 100%
-          currentProgress = 100;
+        case BadgeMetric.ON_TIME_RATE: {
+          if (worker.totalJobs === 0) {
+            currentProgress = 0;
+          } else {
+            const completedAssignments = await prisma.jobAssignment.findMany({
+              where: {
+                workerId: worker.id,
+                status: WorkerJobStatus.COMPLETED,
+                arrivedAt: { not: null },
+              },
+              include: {
+                booking: {
+                  select: {
+                    createdAt: true,
+                    estimatedPickupEta: true,
+                    actualPickupTime: true,
+                  },
+                },
+              },
+            });
+            if (completedAssignments.length === 0) {
+              currentProgress = Math.min(100, Math.round(worker.acceptanceRate ?? 0));
+            } else {
+              const onTimeCount = completedAssignments.filter((a: any) => {
+                if (!a.booking || !a.arrivedAt) return true;
+                const etaMins = a.booking.estimatedPickupEta ?? 45;
+                const deadline = new Date(a.booking.createdAt.getTime() + (etaMins + 15) * 60 * 1000);
+                return a.arrivedAt.getTime() <= deadline.getTime();
+              }).length;
+              currentProgress = Math.round((onTimeCount / completedAssignments.length) * 100);
+            }
+          }
           break;
+        }
         case BadgeMetric.TOTAL_EARNINGS:
-          currentProgress = (worker as any).walletBalance ?? 0;
+          currentProgress = worker.workerWallet?.cachedBalance ?? 0;
           break;
       }
 

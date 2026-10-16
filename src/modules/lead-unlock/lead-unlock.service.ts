@@ -122,23 +122,44 @@ export async function verifyLeadUnlock(userId: string, input: VerifyLeadUnlockIn
     throw AppError.badRequest('Invalid payment signature');
   }
 
-  const categoryTerm = (tx.serviceCategory || '').toLowerCase();
+  const categoryTerm = (tx.serviceCategory || '').toLowerCase().trim();
 
-  const workers = await prisma.worker.findMany({
+  let workers = await prisma.worker.findMany({
     where: {
       isActive: true,
+      ...(categoryTerm ? {
+        OR: [
+          { preferredWork: { contains: categoryTerm, mode: 'insensitive' as const } },
+          { preferredWork: { contains: 'all', mode: 'insensitive' as const } },
+        ],
+      } : {}),
     },
     include: { user: true },
     take: 30,
   });
 
+  if (workers.length === 0 && categoryTerm) {
+    workers = await prisma.worker.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { preferredWork: null },
+          { preferredWork: { contains: 'all', mode: 'insensitive' as const } },
+        ],
+      },
+      include: { user: true },
+      take: 30,
+    });
+  }
+
   const scoredWorkers = workers.map((w: any) => {
-    const lat = w.currentLat ?? tx.latitude;
-    const lng = w.currentLng ?? tx.longitude;
-    const distanceKm = Math.round(haversineKm(tx.latitude, tx.longitude, lat, lng) * 10) / 10;
+    const hasCoords = typeof w.currentLat === 'number' && typeof w.currentLng === 'number';
+    const distanceKm = hasCoords
+      ? Math.round(haversineKm(tx.latitude, tx.longitude, w.currentLat, w.currentLng) * 10) / 10
+      : null;
     return {
       worker: w,
-      distanceKm: distanceKm > 0 ? distanceKm : Math.round((1.2 + Math.random() * 4.5) * 10) / 10,
+      distanceKm: distanceKm ?? 0,
     };
   });
 
@@ -207,82 +228,92 @@ export async function getUnlockedWorkers(userId: string, transactionId: string) 
   };
 }
 
+function buildWorkerBadges(w: any): string[] {
+  const badges: string[] = [];
+  if (w.isDocVerified || w.aadhaarVerifStatus === 'VERIFIED') {
+    badges.push('Aadhaar Verified');
+  }
+  if (w.bankVerified) {
+    badges.push('Bank Verified');
+  }
+  if (w.rating >= 4.5 && w.totalJobs >= 10) {
+    badges.push('Top Rated');
+  }
+  return badges;
+}
+
 export async function previewNearbyExperts(input: PreviewNearbyExpertsInput) {
-  const workers = await prisma.worker.findMany({
+  const categoryTerm = (input.serviceCategory || '').toLowerCase().trim();
+
+  let workers = await prisma.worker.findMany({
     where: {
       isActive: true,
+      ...(categoryTerm ? {
+        OR: [
+          { preferredWork: { contains: categoryTerm, mode: 'insensitive' as const } },
+          { preferredWork: { contains: 'all', mode: 'insensitive' as const } },
+        ],
+      } : {}),
     },
     include: { user: true },
     take: 10,
   });
 
-  const previews = workers.map((w: any, index: number) => {
-    const lat = w.currentLat ?? input.latitude;
-    const lng = w.currentLng ?? input.longitude;
-    let dist = Math.round(haversineKm(input.latitude, input.longitude, lat, lng) * 10) / 10;
-    if (dist <= 0) dist = Math.round((1.0 + (index + 1) * 0.8) * 10) / 10;
+  if (workers.length === 0 && categoryTerm) {
+    workers = await prisma.worker.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { preferredWork: null },
+          { preferredWork: { contains: 'all', mode: 'insensitive' as const } },
+        ],
+      },
+      include: { user: true },
+      take: 10,
+    });
+  }
+
+  const previews = workers.map((w: any) => {
+    const hasCoords = typeof w.currentLat === 'number' && typeof w.currentLng === 'number';
+    const dist = hasCoords
+      ? Math.round(haversineKm(input.latitude, input.longitude, w.currentLat, w.currentLng) * 10) / 10
+      : 0;
 
     const rawName = w.user?.name || 'Verified Professional';
     const nameParts = rawName.split(' ');
     const maskedName = nameParts.length > 1 ? (nameParts[0] + ' ' + nameParts[1][0] + '.') : rawName;
 
-    const rawPhone = w.user?.phone || '9876543210';
+    const rawPhone = w.user?.phone || '';
     const cleanDigits = rawPhone.replace(/\D/g, '').slice(-10);
     const maskedPhone = cleanDigits.length === 10
       ? `+91 ${cleanDigits.slice(0, 2)}••••••${cleanDigits.slice(-2)}`
-      : '+91 98••••••89';
+      : '+91 ••••••••••';
 
     return {
       id: w.id,
       workerId: w.id,
       name: maskedName,
       category: input.serviceCategory?.toUpperCase() || 'EXPERT',
-      rating: w.rating > 0 ? w.rating : 4.8,
-      totalJobs: w.totalJobs > 0 ? w.totalJobs : 24 + index * 7,
-      experienceYears: Math.max(3, Math.min(12, (w.totalJobs % 8) + 3)),
+      rating: Number((w.rating ?? 0).toFixed(1)),
+      totalJobs: w.totalJobs ?? 0,
+      experienceYears: Math.max(1, Math.min(10, Math.floor((w.totalJobs ?? 0) / 10) + 1)),
       distanceKm: dist,
-      isVerified: true,
-      isDocVerified: w.isDocVerified ?? true,
+      isVerified: Boolean(w.isDocVerified),
+      isDocVerified: Boolean(w.isDocVerified),
       phone: maskedPhone,
       phoneMasked: maskedPhone,
       rawPhone: '',
       whatsappUrl: '',
-      badges: ['Aadhaar Verified', 'Background Checked', 'Top Rated'],
+      badges: buildWorkerBadges(w),
       availableTime: w.availableTime || 'Available Now',
       isLocked: true,
       estQuoteRange: '₹350 - ₹650',
     };
   });
 
-  if (previews.length === 0) {
-    const mockNames = ['Ravi Shankar P.', 'Suresh Kumar M.', 'Kiran Sharma B.', 'FastFix Services', 'MetroCare Pro'];
-    for (let i = 0; i < mockNames.length; i++) {
-      previews.push({
-        id: 'mock-' + (i + 1),
-        workerId: 'mock-' + (i + 1),
-        name: mockNames[i],
-        category: input.serviceCategory?.toUpperCase() || 'EXPERT',
-        rating: 4.6 + (i % 4) * 0.1,
-        totalJobs: 30 + i * 12,
-        experienceYears: 4 + i * 2,
-        distanceKm: Math.round((1.5 + i * 1.1) * 10) / 10,
-        isVerified: true,
-        isDocVerified: true,
-        phone: `+91 ${98 + i}••••••89`,
-        phoneMasked: `+91 ${98 + i}••••••89`,
-        rawPhone: '',
-        whatsappUrl: '',
-        badges: ['Aadhaar Verified', 'Background Checked', 'Top Rated'],
-        availableTime: i === 0 ? 'Available Now' : 'Within 45 mins',
-        isLocked: true,
-        estQuoteRange: '₹300 - ₹600',
-      });
-    }
-  }
-
   return {
     category: input.serviceCategory,
-    totalAvailableNearYou: Math.max(previews.length, 12),
+    totalAvailableNearYou: previews.length,
     unlockPrice: 49,
     savingsEstimate: 'Save ₹300 - ₹950 by direct hiring',
     experts: previews,
@@ -293,28 +324,27 @@ export async function previewNearbyExperts(input: PreviewNearbyExpertsInput) {
 
 function formatUnlockedWorker(worker: any, customerLat: number, customerLng: number, overrideDistance?: number) {
   const user = worker.user || {};
-  const lat = worker.currentLat ?? customerLat;
-  const lng = worker.currentLng ?? customerLng;
-  const dist = overrideDistance ?? (Math.round(haversineKm(customerLat, customerLng, lat, lng) * 10) / 10 || 2.4);
+  const hasCoords = typeof worker.currentLat === 'number' && typeof worker.currentLng === 'number';
+  const dist = overrideDistance ?? (hasCoords ? Math.round(haversineKm(customerLat, customerLng, worker.currentLat, worker.currentLng) * 10) / 10 : 0);
 
-  const rawPhone = user.phone || '9876543210';
+  const rawPhone = user.phone || '';
   const cleanDigits = rawPhone.replace(/\D/g, '').slice(-10);
-  const formattedPhone = cleanDigits.length === 10 ? ('+91 ' + cleanDigits.slice(0, 5) + ' ' + cleanDigits.slice(5)) : ('+91 ' + cleanDigits);
-  const whatsappUrl = 'https://wa.me/91' + cleanDigits + '?text=' + encodeURIComponent('Hello! I found your profile on Metro Mitra for service assistance. Are you available for a job?');
+  const formattedPhone = cleanDigits.length === 10 ? ('+91 ' + cleanDigits.slice(0, 5) + ' ' + cleanDigits.slice(5)) : (rawPhone ? ('+91 ' + cleanDigits) : 'Not Available');
+  const whatsappUrl = cleanDigits.length === 10 ? ('https://wa.me/91' + cleanDigits + '?text=' + encodeURIComponent('Hello! I found your profile on Metro Mitra for service assistance. Are you available for a job?')) : '';
 
   return {
     workerId: worker.id,
     name: user.name || 'Verified Professional',
     phone: formattedPhone,
-    rawPhone: '+91' + cleanDigits,
+    rawPhone: cleanDigits ? '+91' + cleanDigits : '',
     whatsappUrl,
     avatarUrl: user.profileImageUrl || null,
-    rating: worker.rating > 0 ? worker.rating : 4.8,
-    totalJobs: worker.totalJobs > 0 ? worker.totalJobs : 28,
-    experienceYears: Math.max(3, Math.min(12, (worker.totalJobs % 8) + 3)),
+    rating: Number((worker.rating ?? 0).toFixed(1)),
+    totalJobs: worker.totalJobs ?? 0,
+    experienceYears: Math.max(1, Math.min(10, Math.floor((worker.totalJobs ?? 0) / 10) + 1)),
     distanceKm: dist,
-    isDocVerified: worker.isDocVerified ?? true,
-    badges: ['Aadhaar Verified', 'Background Checked', 'Top Rated'],
+    isDocVerified: Boolean(worker.isDocVerified),
+    badges: buildWorkerBadges(worker),
     availableTime: worker.availableTime || 'Immediate (Within 30 mins)',
   };
 }

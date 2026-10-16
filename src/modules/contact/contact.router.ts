@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { validate } from '@shared/middleware/validate';
 import * as ContactController from './contact.controller';
-import { createContactMessageSchema, updateContactMessageStatusSchema } from './contact.schema';
+import { createContactMessageSchema, updateContactMessageStatusSchema, contactIdParamSchema } from './contact.schema';
 import { authenticate, requireRole } from '@shared/middleware/auth.middleware';
 
 export const publicContactRouter = Router();
@@ -23,6 +23,7 @@ adminContactRouter.get(
 
 adminContactRouter.patch(
   '/:id/status',
-  validate(updateContactMessageStatusSchema),
+  validate(contactIdParamSchema, 'params'),
+  validate(updateContactMessageStatusSchema, 'body'),
   ContactController.updateStatus
 );

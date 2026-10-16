@@ -301,11 +301,38 @@ export const pricingService = {
     if (!isInIndia(pickupLat, pickupLng)) {
       throw AppError.badRequest('Pickup location must be within India', 'OUT_OF_SERVICE_AREA');
     }
-    if (!isInIndia(dropLat, dropLng)) {
-      throw AppError.badRequest('Delivery location must be within India', 'OUT_OF_SERVICE_AREA');
+
+    const normalizedStops: Array<{ lat: number; lng: number }> = [];
+    if (req.stops && req.stops.length > 0) {
+      for (let i = 0; i < req.stops.length; i++) {
+        const s = req.stops[i];
+        const sLat = s.latitude ?? s.lat;
+        const sLng = s.longitude ?? s.lng;
+        if (sLat === undefined || sLng === undefined) continue;
+        if (!isInIndia(sLat, sLng)) {
+          throw AppError.badRequest(`Delivery stop ${i + 1} must be within India`, 'OUT_OF_SERVICE_AREA');
+        }
+        normalizedStops.push({ lat: sLat, lng: sLng });
+      }
     }
-    if (isSameLocation(pickupLat, pickupLng, dropLat, dropLng)) {
-      throw AppError.badRequest('Pickup and delivery location cannot be the same', 'SAME_LOCATION');
+
+    if (normalizedStops.length === 0) {
+      if (!isInIndia(dropLat, dropLng)) {
+        throw AppError.badRequest('Delivery location must be within India', 'OUT_OF_SERVICE_AREA');
+      }
+      if (isSameLocation(pickupLat, pickupLng, dropLat, dropLng)) {
+        throw AppError.badRequest('Pickup and delivery location cannot be the same', 'SAME_LOCATION');
+      }
+      normalizedStops.push({ lat: dropLat, lng: dropLng });
+    } else {
+      if (isSameLocation(pickupLat, pickupLng, normalizedStops[0].lat, normalizedStops[0].lng)) {
+        throw AppError.badRequest('Pickup and delivery location cannot be the same', 'SAME_LOCATION');
+      }
+      for (let i = 0; i < normalizedStops.length - 1; i++) {
+        if (isSameLocation(normalizedStops[i].lat, normalizedStops[i].lng, normalizedStops[i + 1].lat, normalizedStops[i + 1].lng)) {
+          throw AppError.badRequest(`Stop ${i + 1} and Stop ${i + 2} cannot be the same location`, 'SAME_LOCATION');
+        }
+      }
     }
 
     // ── [2] Vehicle lookup ────────────────────────────────────────────────
@@ -320,9 +347,8 @@ export const pricingService = {
     // Removed maxHelpers check: Customer can now request any number of helpers.
 
     // ── [4] Distance & duration ───────────────────────────────────────────
-    const { distanceKm, durationMinutes } = await mapsService.getDistanceMatrix(
-      pickupLat, pickupLng, dropLat, dropLng
-    );
+    const routePoints = [{ lat: pickupLat, lng: pickupLng }, ...normalizedStops];
+    const { distanceKm, durationMinutes } = await mapsService.getRouteDistanceMatrix(routePoints);
 
     // Get pricing config
     const config = await getPricingConfig();
@@ -573,23 +599,41 @@ export const pricingService = {
     pickupLng: number,
     dropLat: number,
     dropLng: number,
+    stops?: Array<{ latitude?: number; longitude?: number; lat?: number; lng?: number }>,
   ): Promise<{ vehicleType: string; grandTotal: number; totalFare: number; distanceKm: number; durationMinutes: number; surgeActive: boolean }[]> => {
 
     // ── [1] Validate coordinates ──────────────────────────────────────────
     if (!isInIndia(pickupLat, pickupLng)) {
       throw AppError.badRequest('Pickup location must be within India', 'OUT_OF_SERVICE_AREA');
     }
-    if (!isInIndia(dropLat, dropLng)) {
-      throw AppError.badRequest('Delivery location must be within India', 'OUT_OF_SERVICE_AREA');
+
+    const normalizedStops: Array<{ lat: number; lng: number }> = [];
+    if (stops && stops.length > 0) {
+      for (let i = 0; i < stops.length; i++) {
+        const s = stops[i];
+        const sLat = s.latitude ?? s.lat;
+        const sLng = s.longitude ?? s.lng;
+        if (sLat === undefined || sLng === undefined) continue;
+        if (!isInIndia(sLat, sLng)) {
+          throw AppError.badRequest(`Delivery stop ${i + 1} must be within India`, 'OUT_OF_SERVICE_AREA');
+        }
+        normalizedStops.push({ lat: sLat, lng: sLng });
+      }
     }
-    if (isSameLocation(pickupLat, pickupLng, dropLat, dropLng)) {
-      throw AppError.badRequest('Pickup and delivery location cannot be the same', 'SAME_LOCATION');
+
+    if (normalizedStops.length === 0) {
+      if (!isInIndia(dropLat, dropLng)) {
+        throw AppError.badRequest('Delivery location must be within India', 'OUT_OF_SERVICE_AREA');
+      }
+      if (isSameLocation(pickupLat, pickupLng, dropLat, dropLng)) {
+        throw AppError.badRequest('Pickup and delivery location cannot be the same', 'SAME_LOCATION');
+      }
+      normalizedStops.push({ lat: dropLat, lng: dropLng });
     }
 
     // ── [2] Fetch route ONCE from Mapbox ─────────────────────────────────
-    const { distanceKm, durationMinutes } = await mapsService.getDistanceMatrix(
-      pickupLat, pickupLng, dropLat, dropLng
-    );
+    const routePoints = [{ lat: pickupLat, lng: pickupLng }, ...normalizedStops];
+    const { distanceKm, durationMinutes } = await mapsService.getRouteDistanceMatrix(routePoints);
 
     // ── [3] Load config + vehicles from cache (no extra DB/API calls) ─────
     const [vehicles, config] = await Promise.all([

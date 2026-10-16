@@ -8,11 +8,10 @@ export const createContactMessageSchema = z.object({
   subject: z.string().max(200).optional(),
 });
 
+export const contactIdParamSchema = z.object({
+  id: z.string().uuid("Invalid message ID"),
+});
+
 export const updateContactMessageStatusSchema = z.object({
-  params: z.object({
-    id: z.string().uuid("Invalid message ID"),
-  }),
-  body: z.object({
-    status: z.enum(['UNREAD', 'READ', 'RESOLVED']),
-  }),
+  status: z.enum(['UNREAD', 'READ', 'RESOLVED']),
 });

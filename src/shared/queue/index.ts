@@ -12,10 +12,11 @@ export const QUEUES = {
   ETA_RECALC: 'eta-recalc',        // Live ETA recalculation for active trips
   ULIP_VERIFICATION: 'ulip-verification', // Background ULIP gov-API verification jobs
   ANNOUNCEMENT: 'announcement',
+  RECONCILIATION: 'reconciliation',
 } as const;
 
 export function createQueue(name: string): Queue {
-  return new Queue(name, {
+  const queue = new Queue(name, {
     connection,
     defaultJobOptions: {
       removeOnComplete: { count: 100 },
@@ -24,6 +25,12 @@ export function createQueue(name: string): Queue {
       backoff: { type: 'exponential', delay: 1000 },
     },
   });
+
+  queue.on('error', (err: any) => {
+    logger.debug(`[Queue:${name}] Connection issue (non-fatal): ${err.message}`);
+  });
+
+  return queue;
 }
 
 export function createWorker(
@@ -50,3 +57,4 @@ export const dispatchQueue         = createQueue(QUEUES.DISPATCH);
 export const etaRecalcQueue        = createQueue(QUEUES.ETA_RECALC);
 export const ulipVerificationQueue = createQueue(QUEUES.ULIP_VERIFICATION);
 export const announcementQueue     = createQueue(QUEUES.ANNOUNCEMENT);
+export const reconciliationQueue    = createQueue(QUEUES.RECONCILIATION);

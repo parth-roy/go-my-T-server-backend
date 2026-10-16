@@ -46,7 +46,7 @@ export const pricingController = {
   // POST /api/v1/pricing/estimate-all
   estimateAll: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { pickupLat, pickupLng, dropLat, dropLng } = req.body;
+      const { pickupLat, pickupLng, dropLat, dropLng, stops } = req.body;
 
       if (!pickupLat || !pickupLng || !dropLat || !dropLng) {
         throw AppError.badRequest(
@@ -59,6 +59,7 @@ export const pricingController = {
         Number(pickupLng),
         Number(dropLat),
         Number(dropLng),
+        stops,
       );
 
       sendSuccess(res, estimates, 'Bulk fare estimates calculated');

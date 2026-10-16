@@ -358,7 +358,7 @@ export async function verifyCommissionPayment(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getDriverWallet(driverId: string) {
-  const wallet = await prisma.driverWallet.findUnique({
+  let wallet = await prisma.driverWallet.findUnique({
     where: { driverId },
     include: {
       transactions: {
@@ -368,8 +368,133 @@ export async function getDriverWallet(driverId: string) {
     },
   });
 
-  if (!wallet) return ensureDriverWallet(driverId);
-  return wallet;
+  if (!wallet) {
+    wallet = (await ensureDriverWallet(driverId)) as any;
+  }
+
+  // BUG-003: Aggregate total lifetime net earnings from driverEarning
+  const earningsAgg = await prisma.driverEarning.aggregate({
+    where: { driverId },
+    _sum: { netAmount: true },
+  });
+  const totalEarnings = earningsAgg._sum?.netAmount ?? 0;
+
+  // Return DTO with canonical and client alias fields for contract consistency
+  const driver = await prisma.driver.findUnique({
+    where: { id: driverId },
+    select: {
+      bankAccountNo: true,
+      bankIfsc: true,
+      bankName: true,
+      bankAccountHolderName: true,
+      bankVerified: true,
+    },
+  });
+
+  const bankAccount = driver?.bankAccountNo
+    ? {
+        bankName: driver.bankName ?? 'Bank Account',
+        accountNumber:
+          driver.bankAccountNo.length > 4
+            ? `•••• ${driver.bankAccountNo.slice(-4)}`
+            : driver.bankAccountNo,
+        fullAccountNumber: driver.bankAccountNo,
+        ifsc: driver.bankIfsc,
+        accountHolderName: driver.bankAccountHolderName,
+        isVerified: driver.bankVerified,
+      }
+    : null;
+
+  return {
+    ...wallet,
+    balance: wallet!.cachedBalance,
+    cachedBalance: wallet!.cachedBalance,
+    outstandingCommission: wallet!.commissionDue,
+    commissionDue: wallet!.commissionDue,
+    totalEarnings,
+    bankAccount,
+  };
+}
+
+export async function updateDriverBankDetails(
+  driverId: string,
+  details: {
+    accountNumber: string;
+    ifsc: string;
+    bankName: string;
+    accountHolderName: string;
+  }
+) {
+  const current = await prisma.driver.findUnique({
+    where: { id: driverId },
+    select: { bankAccountNo: true, bankIfsc: true },
+  });
+
+  const accountChanged =
+    current?.bankAccountNo !== details.accountNumber ||
+    current?.bankIfsc !== details.ifsc;
+
+  const updatedDriver = await prisma.driver.update({
+    where: { id: driverId },
+    data: {
+      bankAccountNo: details.accountNumber,
+      bankIfsc: details.ifsc,
+      bankName: details.bankName,
+      bankAccountHolderName: details.accountHolderName,
+      ...(accountChanged && {
+        razorpayxFundAccountId: null,
+        bankVerified: false,
+      }),
+    },
+    select: {
+      id: true,
+      bankAccountNo: true,
+      bankIfsc: true,
+      bankName: true,
+      bankAccountHolderName: true,
+      bankVerified: true,
+    },
+  });
+
+  return {
+    bankName: updatedDriver.bankName ?? 'Bank Account',
+    accountNumber: updatedDriver.bankAccountNo
+      ? updatedDriver.bankAccountNo.length > 4
+        ? `•••• ${updatedDriver.bankAccountNo.slice(-4)}`
+        : updatedDriver.bankAccountNo
+      : null,
+    fullAccountNumber: updatedDriver.bankAccountNo,
+    ifsc: updatedDriver.bankIfsc,
+    accountHolderName: updatedDriver.bankAccountHolderName,
+    isVerified: updatedDriver.bankVerified,
+  };
+}
+
+export async function getDriverBankDetails(driverId: string) {
+  const driver = await prisma.driver.findUnique({
+    where: { id: driverId },
+    select: {
+      bankAccountNo: true,
+      bankIfsc: true,
+      bankName: true,
+      bankAccountHolderName: true,
+      bankVerified: true,
+    },
+  });
+
+  if (!driver || !driver.bankAccountNo) return null;
+
+  return {
+    bankName: driver.bankName ?? 'Bank Account',
+    accountNumber:
+      driver.bankAccountNo.length > 4
+        ? `•••• ${driver.bankAccountNo.slice(-4)}`
+        : driver.bankAccountNo,
+    fullAccountNumber: driver.bankAccountNo,
+    ifsc: driver.bankIfsc,
+    accountHolderName: driver.bankAccountHolderName,
+    isVerified: driver.bankVerified,
+  };
 }
 
 export async function getDriverTransactionHistory(
@@ -378,7 +503,7 @@ export async function getDriverTransactionHistory(
   limit: number = 20
 ) {
   const wallet = await prisma.driverWallet.findUnique({ where: { driverId } });
-  if (!wallet) return { transactions: [], total: 0, balance: 0, commissionDue: 0 };
+  if (!wallet) return { transactions: [], total: 0, balance: 0, cachedBalance: 0, commissionDue: 0, outstandingCommission: 0 };
 
   const [transactions, total] = await Promise.all([
     prisma.driverWalletTransaction.findMany({
@@ -390,18 +515,38 @@ export async function getDriverTransactionHistory(
     prisma.driverWalletTransaction.count({ where: { walletId: wallet.id } }),
   ]);
 
-  return { transactions, total, balance: wallet.cachedBalance, commissionDue: wallet.commissionDue };
+  return {
+    transactions,
+    total,
+    balance: wallet.cachedBalance,
+    cachedBalance: wallet.cachedBalance,
+    commissionDue: wallet.commissionDue,
+    outstandingCommission: wallet.commissionDue,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WITHDRAWAL REQUEST
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function requestWithdrawal(driverId: string, amount: number) {
+export async function requestWithdrawal(driverId: string, amount: number, idempotencyKey?: string) {
+  if (!Number.isFinite(amount) || amount < MIN_WITHDRAWAL) {
+    throw AppError.badRequest(`Minimum withdrawal is ₹${MIN_WITHDRAWAL}`, 'BELOW_MIN_WITHDRAWAL');
+  }
+
   assertRazorpayXPayoutsEnabled();
 
-  if (amount < MIN_WITHDRAWAL) {
-    throw AppError.badRequest(`Minimum withdrawal is ₹${MIN_WITHDRAWAL}`, 'BELOW_MIN_WITHDRAWAL');
+  // FIN-004: Fast-path return for duplicate client retries with an idempotency key
+  if (idempotencyKey) {
+    const existingReq = await prisma.withdrawalRequest.findUnique({
+      where: { idempotencyKey },
+    });
+    if (existingReq) {
+      if (existingReq.amount !== amount) {
+        throw AppError.conflict('Idempotency key reused with different amount', 'IDEMPOTENCY_CONFLICT');
+      }
+      return existingReq;
+    }
   }
 
   const [wallet, driver] = await Promise.all([
@@ -423,48 +568,83 @@ export async function requestWithdrawal(driverId: string, amount: number) {
     throw AppError.badRequest('Bank account details not configured. Please add your bank account first.', 'NO_BANK_ACCOUNT');
   }
 
-  // Check for pending withdrawal
-  const pending = await prisma.withdrawalRequest.findFirst({
-    where: {
-      entityType: WithdrawalEntityType.DRIVER,
-      entityId: driverId,
-      status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.AUTO_PROCESSING] },
-    },
-  });
-  if (pending) {
-    throw AppError.badRequest('You already have a withdrawal in progress. Please wait for it to complete.', 'WITHDRAWAL_IN_PROGRESS');
+  try {
+    // Atomic: check pending inside transaction, conditionally deduct balance, create request and ledger record
+    const withdrawalRequest = await prisma.$transaction(async (tx) => {
+      // 1. In-transaction pending check prevents concurrent race condition
+      const pending = await tx.withdrawalRequest.findFirst({
+        where: {
+          entityType: WithdrawalEntityType.DRIVER,
+          entityId: driverId,
+          status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.AUTO_PROCESSING] },
+        },
+      });
+      if (pending) {
+        throw AppError.badRequest('You already have a withdrawal in progress. Please wait for it to complete.', 'WITHDRAWAL_IN_PROGRESS');
+      }
+
+      // 2. Conditional balance decrement prevents overdraft
+      const deductResult = await tx.driverWallet.updateMany({
+        where: { driverId, cachedBalance: { gte: amount } },
+        data: { cachedBalance: { decrement: amount } },
+      });
+      if (deductResult.count === 0) {
+        throw AppError.badRequest('Insufficient balance', 'INSUFFICIENT_BALANCE');
+      }
+
+      const freshWallet = await tx.driverWallet.findUniqueOrThrow({ where: { driverId } });
+
+      // 3. Create withdrawal request with optional database-unique idempotencyKey
+      const createdRequest = await tx.withdrawalRequest.create({
+        data: {
+          entityType: WithdrawalEntityType.DRIVER,
+          entityId: driverId,
+          amount,
+          idempotencyKey: idempotencyKey ?? undefined,
+          bankAccountNo:         driver.bankAccountNo!,
+          bankIfsc:              driver.bankIfsc!,
+          bankName:              driver.bankName ?? 'Unknown',
+          bankAccountHolderName: driver.bankAccountHolderName ?? driver.user.name ?? 'Driver',
+          razorpayxContactId:    driver.razorpayxContactId,
+          razorpayxFundAccountId: driver.razorpayxFundAccountId,
+        },
+      });
+
+      // 4. Create ledger reservation with unique referenceId
+      await tx.driverWalletTransaction.create({
+        data: {
+          walletId: freshWallet.id,
+          type: WalletTransactionType.DEBIT,
+          reason: DriverWalletReason.WITHDRAWAL,
+          amount,
+          balanceAfter: freshWallet.cachedBalance,
+          referenceId: `WITHDRAWAL_RESERVE_${createdRequest.id}`,
+          note: `Withdrawal request — ₹${amount}`,
+        },
+      });
+
+      return createdRequest;
+    });
+
+    logger.info(`[Withdrawal] Request created: ₹${amount} for driver ${driverId} — ID: ${withdrawalRequest.id}`);
+
+    // Trigger async RazorpayX payout (don't await — fire and forget)
+    processWithdrawalViaRazorpayX(withdrawalRequest.id).catch((err) => {
+      logger.error(`[Withdrawal] Auto-payout failed for ${withdrawalRequest.id}:`, err);
+    });
+
+    return withdrawalRequest;
+  } catch (err: any) {
+    if (err.code === 'P2002' && idempotencyKey) {
+      const existing = await prisma.withdrawalRequest.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) {
+        return existing;
+      }
+    }
+    throw err;
   }
-
-  // Atomic: reserve funds + create request
-  const withdrawalRequest = await prisma.$transaction(async (tx) => {
-    // Reserve funds immediately (deduct from wallet)
-    await debitDriverWallet(tx, driverId, amount, DriverWalletReason.WITHDRAWAL, {
-      note: `Withdrawal request — ₹${amount}`,
-    });
-
-    return tx.withdrawalRequest.create({
-      data: {
-        entityType: WithdrawalEntityType.DRIVER,
-        entityId: driverId,
-        amount,
-        bankAccountNo:         driver.bankAccountNo!,
-        bankIfsc:              driver.bankIfsc!,
-        bankName:              driver.bankName ?? 'Unknown',
-        bankAccountHolderName: driver.bankAccountHolderName ?? driver.user.name ?? 'Driver',
-        razorpayxContactId:    driver.razorpayxContactId,
-        razorpayxFundAccountId: driver.razorpayxFundAccountId,
-      },
-    });
-  });
-
-  logger.info(`[Withdrawal] Request created: ₹${amount} for driver ${driverId} — ID: ${withdrawalRequest.id}`);
-
-  // Trigger async RazorpayX payout (don't await — fire and forget)
-  processWithdrawalViaRazorpayX(withdrawalRequest.id).catch((err) => {
-    logger.error(`[Withdrawal] Auto-payout failed for ${withdrawalRequest.id}:`, err);
-  });
-
-  return withdrawalRequest;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -611,15 +791,34 @@ export async function refundFailedWithdrawal(
     where: { id: withdrawalRequestId },
   });
   if (!withdrawal) return;
-  if (withdrawal.status === WithdrawalStatus.COMPLETED) return; // Never refund completed
+  if (
+    withdrawal.status === WithdrawalStatus.COMPLETED ||
+    withdrawal.status === WithdrawalStatus.FAILED ||
+    (escalateToAdmin && withdrawal.status === WithdrawalStatus.ADMIN_PENDING)
+  ) {
+    logger.warn(`[Withdrawal] Withdrawal ${withdrawalRequestId} already finalized with status ${withdrawal.status}. Skipping duplicate refund.`);
+    return;
+  }
+
+  const refundRefId = `WITHDRAWAL_REFUND_${withdrawalRequestId}`;
 
   await prisma.$transaction(async (tx) => {
+    const current = await tx.withdrawalRequest.findUnique({ where: { id: withdrawalRequestId } });
+    if (
+      !current ||
+      current.status === WithdrawalStatus.COMPLETED ||
+      current.status === WithdrawalStatus.FAILED ||
+      (escalateToAdmin && current.status === WithdrawalStatus.ADMIN_PENDING)
+    ) {
+      return;
+    }
+
     // ── Route refund to the CORRECT wallet based on entity type ──────────────
     switch (withdrawal.entityType) {
 
       case WithdrawalEntityType.DRIVER: {
         await creditDriverWallet(tx, withdrawal.entityId, withdrawal.amount, DriverWalletReason.ADMIN_CREDIT, {
-          referenceId: withdrawalRequestId,
+          referenceId: refundRefId,
           note: `Withdrawal refund — ${reason}`,
         });
         break;
@@ -639,7 +838,7 @@ export async function refundFailedWithdrawal(
               type:        WalletTransactionType.CREDIT,
               amount:      withdrawal.amount,
               balanceAfter: fresh!.cachedBalance,
-              referenceId: withdrawalRequestId,
+              referenceId: refundRefId,
               note:        `Withdrawal refund — ${reason}`,
             },
           });
@@ -663,7 +862,7 @@ export async function refundFailedWithdrawal(
               reason:      'ADMIN_CREDIT' as any,
               amount:      withdrawal.amount,
               balanceAfter: fresh!.cachedBalance,
-              referenceId: withdrawalRequestId,
+              referenceId: refundRefId,
               note:        `Withdrawal refund — ${reason}`,
             },
           });

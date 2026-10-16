@@ -190,6 +190,8 @@ export function setupTrackingGateway(io: SocketServer) {
 
             // 1. Broadcast instantly to all subscribers (live map marker + speed for UI)
             tracking.to(`booking_${bookingId}`).emit('location_updated', {
+                bookingId,
+                driverId: driver.id,
                 lat, lng,
                 speedKmh: data.speedKmh,
                 headingDeg: data.headingDeg,

@@ -30,6 +30,9 @@ export async function secureCapturedBookingPayment(input: CapturedPaymentInput) 
     if (booking.paymentStatus === PaymentStatus.REFUNDED) {
       throw AppError.conflict('This booking payment was already refunded', 'PAYMENT_REFUNDED');
     }
+    if (booking.status === 'CANCELLED') {
+      throw AppError.badRequest('Cannot accept payment for a cancelled booking', 'BOOKING_CANCELLED');
+    }
 
     let expectedAmountPaise = Math.round((booking.grandTotal ?? booking.totalFare ?? 0) * 100);
     if (booking.bookingMode === BookingMode.PRIVATE_BID) {
@@ -75,4 +78,19 @@ export async function secureCapturedBookingPayment(input: CapturedPaymentInput) 
     }
     return tx.booking.findUniqueOrThrow({ where: { id: booking.id } });
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function markBookingPaymentFailed(orderId: string, reason?: string) {
+  const booking = await prisma.booking.findFirst({
+    where: { razorpayOrderId: orderId, paymentStatus: PaymentStatus.PENDING },
+  });
+  if (!booking) return null;
+  if (booking.paymentStatus === PaymentStatus.PAID) {
+    return booking;
+  }
+  const updated = await prisma.booking.update({
+    where: { id: booking.id },
+    data: { paymentStatus: PaymentStatus.FAILED },
+  });
+  return updated;
 }

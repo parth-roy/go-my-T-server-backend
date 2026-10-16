@@ -8,6 +8,7 @@ export async function startAllWorkers() {
   const { startEtaWorker, scheduleEtaRecalculationJob } = await import('@shared/jobs/eta.worker');
   // [PAUSED - ULIP DEPRECATION] const { startUlipWorker }         = await import('@shared/queue/workers/ulip.worker');
   const { startAnnouncementWorker } = await import('@shared/queue/workers/announcement.worker');
+  const { startReconciliationWorker, scheduleReconciliationJob } = await import('@modules/reconciliation/reconciliation.worker');
 
   startOtpWorker();
   startNotificationWorker();
@@ -16,9 +17,13 @@ export async function startAllWorkers() {
   startEtaWorker();
   // [PAUSED - ULIP DEPRECATION] startUlipWorker(); // Processes ULIP gov-API verifications in the background
   startAnnouncementWorker();
+  startReconciliationWorker();
 
   // Schedule repeatable ETA batch (every 60 seconds)
   await scheduleEtaRecalculationJob();
+
+  // Schedule periodic financial reconciliation (every 15 minutes)
+  await scheduleReconciliationJob();
 
   logger.info('All workers initialised');
 }

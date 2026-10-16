@@ -37,21 +37,26 @@ export async function requestWithdrawal(req: Request, res: Response, next: NextF
   try {
     const fo     = await getFleetOwnerFromUser(req.user!.id);
     const amount = Number(req.body.amount);
-    const result = await FleetWalletService.requestFleetWithdrawal(fo.id, amount);
+    const headerKey = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
+    const key = (typeof req.body.idempotencyKey === 'string' && req.body.idempotencyKey) || (typeof headerKey === 'string' && headerKey) || undefined;
+    const result = await FleetWalletService.requestFleetWithdrawal(fo.id, amount, key);
     sendCreated(res, result, 'Withdrawal request created. Auto-payout in progress.');
   } catch (err) { next(err); }
 }
 
-// POST /fleet/wallet/transfer  — Body: { driverId, amount, note? }
+// POST /fleet/wallet/transfer  — Body: { driverId, amount, note?, idempotencyKey? }
 export async function transferToDriver(req: Request, res: Response, next: NextFunction) {
   try {
     const fo                         = await getFleetOwnerFromUser(req.user!.id);
-    const { driverId, amount, note } = req.body;
+    const { driverId, amount, note, idempotencyKey } = req.body;
+    const headerKey = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
+    const key = (typeof idempotencyKey === 'string' && idempotencyKey) || (typeof headerKey === 'string' && headerKey) || undefined;
     const result = await FleetWalletService.transferToDriver(
       fo.id,
       driverId as string,
       Number(amount),
-      note as string | undefined
+      note as string | undefined,
+      key
     );
     sendSuccess(res, result, `Transfer to driver successful`);
   } catch (err) { next(err); }

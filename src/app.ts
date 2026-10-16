@@ -43,10 +43,15 @@ import { razorpayWebhook, cashfreeWebhook } from '@modules/payment/payment.contr
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
 import { brokerRouter } from '@modules/broker/broker.router';
 import { telemetryRouter } from '@modules/telemetry/telemetry.router';
+import { idempotencyMiddleware } from '@shared/middleware/idempotency.middleware';
+import { correlationMiddleware } from '@shared/middleware/correlation.middleware';
 
 export function createApp(): Application {
   const app = express();
   app.set('trust proxy', 1);
+
+  // Point 9: Initialize operation ID & request correlation context at entrypoint
+  app.use(correlationMiddleware());
 
   if (env.NODE_ENV === 'production') {
     app.use((req, res, next) => {
@@ -68,7 +73,20 @@ export function createApp(): Application {
     origin: env.NODE_ENV === 'production' ? allowedOrigins : '*',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'Idempotency-Key',
+      'X-Idempotency-Key',
+      'X-Operation-Id',
+      'x-operation-id',
+      'X-Request-Id',
+      'x-request-id',
+      'X-Correlation-Id',
+      'x-correlation-id',
+    ],
+    exposedHeaders: ['X-Operation-Id', 'X-Request-Id'],
   }));
 
   app.post(
@@ -92,6 +110,7 @@ export function createApp(): Application {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   app.use(compression());
+  app.use(idempotencyMiddleware());
 
   if (env.NODE_ENV !== 'test') {
     app.use(morgan('combined', {

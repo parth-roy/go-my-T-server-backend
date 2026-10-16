@@ -2186,58 +2186,95 @@ export async function withdrawWallet(userId: string, input: WithdrawInput) {
     throw AppError.badRequest('Insufficient balance', 'INSUFFICIENT_BALANCE');
   }
 
-  // Check for in-progress withdrawal
-  const existing = await prisma.withdrawalRequest.findFirst({
-    where: {
-      entityType: 'WORKER',
-      entityId: worker.id,
-      status: { in: ['PENDING', 'AUTO_PROCESSING'] },
-    },
-  });
-  if (existing) throw AppError.badRequest('A withdrawal is already in progress.', 'WITHDRAWAL_IN_PROGRESS');
+  // FIN-004: Fast-path return for duplicate client retries with an idempotency key
+  if (input.idempotencyKey) {
+    const existingReq = await prisma.withdrawalRequest.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+    });
+    if (existingReq) {
+      if (existingReq.amount !== input.amount) {
+        throw AppError.conflict('Idempotency key reused with different amount', 'IDEMPOTENCY_CONFLICT');
+      }
+      return { withdrawalRequest: existingReq, balance: workerWallet.cachedBalance };
+    }
+  }
 
-  // Atomic: reserve funds + create request
-  const withdrawalRequest = await prisma.$transaction(async (tx) => {
-    const updatedWallet = await tx.workerWallet.update({
-      where: { workerId: worker.id },
-      data: { cachedBalance: { decrement: input.amount } },
+  try {
+    // Atomic: reserve funds + create request
+    const withdrawalRequest = await prisma.$transaction(async (tx) => {
+      // 1. In-transaction pending check prevents concurrent race condition
+      const existing = await tx.withdrawalRequest.findFirst({
+        where: {
+          entityType: 'WORKER',
+          entityId: worker.id,
+          status: { in: ['PENDING', 'AUTO_PROCESSING'] },
+        },
+      });
+      if (existing) throw AppError.badRequest('A withdrawal is already in progress.', 'WITHDRAWAL_IN_PROGRESS');
+
+      // 2. Conditional balance decrement prevents overdraft
+      const deductResult = await tx.workerWallet.updateMany({
+        where: { workerId: worker.id, cachedBalance: { gte: input.amount } },
+        data: { cachedBalance: { decrement: input.amount } },
+      });
+      if (deductResult.count === 0) {
+        throw AppError.badRequest('Insufficient balance', 'INSUFFICIENT_BALANCE');
+      }
+
+      const freshWallet = await tx.workerWallet.findUniqueOrThrow({ where: { workerId: worker.id } });
+
+      // 3. Create withdrawal request with optional database-unique idempotencyKey
+      const createdRequest = await tx.withdrawalRequest.create({
+        data: {
+          entityType: 'WORKER' as any,
+          entityId: worker.id,
+          amount: input.amount,
+          idempotencyKey: input.idempotencyKey ?? undefined,
+          bankAccountNo:         worker.bankAccountNo!,
+          bankIfsc:              worker.bankIfsc!,
+          bankName:              worker.bankName ?? 'Unknown',
+          bankAccountHolderName: worker.bankAccountHolderName ?? 'Worker',
+          razorpayxContactId:    worker.razorpayxContactId,
+          razorpayxFundAccountId: worker.razorpayxFundAccountId,
+        },
+      });
+
+      // 4. Create ledger reservation with unique referenceId
+      await tx.workerWalletTransaction.create({
+        data: {
+          walletId: freshWallet.id,
+          type: WalletTransactionType.DEBIT,
+          reason: 'WITHDRAWAL' as any,
+          amount: input.amount,
+          balanceAfter: freshWallet.cachedBalance,
+          referenceId: `WITHDRAWAL_RESERVE_${createdRequest.id}`,
+          note: `Withdrawal request — ₹${input.amount}`,
+        },
+      });
+
+      return createdRequest;
     });
 
-    await tx.workerWalletTransaction.create({
-      data: {
-        walletId: workerWallet.id,
-        type: WalletTransactionType.DEBIT,
-        reason: 'WITHDRAWAL' as any,
-        amount: input.amount,
-        balanceAfter: updatedWallet.cachedBalance,
-        note: `Withdrawal request — ₹${input.amount}`,
-      },
+    logger.info(`[Workforce] Withdrawal requested: ₹${input.amount} for worker ${worker.id}`);
+
+    // Fire-and-forget: auto-trigger RazorpayX payout
+    const { processWithdrawalViaRazorpayX } = await import('@modules/driver-wallet/driver-wallet.service');
+    processWithdrawalViaRazorpayX(withdrawalRequest.id).catch((err) => {
+      logger.error(`[Workforce] Auto-payout failed for ${withdrawalRequest.id}:`, err);
     });
 
-    return tx.withdrawalRequest.create({
-      data: {
-        entityType: 'WORKER' as any,
-        entityId: worker.id,
-        amount: input.amount,
-        bankAccountNo:         worker.bankAccountNo!,
-        bankIfsc:              worker.bankIfsc!,
-        bankName:              worker.bankName ?? 'Unknown',
-        bankAccountHolderName: worker.bankAccountHolderName ?? 'Worker',
-        razorpayxContactId:    worker.razorpayxContactId,
-        razorpayxFundAccountId: worker.razorpayxFundAccountId,
-      },
-    });
-  });
-
-  logger.info(`[Workforce] Withdrawal requested: ₹${input.amount} for worker ${worker.id}`);
-
-  // Fire-and-forget: auto-trigger RazorpayX payout
-  const { processWithdrawalViaRazorpayX } = await import('@modules/driver-wallet/driver-wallet.service');
-  processWithdrawalViaRazorpayX(withdrawalRequest.id).catch((err) => {
-    logger.error(`[Workforce] Auto-payout failed for ${withdrawalRequest.id}:`, err);
-  });
-
-  return { withdrawalRequest, balance: workerWallet.cachedBalance - input.amount };
+    return { withdrawalRequest, balance: workerWallet.cachedBalance - input.amount };
+  } catch (err: any) {
+    if (err.code === 'P2002' && input.idempotencyKey) {
+      const existing = await prisma.withdrawalRequest.findUnique({
+        where: { idempotencyKey: input.idempotencyKey },
+      });
+      if (existing) {
+        return { withdrawalRequest: existing, balance: workerWallet.cachedBalance };
+      }
+    }
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────

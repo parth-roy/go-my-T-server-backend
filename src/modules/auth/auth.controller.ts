@@ -32,7 +32,7 @@ export async function refreshTokens(req: Request, res: Response, next: NextFunct
 
 export async function logout(req: Request, res: Response, next: NextFunction) {
   try {
-    const result = await AuthService.logout(req.body.refreshToken);
+    const result = await AuthService.logout(req.body.refreshToken, (req as any).user?.id);
     sendSuccess(res, result, 'Logged out');
   } catch (err) {
     next(err);

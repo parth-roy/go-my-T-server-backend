@@ -725,18 +725,38 @@ export async function updateDriverStatus(
 ): Promise<object> {
   const driver = await _requireDriver(userId);
 
+  const lat = input.currentLat ?? input.lat;
+  const lng = input.currentLng ?? input.lng;
+
+  const dataToUpdate: any = {
+    status: input.status as any,
+  };
+
+  if (lat !== undefined && lng !== undefined) {
+    dataToUpdate.currentLat = lat;
+    dataToUpdate.currentLng = lng;
+    dataToUpdate.lastLocationAt = new Date();
+  }
+
   // Allow driver to toggle online/offline freely without blocking on docs
   const updated = await prisma.driver.update({
     where: { id: driver.id },
-    data: { status: input.status as any },
+    data: dataToUpdate,
   });
 
   logger.info('[Fleet] Driver status updated', {
     driverId: driver.id,
     status: input.status,
+    lat,
+    lng,
   });
 
-  return { status: updated.status };
+  return {
+    status: updated.status,
+    currentLat: updated.currentLat,
+    currentLng: updated.currentLng,
+    lastLocationAt: updated.lastLocationAt,
+  };
 }
 
 // ── Private helpers ───────────────────────────────────────────────────
