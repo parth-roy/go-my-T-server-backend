@@ -1021,6 +1021,16 @@ export async function getFleetOwnerById(id: string) {
     },
   });
   if (!owner) throw AppError.notFound('Fleet owner not found');
+
+  if (owner.trucks && Array.isArray(owner.trucks)) {
+    owner.trucks = await Promise.all(
+      owner.trucks.map(async (truck) => ({
+        ...truck,
+        documents: truck.documents ? await s3Service.resolveDocumentsUrls(truck.documents) : [],
+      }))
+    );
+  }
+
   return owner;
 }
 
@@ -1469,7 +1479,15 @@ export async function getPendingWorkerDocuments() {
       documents: true,
     },
   });
-  return pendingWorkers;
+
+  const workersWithSignedDocs = await Promise.all(
+    pendingWorkers.map(async (worker) => ({
+      ...worker,
+      documents: await s3Service.resolveDocumentsUrls(worker.documents),
+    }))
+  );
+
+  return workersWithSignedDocs;
 }
 
 export async function verifyWorkerDocuments(workerId: string, input: any) {
