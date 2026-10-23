@@ -228,7 +228,7 @@ export class ReconciliationService {
       where: {
         status: BookingStatus.COMPLETED,
         driverId: { not: null },
-        driverEarning: null,
+        earning: null,
         updatedAt: { lte: twoMinutesAgo },
       },
       select: {
