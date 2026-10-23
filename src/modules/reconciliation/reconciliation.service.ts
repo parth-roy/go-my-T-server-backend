@@ -68,7 +68,7 @@ export class ReconciliationService {
       },
       select: {
         id: true,
-        bookingCode: true,
+        bookingNumber: true,
         status: true,
         paymentStatus: true,
         paymentMethod: true,
@@ -114,7 +114,8 @@ export class ReconciliationService {
             discrepancyAmount: paymentTx.amount,
             details: {
               reason: 'Payment captured for cancelled booking. Needs refund investigation.',
-              bookingCode: booking.bookingCode,
+              bookingCode: booking.bookingNumber,
+              bookingNumber: booking.bookingNumber,
               orderId: booking.razorpayOrderId,
               paymentId: paymentTx.razorpayPaymentId,
             },
@@ -138,7 +139,8 @@ export class ReconciliationService {
             discrepancyAmount: Math.abs(paymentTx.amount - (booking.grandTotal ?? 0)),
             details: {
               reason: 'Payment amount mismatch between gateway and booking',
-              bookingCode: booking.bookingCode,
+              bookingCode: booking.bookingNumber,
+              bookingNumber: booking.bookingNumber,
               orderId: booking.razorpayOrderId,
               paymentId: paymentTx.razorpayPaymentId,
             },
@@ -172,7 +174,8 @@ export class ReconciliationService {
             resolvedBy: 'SYSTEM_AUTO_RECONCILE',
             resolutionNote: 'Automatically credited verified gateway payment to booking',
             details: {
-              bookingCode: booking.bookingCode,
+              bookingCode: booking.bookingNumber,
+              bookingNumber: booking.bookingNumber,
               orderId: booking.razorpayOrderId,
               paymentId: paymentTx.razorpayPaymentId,
             },
@@ -180,7 +183,7 @@ export class ReconciliationService {
         });
 
         autoResolved++;
-        logger.info(`[Reconciliation] Auto-resolved paid-but-uncredited booking ${booking.id} (${booking.bookingCode})`);
+        logger.info(`[Reconciliation] Auto-resolved paid-but-uncredited booking ${booking.id} (${booking.bookingNumber})`);
       } catch (err: any) {
         logger.error(`[Reconciliation] Failed to auto-resolve booking ${booking.id}: ${err?.message}`);
         await prisma.reconciliationException.create({
@@ -194,7 +197,8 @@ export class ReconciliationService {
             actualAmount: paymentTx.amount,
             details: {
               error: err?.message,
-              bookingCode: booking.bookingCode,
+              bookingCode: booking.bookingNumber,
+              bookingNumber: booking.bookingNumber,
               orderId: booking.razorpayOrderId,
             },
           },
@@ -229,7 +233,7 @@ export class ReconciliationService {
       },
       select: {
         id: true,
-        bookingCode: true,
+        bookingNumber: true,
         driverId: true,
         awardedFleetOwnerId: true,
         grandTotal: true,
@@ -262,7 +266,8 @@ export class ReconciliationService {
             expectedAmount: (booking.grandTotal ?? booking.totalFare ?? 0),
             details: {
               reason: 'Completed online trip has not been paid. Uncollected platform liability.',
-              bookingCode: booking.bookingCode,
+              bookingCode: booking.bookingNumber,
+              bookingNumber: booking.bookingNumber,
               driverId: booking.driverId,
               paymentStatus: booking.paymentStatus,
               paymentMethod: booking.paymentMethod,
@@ -297,7 +302,8 @@ export class ReconciliationService {
             resolvedBy: 'SYSTEM_AUTO_RECONCILE',
             resolutionNote: 'Automatically settled completed trip earnings',
             details: {
-              bookingCode: booking.bookingCode,
+              bookingCode: booking.bookingNumber,
+              bookingNumber: booking.bookingNumber,
               driverId: booking.driverId,
               settlement,
             },
@@ -305,7 +311,7 @@ export class ReconciliationService {
         });
 
         autoResolved++;
-        logger.info(`[Reconciliation] Auto-settled completed trip ${booking.id} (${booking.bookingCode})`);
+        logger.info(`[Reconciliation] Auto-settled completed trip ${booking.id} (${booking.bookingNumber})`);
       } catch (err: any) {
         logger.error(`[Reconciliation] Failed to auto-settle booking ${booking.id}: ${err?.message}`);
         await prisma.reconciliationException.create({
@@ -318,7 +324,8 @@ export class ReconciliationService {
             expectedAmount: (booking.grandTotal ?? booking.totalFare ?? 0),
             details: {
               error: err?.message,
-              bookingCode: booking.bookingCode,
+              bookingCode: booking.bookingNumber,
+              bookingNumber: booking.bookingNumber,
               driverId: booking.driverId,
             },
           },
