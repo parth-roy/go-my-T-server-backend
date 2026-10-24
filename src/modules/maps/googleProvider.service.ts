@@ -40,7 +40,7 @@ const ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 
 // ── COST GUARD CONSTANTS (exported so contract tests assert them verbatim) ───
 /** Essentials allow-list ONLY. NEVER add displayName / Pro / Enterprise fields. */
-export const PLACE_DETAILS_FIELD_MASK = 'places.id,places.formattedAddress,places.location';
+export const PLACE_DETAILS_FIELD_MASK = 'id,formattedAddress,location';
 /** ComputeRoutes response fields. NEVER add routingPreference/traffic data here. */
 export const ROUTE_FIELD_MASK = 'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline';
 /** India-only filter for autocomplete (cost + relevance control, decision D-10). */
