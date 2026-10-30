@@ -317,6 +317,7 @@ export const googleProviderService = {
       origin: toLatLng(points[0]),
       destination: toLatLng(points[points.length - 1]),
       travelMode: 'DRIVE',
+      polylineQuality: 'HIGH_QUALITY',
       // routingPreference intentionally omitted — traffic-aware routing is Pro (cost rule)
     };
     if (points.length > 2) {

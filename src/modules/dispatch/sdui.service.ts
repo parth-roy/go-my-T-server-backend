@@ -139,7 +139,7 @@ export class DynamicModalService {
             actions: [
                 {
                     id: 'accept_instant',
-                    label: '⚡ Accept Instantly',
+                    label: 'Accept Instantly',
                     action: 'ACCEPT_INSTANT',
                     style: 'primary',
                     icon: 'check_circle',
@@ -147,7 +147,7 @@ export class DynamicModalService {
                 },
                 {
                     id: 'bid_custom',
-                    label: '💬 Bid Custom Fare',
+                    label: 'Bid Custom Fare',
                     action: 'BID_CUSTOM',
                     style: 'secondary',
                     icon: 'gavel',
@@ -224,7 +224,7 @@ export class DynamicModalService {
             actions: [
                 {
                     id: 'bid_official',
-                    label: '🔨 Submit Official Quote',
+                    label: 'Submit Official Quote',
                     action: 'BID_CUSTOM',
                     style: 'primary',
                     icon: 'gavel',
@@ -299,7 +299,7 @@ export class DynamicModalService {
             actions: [
                 {
                     id: 'view_negotiate',
-                    label: '💬 View & Negotiate Live',
+                    label: 'View & Negotiate Live',
                     action: 'VIEW_NEGOTIATE',
                     style: 'primary',
                     icon: 'chat',
@@ -357,7 +357,7 @@ export class DynamicModalService {
                 },
                 {
                     id: 'call_ops',
-                    label: '📞 Call Operations Support Desk',
+                    label: 'Call Operations Support Desk',
                     action: 'CALL_OPS',
                     style: 'secondary',
                     icon: 'phone',
