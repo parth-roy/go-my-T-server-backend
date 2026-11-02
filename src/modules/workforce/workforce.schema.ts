@@ -93,9 +93,18 @@ export const CompleteJobSchema = z.object({
 });
 
 export const JobRadarQuerySchema = z.object({
-  lat: z.coerce.number().min(-90).max(90),
-  lng: z.coerce.number().min(-180).max(180),
-  radiusKm: z.coerce.number().min(1).max(50).default(5),
+  lat: z.coerce.number().min(-90).max(90).default(28.6139),
+  lng: z.coerce.number().min(-180).max(180).default(77.2090),
+  radiusKm: z.coerce.number().min(1).max(5000).default(5),
+  allIndia: z.preprocess((val) => {
+    if (typeof val === 'string') {
+      const s = val.trim().toLowerCase();
+      if (s === 'true' || s === '1') return true;
+      if (s === 'false' || s === '0') return false;
+    }
+    return val;
+  }, z.coerce.boolean()).optional(),
+  trade: z.string().trim().optional(),
 });
 
 // ─────────────────────────────────────────────

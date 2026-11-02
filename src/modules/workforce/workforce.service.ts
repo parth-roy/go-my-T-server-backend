@@ -160,6 +160,149 @@ export function resolveJobCoordinates(
     }
   }
 
+  // Ahmedabad / Gujarat
+  if (text.includes('ahmedabad') || text.includes('gujarat') || text.includes('gandhinagar')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 23.0225, lng: 72.5714 };
+    }
+  }
+
+  // Jaipur / Rajasthan
+  if (text.includes('jaipur') || text.includes('rajasthan')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 26.9124, lng: 75.7873 };
+    }
+  }
+
+  // Lucknow / Kanpur / Uttar Pradesh
+  if (text.includes('lucknow') || text.includes('kanpur') || text.includes('uttar pradesh') || text.includes('up')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 26.8467, lng: 80.9462 };
+    }
+  }
+
+  // Chandigarh / Punjab / Haryana
+  if (text.includes('chandigarh') || text.includes('punjab') || text.includes('haryana') || text.includes('ludhiana')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 30.7333, lng: 76.7794 };
+    }
+  }
+
+  // Kochi / Kerala
+  if (text.includes('kochi') || text.includes('cochin') || text.includes('kerala') || text.includes('trivandrum') || text.includes('thiruvananthapuram')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 9.9312, lng: 76.2673 };
+    }
+  }
+
+  // Indore / Bhopal / Madhya Pradesh
+  if (text.includes('indore') || text.includes('bhopal') || text.includes('madhya pradesh')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 22.7196, lng: 75.8577 };
+    }
+  }
+
+  // Patna / Bihar
+  if (text.includes('patna') || text.includes('bihar')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 25.6127, lng: 85.1442 };
+    }
+  }
+
+  // Bhubaneswar / Odisha
+  if (text.includes('bhubaneswar') || text.includes('odisha') || text.includes('orissa') || text.includes('cuttack')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 20.2961, lng: 85.8245 };
+    }
+  }
+
+  // Guwahati / Assam
+  if (text.includes('guwahati') || text.includes('assam') || text.includes('northeast')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 26.1445, lng: 91.7362 };
+    }
+  }
+
+  // Nagpur
+  if (text.includes('nagpur')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 21.1458, lng: 79.0882 };
+    }
+  }
+
+  // Visakhapatnam / Andhra Pradesh
+  if (text.includes('visakhapatnam') || text.includes('vizag') || text.includes('vijayawada') || text.includes('andhra')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 17.6868, lng: 83.2185 };
+    }
+  }
+
+  // Surat
+  if (text.includes('surat')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 21.1702, lng: 72.8311 };
+    }
+  }
+
+  // Goa
+  if (text.includes('goa') || text.includes('panaji')) {
+    if (
+      !locationLat ||
+      !locationLng ||
+      (Math.abs(locationLat - 22.5726) < 0.05 && Math.abs(locationLng - 88.3639) < 0.05)
+    ) {
+      return { lat: 15.2993, lng: 74.1240 };
+    }
+  }
+
   return {
     lat: locationLat ?? 22.5726,
     lng: locationLng ?? 88.3639,
@@ -1977,18 +2120,121 @@ export async function getWalletTransactions(userId: string, page: number, limit:
   return { transactions, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
 }
 
+function getTradeSearchTerms(trade: string): string[] {
+  const clean = trade.trim();
+  const upper = clean.toUpperCase().replace(/[\s-]+/g, '_');
+  const terms = new Set<string>();
+
+  terms.add(clean);
+  terms.add(clean.replace(/_/g, ' '));
+  terms.add(upper);
+
+  if (upper.includes('PLUMB')) {
+    terms.add('PLUMBER');
+    terms.add('PLUMBING');
+    terms.add('Plumber');
+    terms.add('Plumbing');
+  }
+  if (upper.includes('ELECTR')) {
+    terms.add('ELECTRICIAN');
+    terms.add('ELECTRICAL');
+    terms.add('ELECTRIC');
+    terms.add('Electrician');
+    terms.add('Electrical');
+  }
+  if (upper.includes('CARPENT')) {
+    terms.add('CARPENTER');
+    terms.add('CARPENTRY');
+    terms.add('Carpenter');
+    terms.add('Carpentry');
+  }
+  if (upper.includes('AC') || upper.includes('AIR_CONDITION')) {
+    terms.add('AC');
+    terms.add('AC_REPAIR');
+    terms.add('AC Repair');
+    terms.add('Air Conditioner');
+  }
+  if (upper.includes('APPLIANCE')) {
+    terms.add('APPLIANCE');
+    terms.add('APPLIANCE_REPAIR');
+    terms.add('Appliance');
+    terms.add('Appliance Repair');
+  }
+  if (upper.includes('PAINT')) {
+    terms.add('PAINTER');
+    terms.add('PAINTING');
+    terms.add('Painter');
+    terms.add('Painting');
+  }
+  if (upper.includes('CLEAN') || upper.includes('PEST')) {
+    terms.add('CLEANER');
+    terms.add('CLEANING');
+    terms.add('Cleaning');
+    terms.add('Cleaner');
+    terms.add('Pest');
+  }
+  if (upper.includes('SECUR')) {
+    terms.add('SECURITY');
+    terms.add('SECURITY_GUARD');
+    terms.add('Security Guard');
+    terms.add('Security');
+  }
+  if (upper.includes('LOAD')) {
+    terms.add('LOADER');
+    terms.add('LOADING');
+    terms.add('LOADING_UNLOADING');
+    terms.add('Loading');
+    terms.add('Loader');
+  }
+  if (upper.includes('FURNITURE') || upper.includes('MOVER') || upper.includes('MOVING')) {
+    terms.add('FURNITURE');
+    terms.add('FURNITURE_MOVER');
+    terms.add('FURNITURE_MOVING');
+    terms.add('Furniture Mover');
+    terms.add('Furniture Moving');
+  }
+  if (upper.includes('PACK')) {
+    terms.add('PACKER');
+    terms.add('PACKING');
+    terms.add('Packer');
+    terms.add('Packing');
+  }
+  if (upper.includes('DELIVER')) {
+    terms.add('DELIVERY');
+    terms.add('LAST_MILE_DELIVERY');
+    terms.add('Last-Mile Delivery');
+    terms.add('Delivery');
+  }
+  if (upper.includes('HELP')) {
+    terms.add('HELPER');
+    terms.add('GENERAL_HELPER');
+    terms.add('General Helper');
+    terms.add('Helper');
+  }
+
+  return Array.from(terms).filter((t) => t.length > 0);
+}
+
 // ─────────────────────────────────────────────
 // JOB RADAR — MAP PINS
 // ─────────────────────────────────────────────
 export async function getNearbyPins(userId: string, query: JobRadarQuery) {
-  const { lat, lng, radiusKm } = query;
-  
+  const { lat, lng, radiusKm, allIndia, trade } = query;
+  const isPanIndia = Boolean(allIndia) || (typeof radiusKm === 'number' && radiusKm >= 1000);
+  const activeRadiusKm = isPanIndia ? (radiusKm >= 1000 ? radiusKm : 5000) : radiusKm;
+
   const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
 
-  // Find nearby available Gig jobs
-  const jobs = await prisma.gigJob.findMany({
-    where: {
-      status: 'PENDING',
+  const isAllTrade =
+    !trade ||
+    trade.trim().length === 0 ||
+    ['ALL', 'ALL JOBS', 'ALL_JOBS', 'ANY'].includes(trade.trim().toUpperCase());
+  const cleanTrade = trade ? trade.trim() : '';
+
+  // Build conditions for GigJob
+  const gigAndConditions: any[] = [
+    { status: 'PENDING' },
+    {
       assignments: {
         none: {
           OR: [
@@ -1997,6 +2243,24 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
           ],
         },
       },
+    },
+  ];
+
+  if (!isAllTrade) {
+    const tradeTerms = getTradeSearchTerms(cleanTrade);
+    gigAndConditions.push({
+      OR: tradeTerms.flatMap((term) => [
+        { gigCategory: { contains: term, mode: 'insensitive' } },
+        { gigType: { contains: term, mode: 'insensitive' } },
+        { description: { contains: term, mode: 'insensitive' } },
+      ]),
+    });
+  }
+
+  // Find available Gig jobs
+  const jobs = await prisma.gigJob.findMany({
+    where: {
+      AND: gigAndConditions,
     },
     select: {
       id: true,
@@ -2020,11 +2284,12 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
         where: { status: { in: [WorkerJobStatus.ACCEPTED, WorkerJobStatus.ARRIVED, WorkerJobStatus.IN_PROGRESS] } },
         select: { id: true },
       },
-    }
+    },
+    orderBy: { createdAt: 'desc' },
   });
 
   const availablePins = jobs
-    .filter(job => {
+    .filter((job) => {
       // 1. Slots check
       const acceptedCount = job.assignments.length;
       const totalSlots = job.workersNeeded ?? 1;
@@ -2034,18 +2299,20 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       if (job.status !== 'PENDING') return false;
 
       // 3. Expiration / passed date check
-      if (isJobExpiredOrPast({
-        createdAt: job.createdAt,
-        scheduledSlot: job.scheduledSlot,
-        urgency: job.urgency,
-        status: job.status,
-      })) {
+      if (
+        isJobExpiredOrPast({
+          createdAt: job.createdAt,
+          scheduledSlot: job.scheduledSlot,
+          urgency: job.urgency,
+          status: job.status,
+        })
+      ) {
         return false;
       }
 
       return true;
     })
-    .map(job => {
+    .map((job) => {
       const resolved = resolveJobCoordinates(job.locationLat, job.locationLng, job.locationAddress || job.description);
       const dist = haversineKm(lat, lng, resolved.lat, resolved.lng);
       return {
@@ -2065,23 +2332,28 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
         urgency: job.urgency,
         laborersCount: job.workersNeeded,
         vehicleType: 'Gig',
-        goodsType: job.description && !job.description.startsWith('{') ? (job.description.includes('—') ? job.description.split('—')[0].trim() : job.description) : (job.gigCategory || 'Service'),
+        goodsType:
+          job.description && !job.description.startsWith('{')
+            ? job.description.includes('—')
+              ? job.description.split('—')[0].trim()
+              : job.description
+            : job.gigCategory || 'Service',
         goodsWeightKg: null,
         goodsQuantity: 1,
-        distanceKm: dist,
+        distanceKm: Math.round(dist * 10) / 10,
         scheduledSlot: job.scheduledSlot,
         status: job.status,
         createdAt: job.createdAt,
       };
     })
-    .filter(job => job.distanceKm <= radiusKm);
+    .filter((job) => isPanIndia || job.distanceKm <= radiusKm);
 
-  // Find nearby available Workforce WhatsApp Inquiries (HIRE / BULK)
-  const waInquiries = await prisma.workforceWhatsAppInquiry.findMany({
-    where: {
-      status: 'AVAILABLE',
-      assignedWorkerId: null,
-      intent: { in: ['HIRE', 'BULK', 'hire', 'bulk', 'Hire', 'Bulk'] },
+  // Build conditions for Workforce WhatsApp Inquiries (HIRE / BULK)
+  const waAndConditions: any[] = [
+    { status: 'AVAILABLE' },
+    { assignedWorkerId: null },
+    { intent: { in: ['HIRE', 'BULK', 'hire', 'bulk', 'Hire', 'Bulk'] } },
+    {
       OR: [
         { notes: null },
         {
@@ -2093,12 +2365,28 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
         },
       ],
     },
-    take: 50,
+  ];
+
+  if (!isAllTrade) {
+    const tradeTerms = getTradeSearchTerms(cleanTrade);
+    waAndConditions.push({
+      OR: tradeTerms.flatMap((term) => [
+        { service: { contains: term, mode: 'insensitive' } },
+        { message: { contains: term, mode: 'insensitive' } },
+      ]),
+    });
+  }
+
+  const waInquiries = await prisma.workforceWhatsAppInquiry.findMany({
+    where: {
+      AND: waAndConditions,
+    },
+    take: isPanIndia ? 500 : 100,
     orderBy: { createdAt: 'desc' },
   });
 
   const waPins = waInquiries
-    .filter(wa => {
+    .filter((wa) => {
       // 1. Status & assignment check
       if (wa.status !== 'AVAILABLE' || wa.assignedWorkerId != null) return false;
 
@@ -2113,12 +2401,14 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
       }
 
       // 3. Expiration / passed date check
-      if (isJobExpiredOrPast({
-        createdAt: wa.createdAt,
-        timing: wa.timing,
-        urgency: Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent')) ? 'IMMEDIATE' : 'SCHEDULED',
-        status: wa.status,
-      })) {
+      if (
+        isJobExpiredOrPast({
+          createdAt: wa.createdAt,
+          timing: wa.timing,
+          urgency: Boolean(wa.timing && wa.timing.toLowerCase().includes('urgent')) ? 'IMMEDIATE' : 'SCHEDULED',
+          status: wa.status,
+        })
+      ) {
         return false;
       }
 
@@ -2151,15 +2441,22 @@ export async function getNearbyPins(userId: string, query: JobRadarQuery) {
         goodsType: wa.service || 'Service',
         goodsWeightKg: null,
         goodsQuantity: 1,
-        distanceKm: dist,
+        distanceKm: Math.round(dist * 10) / 10,
         source: 'WHATSAPP',
         scheduledSlot: wa.timing,
         status: wa.status,
         createdAt: wa.createdAt,
       };
-    }).filter((job) => job.distanceKm <= radiusKm);
+    })
+    .filter((job) => isPanIndia || job.distanceKm <= radiusKm);
 
-  return [...availablePins, ...waPins];
+  const allPins = [...availablePins, ...waPins];
+
+  return {
+    pins: allPins,
+    totalCount: allPins.length,
+    activeRadiusKm,
+  };
 }
 
 // ─────────────────────────────────────────────
