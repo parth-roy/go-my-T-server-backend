@@ -75,6 +75,16 @@ workforceRouter.post('/wallet/withdraw',        validate(WithdrawSchema), ctrl.w
 // PROFILE
 // ─────────────────────────────────────────────
 workforceRouter.get('/profile/me',                                                        ctrl.getMe);
+workforceRouter.get('/profile',                                                           ctrl.getMe);
+workforceRouter.get('/me',                                                                ctrl.getMe);
+workforceRouter.patch('/profile',             validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.put('/profile',               validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.patch('/profile/preferences', validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.put('/profile/preferences',   validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.patch('/profile/availability',validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.put('/profile/availability',  validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.patch('/availability',        validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
+workforceRouter.put('/availability',          validate(UpdatePreferencesSchema),          ctrl.updatePreferences);
 workforceRouter.patch('/profile/status',      validate(UpdateStatusSchema),               ctrl.updateStatus);
 workforceRouter.put('/profile/status',        validate(UpdateStatusSchema),               ctrl.updateStatus);
 workforceRouter.patch('/profile/location',    validate(UpdateLocationSchema),             ctrl.updateLocation);

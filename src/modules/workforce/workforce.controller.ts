@@ -140,6 +140,10 @@ export async function getMe(req: Request, res: Response, next: NextFunction) {
   } catch (err) { next(err); }
 }
 
+export const getProfile = getMe;
+export const updateProfile = updatePreferences;
+export const updateAvailability = updatePreferences;
+
 export async function updateStatus(req: Request, res: Response, next: NextFunction) {
   try {
     const result = await service.updateStatus(req.user!.id, req.body);

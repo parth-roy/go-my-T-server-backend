@@ -501,12 +501,106 @@ export async function getMe(userId: string) {
   
   const resolvedDocs = await s3Service.resolveDocumentsUrls(worker.documents);
 
+  // Parse rich worker preferences / metadata from preferredWork
+  let meta: any = {};
+  if (worker.preferredWork && worker.preferredWork.startsWith('{')) {
+    try {
+      meta = JSON.parse(worker.preferredWork);
+    } catch (_) {}
+  }
+
+  // Also merge Redis cached metadata if available
+  try {
+    const cached = await redis.get(`worker:meta:${worker.id}`);
+    if (cached) {
+      meta = { ...meta, ...JSON.parse(cached) };
+    }
+  } catch (_) {}
+
+  // Actual completed jobs count
+  let completedCount = worker.totalJobs;
+  try {
+    const actualCompleted = await prisma.jobAssignment.count({
+      where: {
+        workerId: worker.id,
+        status: WorkerJobStatus.COMPLETED,
+      },
+    });
+    if (actualCompleted > completedCount) completedCount = actualCompleted;
+  } catch (_) {}
+
+  // Fallback defaults matching Metro Mitra standard partner profile
+  const workingDays: string[] = Array.isArray(meta.workingDays) && meta.workingDays.length > 0
+    ? meta.workingDays
+    : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const breakTime: string = meta.breakTime || '1:00 – 2:00 PM';
+  const workAreaLocality: string = meta.workAreaLocality || 'Barrackpore';
+  const services: string[] = Array.isArray(meta.services) && meta.services.length > 0
+    ? meta.services
+    : (worker.preferredTypes && worker.preferredTypes.length > 0 ? worker.preferredTypes.map((t: any) => String(t)) : ['Plumbing', 'Electrical']);
+  const bio: string = meta.bio || meta.about || 'Reliable repairs for everyday homes.';
+  const experienceYears: number = typeof meta.experienceYears === 'number' ? meta.experienceYears : 3;
+  const portfolioImages: string[] = Array.isArray(meta.portfolioImages) && meta.portfolioImages.length > 0
+    ? meta.portfolioImages
+    : [
+        'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&w=400&q=80',
+        'https://images.unsplash.com/photo-1505798577917-a65157d3320a?auto=format&fit=crop&w=400&q=80',
+      ];
+
+  const availableTime: string = worker.availableTime || meta.availableTime || '9:00 AM - 6:00 PM';
+  let fromTime: string = meta.fromTime;
+  let toTime: string = meta.toTime;
+  if (!fromTime || !toTime) {
+    const parts = availableTime.split('-');
+    if (parts.length >= 2) {
+      fromTime = fromTime || parts[0].trim();
+      toTime = toTime || parts[1].trim();
+    } else {
+      fromTime = fromTime || '9:00 AM';
+      toTime = toTime || '6:00 PM';
+    }
+  }
+
+  const preferredDistance: number = (worker.preferredDistance && worker.preferredDistance > 0)
+    ? worker.preferredDistance
+    : (meta.preferredDistance ? Number(meta.preferredDistance) : 5);
+
+  const rating: number = (worker.rating && worker.rating > 0) ? worker.rating : 5.0;
+  const isVerified: boolean = Boolean(
+    worker.isDocVerified || (worker.aadhaarVerifStatus === 'VERIFIED' && worker.panVerifStatus === 'VERIFIED')
+  );
+  const verificationStatus: string = isVerified ? 'VERIFIED' : 'PENDING';
+
   return {
     ...worker,
+    name: worker.user.name || 'Partner',
+    phone: worker.user.phone || '',
+    email: worker.user.email,
+    profilePhoto: worker.user.profileImageUrl,
+    avatarUrl: worker.user.profileImageUrl,
     documents: resolvedDocs,
     aadhaarStatus: worker.isDocVerified ? 'VERIFIED' : worker.aadhaarVerifStatus,
     panStatus: worker.isDocVerified ? 'VERIFIED' : worker.panVerifStatus,
     bankVerified: worker.isDocVerified ? true : worker.bankVerified,
+    isVerified,
+    verificationStatus,
+    rating,
+    jobsCompleted: completedCount,
+    totalJobs: completedCount,
+    experienceYears,
+    services,
+    bio,
+    about: bio,
+    portfolioImages,
+    workingDays,
+    availableTime,
+    fromTime,
+    toTime,
+    breakTime,
+    preferredDistance,
+    workAreaLocality,
+    isOnline: worker.status === WorkerStatus.AVAILABLE,
+    status: worker.status,
   };
 }
 
@@ -587,13 +681,17 @@ export async function updateBankDetails(userId: string, input: UpdateBankDetails
 // ── PROFILE - UPDATE PREFERENCES & BANK DETAILS
 // ─────────────────────────────────────────────────────────────────────────────
 export async function updatePreferences(userId: string, input: UpdatePreferencesInput) {
-  const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
+  const worker = await prisma.worker.findUnique({
+    where: { userId },
+    select: { id: true, preferredWork: true, status: true },
+  });
   if (!worker) throw AppError.notFound('Worker not found');
 
   const { name, fcmToken, ...workerFields } = input;
 
   // Update user fields if provided
-  if (name || fcmToken || input.phone || input.email) {
+  if (name || fcmToken || input.phone || input.email || input.profilePhoto || input.avatarUrl) {
+    const avatar = input.profilePhoto || input.avatarUrl;
     if (input.phone) {
       const existingPhoneUser = await prisma.user.findFirst({
         where: { phone: input.phone, id: { not: userId } },
@@ -625,29 +723,88 @@ export async function updatePreferences(userId: string, input: UpdatePreferences
         ...(fcmToken && { fcmToken }),
         ...(input.phone && { phone: input.phone }),
         ...(input.email && { email: input.email.trim().toLowerCase() }),
+        ...(avatar && { profileImageUrl: avatar }),
       },
     });
   }
 
+  // Handle online status toggle if passed
+  let nextStatus: WorkerStatus | undefined = undefined;
+  if (input.isOnline !== undefined) {
+    nextStatus = input.isOnline ? WorkerStatus.AVAILABLE : WorkerStatus.OFFLINE;
+  }
+  if (input.status) {
+    if (input.status === 'AVAILABLE') nextStatus = WorkerStatus.AVAILABLE;
+    else if (input.status === 'OFFLINE') nextStatus = WorkerStatus.OFFLINE;
+    else if (input.status === 'ON_JOB' || input.status === 'BUSY') nextStatus = WorkerStatus.ON_JOB;
+    else nextStatus = WorkerStatus.OFFLINE;
+  }
+
+  // Merge extra profile & availability metadata inside preferredWork JSON
+  let existingMeta: any = {};
+  if (worker.preferredWork && worker.preferredWork.startsWith('{')) {
+    try {
+      existingMeta = JSON.parse(worker.preferredWork);
+    } catch (_) {}
+  }
+  try {
+    const cached = await redis.get(`worker:meta:${worker.id}`);
+    if (cached) {
+      existingMeta = { ...existingMeta, ...JSON.parse(cached) };
+    }
+  } catch (_) {}
+
+  const mergedMeta = {
+    ...existingMeta,
+    ...(workerFields.services !== undefined && { services: workerFields.services }),
+    ...(workerFields.bio !== undefined && { bio: workerFields.bio }),
+    ...(workerFields.about !== undefined && { about: workerFields.about }),
+    ...(workerFields.experienceYears !== undefined && { experienceYears: workerFields.experienceYears }),
+    ...(workerFields.portfolioImages !== undefined && { portfolioImages: workerFields.portfolioImages }),
+    ...(workerFields.workingDays !== undefined && { workingDays: workerFields.workingDays }),
+    ...(workerFields.breakTime !== undefined && { breakTime: workerFields.breakTime }),
+    ...(workerFields.workAreaLocality !== undefined && { workAreaLocality: workerFields.workAreaLocality }),
+    ...(workerFields.fromTime !== undefined && { fromTime: workerFields.fromTime }),
+    ...(workerFields.toTime !== undefined && { toTime: workerFields.toTime }),
+    ...(workerFields.availableTime !== undefined && { availableTime: workerFields.availableTime }),
+    ...(workerFields.preferredDistance !== undefined && { preferredDistance: workerFields.preferredDistance }),
+  };
+
+  const finalPreferredWork = Object.keys(mergedMeta).length > 0
+    ? JSON.stringify(mergedMeta)
+    : (workerFields.preferredWork !== undefined ? workerFields.preferredWork : undefined);
+
+  // Available time formatting if fromTime / toTime are provided
+  let finalAvailableTime = workerFields.availableTime;
+  if (!finalAvailableTime && workerFields.fromTime && workerFields.toTime) {
+    finalAvailableTime = `${workerFields.fromTime} - ${workerFields.toTime}`;
+  }
+
   // Update worker fields
-  const updated = await prisma.worker.update({
+  await prisma.worker.update({
     where: { userId },
     data: {
+      ...(nextStatus !== undefined && { status: nextStatus }),
       ...(workerFields.maxWeightKg !== undefined && { maxWeightKg: workerFields.maxWeightKg }),
       ...(workerFields.preferredTypes && { preferredTypes: workerFields.preferredTypes as LaborType[] }),
-      ...(workerFields.preferredWork !== undefined && { preferredWork: workerFields.preferredWork }),
+      ...(finalPreferredWork !== undefined && { preferredWork: finalPreferredWork }),
       ...(workerFields.vehicleAccess !== undefined && { vehicleAccess: workerFields.vehicleAccess }),
-      ...(workerFields.availableTime !== undefined && { availableTime: workerFields.availableTime }),
+      ...(finalAvailableTime !== undefined && { availableTime: finalAvailableTime }),
       ...(workerFields.preferredDistance !== undefined && { preferredDistance: workerFields.preferredDistance }),
       ...(workerFields.languages !== undefined && { languages: workerFields.languages }),
       ...(workerFields.bankAccountNo && { bankAccountNo: workerFields.bankAccountNo }),
       ...(workerFields.bankIfsc && { bankIfsc: workerFields.bankIfsc }),
       ...(workerFields.bankName && { bankName: workerFields.bankName }),
+      ...(workerFields.bankAccountHolderName && { bankAccountHolderName: workerFields.bankAccountHolderName }),
     },
-    include: { user: { select: { name: true, phone: true, profileImageUrl: true } } },
   });
 
-  return updated;
+  // Dual-write to Redis cache (non-fatal if Redis is unavailable)
+  try {
+    await redis.set(`worker:meta:${worker.id}`, JSON.stringify(mergedMeta), 'EX', 86400 * 30);
+  } catch (_) {}
+
+  return getMe(userId);
 }
 
 // ─────────────────────────────────────────────

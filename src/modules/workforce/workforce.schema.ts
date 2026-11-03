@@ -45,18 +45,36 @@ export const UpdatePreferencesSchema = z.object({
   name: z.string().min(2).max(80).optional(),
   phone: z.string().optional(),
   email: z.string().email().optional(),
+  profilePhoto: z.string().optional(),
+  avatarUrl: z.string().optional(),
   maxWeightKg: z.number().min(1).max(50000).optional(),
   preferredTypes: z.array(z.string()).optional(),
   preferredWork: z.string().optional(),
   vehicleAccess: z.boolean().optional(),
   availableTime: z.string().optional(),
+  fromTime: z.string().optional(),
+  toTime: z.string().optional(),
+  breakTime: z.string().optional(),
+  workingDays: z.array(z.string()).optional(),
   preferredDistance: z.number().min(1).max(1000).optional(),
+  workAreaLocality: z.string().optional(),
   languages: z.array(z.string()).optional(),
-  bankAccountNo: z.string().min(9).max(18).optional(),
+  services: z.array(z.string()).optional(),
+  bio: z.string().optional(),
+  about: z.string().optional(),
+  experienceYears: z.number().optional(),
+  portfolioImages: z.array(z.string()).optional(),
+  isOnline: z.boolean().optional(),
+  status: z.enum(['AVAILABLE', 'OFFLINE', 'ON_JOB', 'BUSY', 'SUSPENDED']).optional(),
+  bankAccountNo: z.string().min(5).max(30).optional(),
   bankIfsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, 'Invalid IFSC code').optional(),
   bankName: z.string().min(2).max(80).optional(),
+  bankAccountHolderName: z.string().optional(),
   fcmToken: z.string().optional(),
 });
+
+export const UpdateProfileSchema = UpdatePreferencesSchema;
+export const UpdateAvailabilitySchema = UpdatePreferencesSchema;
 
 export const UploadDocumentsSchema = z.object({
   aadhaarUrl: z.string().url().optional(),
@@ -165,6 +183,8 @@ export type UpdateStatusInput = z.infer<typeof UpdateStatusSchema>;
 export type UpdateLocationInput = z.infer<typeof UpdateLocationSchema>;
 export type UpdateBankDetailsInput = z.infer<typeof UpdateBankDetailsSchema>;
 export type UpdatePreferencesInput = z.infer<typeof UpdatePreferencesSchema>;
+export type UpdateProfileInput = z.infer<typeof UpdateProfileSchema>;
+export type UpdateAvailabilityInput = z.infer<typeof UpdateAvailabilitySchema>;
 export type UpdateSettingsInput = z.infer<typeof UpdateSettingsSchema>;
 export type UploadDocumentsInput = z.infer<typeof UploadDocumentsSchema>;
 export type AvailableJobsQuery = z.infer<typeof AvailableJobsQuerySchema>;
