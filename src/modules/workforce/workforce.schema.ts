@@ -46,7 +46,7 @@ export const UpdatePreferencesSchema = z.object({
   phone: z.string().optional(),
   email: z.string().email().optional(),
   maxWeightKg: z.number().min(1).max(50000).optional(),
-  preferredTypes: z.array(z.enum(['LOADING', 'UNLOADING', 'BOTH'])).optional(),
+  preferredTypes: z.array(z.string()).optional(),
   preferredWork: z.string().optional(),
   vehicleAccess: z.boolean().optional(),
   availableTime: z.string().optional(),
@@ -95,7 +95,7 @@ export const CompleteJobSchema = z.object({
 export const JobRadarQuerySchema = z.object({
   lat: z.coerce.number().min(-90).max(90).default(28.6139),
   lng: z.coerce.number().min(-180).max(180).default(77.2090),
-  radiusKm: z.coerce.number().min(1).max(5000).default(5),
+  radiusKm: z.coerce.number().min(0.1).max(5000).default(5),
   allIndia: z.preprocess((val) => {
     if (typeof val === 'string') {
       const s = val.trim().toLowerCase();
@@ -121,7 +121,16 @@ export const WithdrawSchema = z.object({
 // ─────────────────────────────────────────────
 
 export const HistoryQuerySchema = z.object({
-  status: z.enum(['COMPLETED', 'CANCELLED']).optional(),
+  status: z.enum([
+    'COMPLETED',
+    'CANCELLED',
+    'ACCEPTED',
+    'ARRIVED',
+    'IN_PROGRESS',
+    'DECLINED',
+    'PENDING_ACCEPTANCE',
+    'ALL',
+  ]).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });

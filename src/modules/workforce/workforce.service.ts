@@ -2586,8 +2586,13 @@ export async function getJobHistory(userId: string, query: HistoryQuery) {
 
   const where: any = {
     workerId: worker.id,
-    status: status ? { equals: status as any } : { in: ['COMPLETED', 'CANCELLED'] as any[] },
+    status: (status && status !== 'ALL')
+      ? { equals: status as any }
+      : (status === 'ALL' ? undefined : { in: ['COMPLETED', 'CANCELLED'] as any[] }),
   };
+  if (status === 'ALL') {
+    delete where.status;
+  }
 
   const jobAssignments = await prisma.jobAssignment.findMany({
     where,
