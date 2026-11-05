@@ -43,6 +43,7 @@ import { razorpayWebhook, cashfreeWebhook } from '@modules/payment/payment.contr
 import { handleRazorpayXWebhook } from '@modules/webhooks/webhooks.controller';
 import { brokerRouter } from '@modules/broker/broker.router';
 import { telemetryRouter } from '@modules/telemetry/telemetry.router';
+import { appVersionRouter } from '@modules/app-version/app-version.router';
 import { idempotencyMiddleware } from '@shared/middleware/idempotency.middleware';
 import { correlationMiddleware } from '@shared/middleware/correlation.middleware';
 
@@ -212,6 +213,7 @@ export function createApp(): Application {
   app.use('/api/v1/lead-unlock', leadUnlockRouter);
   app.use('/api/v1/broker', brokerRouter);
   app.use('/api/v1/telemetry', telemetryRouter);
+  app.use('/api/v1/app-version', appVersionRouter);
 
   // Leads
   app.use('/api/v1/leads', publicLeadsRouter);
