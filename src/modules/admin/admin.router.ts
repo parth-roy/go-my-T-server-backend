@@ -71,6 +71,8 @@ adminRouter.post('/users/bulk-hard',                  ctrl.bulkHardDeleteUsers);
 
 // ── Drivers ───────────────────────────────────────────────────────────────────
 adminRouter.get('/drivers',                                          ctrl.listDrivers);
+adminRouter.post('/drivers/convert-lead/:id',                         ctrl.convertLeadToDriver);
+adminRouter.post('/drivers/reject-lead/:id',                          ctrl.rejectLeadFromVerification);
 adminRouter.get('/drivers/:id',                                      ctrl.getDriver);
 adminRouter.patch('/drivers/:id/documents/:docId/status',            ctrl.updateDocStatus);
 adminRouter.patch('/drivers/:id/doc-verified',                       ctrl.setDocVerified);

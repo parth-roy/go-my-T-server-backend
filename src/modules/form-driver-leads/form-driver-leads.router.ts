@@ -60,3 +60,6 @@ formDriverLeadRouter.get('/:id', formDriverLeadController.getLeadById);
 
 // PATCH /api/v1/form-driver-leads/:id
 formDriverLeadRouter.patch('/:id', formDriverLeadController.updateLeadStatus);
+
+// POST /api/v1/form-driver-leads/:id/convert
+formDriverLeadRouter.post('/:id/convert', formDriverLeadController.convertLead);

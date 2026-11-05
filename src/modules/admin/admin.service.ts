@@ -9,7 +9,7 @@ import { logger } from '@shared/logger';
 import { sendPasswordResetEmail } from '@shared/services/email.service';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
-import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus, BrokerQuoteStatus, BrokerBookingStatus, DriverStatus, NotificationType } from '@prisma/client';
+import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus, BrokerQuoteStatus, BrokerBookingStatus, DriverStatus, NotificationType, LeadStatus, UlipVerifStatus, VehicleType, SubscriptionPlan } from '@prisma/client';
 import type {
   LoginInput, ForgotPasswordInput, ResetPasswordInput, RefreshInput,
   BookingsQuery, UsersQuery, DriversQuery, FleetQuery, FinanceQuery,
@@ -812,6 +812,165 @@ export async function adminWorkerWalletCredit(workerId: string, input: WalletCre
 // DRIVERS & VERIFICATION
 // ─────────────────────────────────────────────────────────────────────────────
 
+function getVehicleDefaultCapacity(vehicleType: VehicleType | string | null | undefined): number {
+  switch (vehicleType) {
+    case 'TWO_WHEELER':
+      return 30;
+    case 'THREE_WHEELER':
+    case 'AUTO':
+      return 500;
+    case 'TATA_ACE':
+    case 'PICKUP':
+      return 750;
+    case 'MINI_TRUCK':
+      return 1500;
+    case 'TRUCK_10FT':
+      return 2500;
+    case 'TRUCK_14FT':
+    case 'TRUCK_17FT':
+      return 3500;
+    case 'TRUCK_20FT':
+    case 'CONTAINER_20FT':
+      return 6500;
+    case 'CONTAINER_32FT':
+    case 'TRAILER':
+    case 'TANKER':
+    case 'TIPPER':
+      return 15000;
+    default:
+      return 1000;
+  }
+}
+
+function mapLeadToDriverItem(lead: any) {
+  const docs: any[] = [];
+  if (lead.profilePhotoUrl) {
+    docs.push({
+      id: `lead_doc_${lead.id}_selfie`,
+      type: 'SELFIE',
+      status: 'PENDING',
+      fileUrl: lead.profilePhotoUrl,
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.dlFrontUrl) {
+    docs.push({
+      id: `lead_doc_${lead.id}_dl_front`,
+      type: 'DL_FRONT',
+      status: 'PENDING',
+      fileUrl: lead.dlFrontUrl,
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.dlBackUrl) {
+    docs.push({
+      id: `lead_doc_${lead.id}_dl_back`,
+      type: 'DL_BACK',
+      status: 'PENDING',
+      fileUrl: lead.dlBackUrl,
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.rcBookUrl) {
+    docs.push({
+      id: `lead_doc_${lead.id}_rc_front`,
+      type: 'RC_FRONT',
+      status: 'PENDING',
+      fileUrl: lead.rcBookUrl,
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.aadharFrontUrl) {
+    docs.push({
+      id: `lead_doc_${lead.id}_aadhaar_front`,
+      type: 'AADHAAR_FRONT',
+      status: 'PENDING',
+      fileUrl: lead.aadharFrontUrl,
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.aadharBackUrl) {
+    docs.push({
+      id: `lead_doc_${lead.id}_aadhaar_back`,
+      type: 'AADHAAR_BACK',
+      status: 'PENDING',
+      fileUrl: lead.aadharBackUrl,
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.insuranceUrl) {
+    docs.push({
+      id: `lead_doc_${lead.id}_insurance`,
+      type: 'PERMIT',
+      status: 'PENDING',
+      fileUrl: lead.insuranceUrl,
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+
+  let complianceScore = 0;
+  if (lead.dlFrontUrl) complianceScore += 25;
+  if (lead.rcBookUrl) complianceScore += 25;
+  if (lead.aadharFrontUrl) complianceScore += 25;
+  if (lead.profilePhotoUrl) complianceScore += 25;
+
+  return {
+    id: `lead_${lead.id}`,
+    leadId: lead.id,
+    userId: `lead_user_${lead.id}`,
+    source: 'WEBSITE' as const,
+    licenseNumber: lead.dlNumber || 'Pending Submission',
+    status: 'OFFLINE' as DriverStatus,
+    dlVerifStatus: 'PENDING' as UlipVerifStatus,
+    isDocVerified: false,
+    rating: 5.0,
+    totalTrips: 0,
+    createdAt: lead.createdAt,
+    complianceScore,
+    user: {
+      id: `lead_user_${lead.id}`,
+      name: lead.name,
+      phone: lead.phone,
+      email: lead.email || null,
+      isActive: true,
+    },
+    vehicle: {
+      id: `lead_veh_${lead.id}`,
+      registrationNo: lead.vehicleNumber || 'Pending Submission',
+      type: lead.vehicleType,
+      rcVerifStatus: 'PENDING' as UlipVerifStatus,
+    },
+    subscription: null,
+    documents: docs,
+    websiteLeadDetails: {
+      city: lead.city,
+      state: lead.state,
+      alternatePhone: lead.alternatePhone,
+      transportHub: lead.transportHub,
+      aadharNumber: lead.aadharNumber,
+      givenAddress: lead.givenAddress,
+      autoAddress: lead.autoAddress,
+      isLocationVerified: lead.isLocationVerified,
+      locationDistance: lead.locationDistance,
+      status: lead.status,
+    },
+  };
+}
+
 export async function getDrivers(q: DriversQuery) {
   const where: any = {};
   if (q.status) where.status = q.status;
@@ -827,12 +986,89 @@ export async function getDrivers(q: DriversQuery) {
     ];
   }
 
-  const [total, rawDrivers] = await Promise.all([
+  // Include unconverted website onboarding leads when reviewing pending or all drivers
+  const includeLeads = q.isDocVerified !== true && !q.plan && (!q.status || q.status === 'OFFLINE');
+  let leadWhere: any = null;
+
+  if (includeLeads) {
+    leadWhere = {
+      status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] },
+    };
+    if (q.search) {
+      leadWhere.OR = [
+        { name: { contains: q.search, mode: 'insensitive' } },
+        { phone: { contains: q.search } },
+        { dlNumber: { contains: q.search, mode: 'insensitive' } },
+        { vehicleNumber: { contains: q.search, mode: 'insensitive' } },
+        { city: { contains: q.search, mode: 'insensitive' } },
+      ];
+    }
+  }
+
+  const [driverCount, leadCount] = await Promise.all([
     prisma.driver.count({ where }),
-    prisma.driver.findMany({
+    leadWhere ? prisma.formDriverLead.count({ where: leadWhere }) : Promise.resolve(0),
+  ]);
+
+  const total = driverCount + leadCount;
+  const skip = (q.page - 1) * q.limit;
+  const limit = q.limit;
+
+  let leadsData: any[] = [];
+  let driversData: any[] = [];
+
+  if (leadWhere && leadCount > 0) {
+    if (skip < leadCount) {
+      const takeLeads = Math.min(limit, leadCount - skip);
+      const rawLeads = await prisma.formDriverLead.findMany({
+        where: leadWhere,
+        skip,
+        take: takeLeads,
+        orderBy: { createdAt: 'desc' },
+      });
+      leadsData = await Promise.all(
+        rawLeads.map(async (l) => {
+          const item = mapLeadToDriverItem(l);
+          item.documents = await s3Service.resolveDocumentsUrls(item.documents);
+          return item;
+        })
+      );
+
+      const remainingTake = limit - leadsData.length;
+      if (remainingTake > 0) {
+        driversData = await prisma.driver.findMany({
+          where,
+          skip: 0,
+          take: remainingTake,
+          orderBy: { createdAt: 'desc' },
+          include: {
+            user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
+            vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true } },
+            subscription: { select: { plan: true, endDate: true, isActive: true } },
+            documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
+          },
+        });
+      }
+    } else {
+      const driverSkip = skip - leadCount;
+      driversData = await prisma.driver.findMany({
+        where,
+        skip: driverSkip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
+          vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true } },
+          subscription: { select: { plan: true, endDate: true, isActive: true } },
+          documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
+        },
+      });
+    }
+  } else {
+    driversData = await prisma.driver.findMany({
       where,
-      skip: (q.page - 1) * q.limit,
-      take: q.limit,
+      skip,
+      take: limit,
       orderBy: { createdAt: 'desc' },
       include: {
         user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
@@ -840,25 +1076,35 @@ export async function getDrivers(q: DriversQuery) {
         subscription: { select: { plan: true, endDate: true, isActive: true } },
         documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
       },
-    }),
-  ]);
+    });
+  }
 
-  const drivers = await Promise.all(
-    rawDrivers.map(async (d) => {
+  const processedDrivers = await Promise.all(
+    driversData.map(async (d) => {
       let complianceScore = 0;
       if (d.dlVerifStatus === 'VERIFIED') complianceScore += 30;
       if (d.isDocVerified) complianceScore += 40;
       if (d.user?.isActive) complianceScore += 10;
       if (d.vehicle?.rcVerifStatus === 'VERIFIED') complianceScore += 20;
       const resolvedDocs = await s3Service.resolveDocumentsUrls(d.documents);
-      return { ...d, complianceScore, documents: resolvedDocs };
+      return { ...d, source: 'APP' as const, complianceScore, documents: resolvedDocs };
     })
   );
 
-  return { total, page: q.page, limit: q.limit, data: drivers };
+  const combined = [...leadsData, ...processedDrivers];
+  return { total, page: q.page, limit: q.limit, data: combined };
 }
 
 export async function getDriverById(id: string) {
+  if (id.startsWith('lead_')) {
+    const leadId = id.replace(/^lead_/, '');
+    const lead = await prisma.formDriverLead.findUnique({ where: { id: leadId } });
+    if (!lead) throw AppError.notFound('Driver lead not found');
+    const item = mapLeadToDriverItem(lead);
+    item.documents = await s3Service.resolveDocumentsUrls(item.documents);
+    return item;
+  }
+
   const driver = await prisma.driver.findUnique({
     where: { id },
     include: {
@@ -872,7 +1118,234 @@ export async function getDriverById(id: string) {
   });
   if (!driver) throw AppError.notFound('Driver not found');
   const resolvedDocs = await s3Service.resolveDocumentsUrls(driver.documents);
-  return { ...driver, documents: resolvedDocs };
+  return { ...driver, source: 'APP' as const, documents: resolvedDocs };
+}
+
+export async function convertLeadToDriver(leadId: string) {
+  const cleanLeadId = leadId.replace(/^lead_/, '');
+  const lead = await prisma.formDriverLead.findUnique({ where: { id: cleanLeadId } });
+  if (!lead) throw AppError.notFound('Driver lead not found');
+
+  const rawPhone = lead.phone || '';
+  const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
+  if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+    throw AppError.badRequest('Invalid mobile phone number on lead');
+  }
+
+  const name = (lead.name || 'Driver').trim();
+  const email = lead.email ? lead.email.trim() : null;
+
+  // 1. Upsert User as DRIVER
+  const user = await prisma.user.upsert({
+    where: { phone: cleanPhone },
+    create: {
+      phone: cleanPhone,
+      name,
+      email,
+      role: UserRole.DRIVER,
+      profileComplete: true,
+      isActive: true,
+      profileImageUrl: lead.profilePhotoUrl || null,
+    },
+    update: {
+      name,
+      email: email || undefined,
+      role: UserRole.DRIVER,
+      profileComplete: true,
+      isActive: true,
+      profileImageUrl: lead.profilePhotoUrl || undefined,
+    },
+  });
+
+  // 2. Upsert Vehicle
+  const regNo = (lead.vehicleNumber || `VH_${cleanPhone}`).trim().toUpperCase().replace(/\s+/g, ' ');
+  let vehicle = await prisma.vehicle.findUnique({ where: { registrationNo: regNo } });
+  if (!vehicle) {
+    vehicle = await prisma.vehicle.create({
+      data: {
+        registrationNo: regNo,
+        type: lead.vehicleType as VehicleType,
+        make: 'Commercial',
+        model: lead.vehicleType ? String(lead.vehicleType).replace(/_/g, ' ') : 'Truck',
+        year: new Date().getFullYear(),
+        capacityKg: getVehicleDefaultCapacity(lead.vehicleType),
+        rcVerifStatus: UlipVerifStatus.VERIFIED,
+        rcVerifiedAt: new Date(),
+        isActive: true,
+        ownerName: name,
+      },
+    });
+  } else {
+    vehicle = await prisma.vehicle.update({
+      where: { id: vehicle.id },
+      data: {
+        type: lead.vehicleType as VehicleType,
+        rcVerifStatus: UlipVerifStatus.VERIFIED,
+        rcVerifiedAt: new Date(),
+        isActive: true,
+      },
+    });
+  }
+
+  // 3. Upsert Driver
+  const rawDl = (lead.dlNumber || `DL_${cleanPhone}`).trim().toUpperCase();
+  const conflictingDriver = await prisma.driver.findFirst({
+    where: { licenseNumber: rawDl, NOT: { userId: user.id } },
+  });
+  const safeLicenseNumber = conflictingDriver ? `${rawDl}_${cleanPhone}` : rawDl;
+
+  const driver = await prisma.driver.upsert({
+    where: { userId: user.id },
+    create: {
+      userId: user.id,
+      licenseNumber: safeLicenseNumber,
+      dlNumber: safeLicenseNumber,
+      vehicleId: vehicle.id,
+      status: DriverStatus.OFFLINE,
+      isDocVerified: true,
+      isActive: true,
+      dlVerifStatus: UlipVerifStatus.VERIFIED,
+      dlVerifiedAt: new Date(),
+    },
+    update: {
+      licenseNumber: safeLicenseNumber,
+      dlNumber: safeLicenseNumber,
+      vehicleId: vehicle.id,
+      isDocVerified: true,
+      isActive: true,
+      dlVerifStatus: UlipVerifStatus.VERIFIED,
+      dlVerifiedAt: new Date(),
+    },
+  });
+
+  // 4. Create / Update Driver Documents
+  const docMappings = [
+    { type: 'SELFIE', url: lead.profilePhotoUrl },
+    { type: 'DL_FRONT', url: lead.dlFrontUrl },
+    { type: 'DL_BACK', url: lead.dlBackUrl },
+    { type: 'RC_FRONT', url: lead.rcBookUrl },
+    { type: 'AADHAAR_FRONT', url: lead.aadharFrontUrl },
+    { type: 'AADHAAR_BACK', url: lead.aadharBackUrl },
+    { type: 'PERMIT', url: lead.insuranceUrl },
+  ];
+
+  for (const item of docMappings) {
+    if (item.url) {
+      const existing = await prisma.driverDocument.findFirst({
+        where: { driverId: driver.id, type: item.type },
+      });
+      if (existing) {
+        await prisma.driverDocument.update({
+          where: { id: existing.id },
+          data: {
+            fileUrl: item.url,
+            status: DocumentStatus.VERIFIED,
+            verifiedAt: new Date(),
+            rejectedReason: null,
+          },
+        });
+      } else {
+        await prisma.driverDocument.create({
+          data: {
+            driverId: driver.id,
+            type: item.type,
+            fileUrl: item.url,
+            status: DocumentStatus.VERIFIED,
+            verifiedAt: new Date(),
+          },
+        });
+      }
+    }
+  }
+
+  // 5. Provision 90-Day Driver Subscription
+  const now = new Date();
+  const endDate = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+  await prisma.driverSubscription.upsert({
+    where: { driverId: driver.id },
+    create: {
+      driverId: driver.id,
+      plan: SubscriptionPlan.PREMIUM,
+      pricePerMonth: 9900,
+      startDate: now,
+      endDate: endDate,
+      isActive: true,
+      paymentReference: `admin_website_convert_${Date.now()}`,
+      paymentMethod: 'website_onboard_admin_approved',
+    },
+    update: {
+      plan: SubscriptionPlan.PREMIUM,
+      pricePerMonth: 9900,
+      startDate: now,
+      endDate: endDate,
+      isActive: true,
+      paymentReference: `admin_website_convert_${Date.now()}`,
+      paymentMethod: 'website_onboard_admin_approved',
+    },
+  });
+
+  // 6. Ensure Driver Wallet exists
+  await prisma.driverWallet.upsert({
+    where: { driverId: driver.id },
+    create: { driverId: driver.id, cachedBalance: 0 },
+    update: {},
+  });
+
+  // 7. Update FormDriverLead status to CONVERTED
+  await prisma.formDriverLead.update({
+    where: { id: cleanLeadId },
+    data: {
+      status: LeadStatus.CONVERTED,
+      notes: `Approved & Converted to Driver account (Driver ID: ${driver.id}, User ID: ${user.id}) on ${new Date().toISOString()}`,
+    },
+  });
+
+  // 8. Notifications
+  try {
+    if (user.fcmToken) {
+      await notificationService.sendToDevice(user.fcmToken, {
+        title: '🎉 Account Verified!',
+        body: 'Your driver account has been approved by admin! Log in to get loads.',
+        data: { type: 'ACCOUNT_VERIFIED' },
+      });
+    }
+    await createNotification(
+      user.id,
+      '🎉 Account Verified!',
+      'Your driver account has been approved by admin! You can now start taking trips.',
+      NotificationType.SYSTEM,
+    );
+  } catch (err) {
+    logger.warn('[convertLeadToDriver] Failed to send notification', err);
+  }
+
+  logger.info(`[convertLeadToDriver] Successfully converted lead ${cleanLeadId} into verified Driver ${driver.id}`);
+
+  return {
+    success: true,
+    driverId: driver.id,
+    userId: user.id,
+    name: user.name,
+    phone: user.phone,
+    isDocVerified: true,
+  };
+}
+
+export async function rejectLeadFromVerification(leadId: string, reason?: string) {
+  const cleanLeadId = leadId.replace(/^lead_/, '');
+  const lead = await prisma.formDriverLead.findUnique({ where: { id: cleanLeadId } });
+  if (!lead) throw AppError.notFound('Driver lead not found');
+
+  await prisma.formDriverLead.update({
+    where: { id: cleanLeadId },
+    data: {
+      status: LeadStatus.REJECTED,
+      notes: reason ? `Rejected by Admin: ${reason}` : 'Rejected in driver verification by Admin',
+    },
+  });
+
+  logger.info(`[rejectLeadFromVerification] Lead ${cleanLeadId} rejected by admin`);
+  return { success: true, leadId: cleanLeadId, status: LeadStatus.REJECTED };
 }
 
 export async function updateDocumentStatus(driverId: string, docId: string, input: DocStatusInput) {

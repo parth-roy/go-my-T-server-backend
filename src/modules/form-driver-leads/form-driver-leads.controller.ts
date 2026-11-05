@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { formDriverLeadService } from './form-driver-leads.service';
+import * as adminService from '../admin/admin.service';
 import { logger } from '@shared/logger';
 
 export const formDriverLeadController = {
@@ -122,6 +123,19 @@ export const formDriverLeadController = {
         success: true,
         data: lead,
         message: 'Lead updated successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  convertLead: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await adminService.convertLeadToDriver(req.params.id as string);
+      return res.status(200).json({
+        success: true,
+        data: result,
+        message: 'Lead converted to verified driver successfully',
       });
     } catch (error) {
       next(error);

@@ -241,6 +241,21 @@ export const getDriverVerifLogs = async (req: Request, res: Response, next: Next
   try { ok(res, await adminService.getDriverVerificationLogs(p(req.params.id))); } catch (e) { next(e); }
 };
 
+export const convertLeadToDriver = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const leadId = p(req.params.id).replace(/^lead_/, '');
+    ok(res, await adminService.convertLeadToDriver(leadId));
+  } catch (e) { next(e); }
+};
+
+export const rejectLeadFromVerification = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const leadId = p(req.params.id).replace(/^lead_/, '');
+    const { reason } = req.body || {};
+    ok(res, await adminService.rejectLeadFromVerification(leadId, reason));
+  } catch (e) { next(e); }
+};
+
 export const softDeleteDriver = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { reason } = deleteEntitySchema.parse(req.body);
