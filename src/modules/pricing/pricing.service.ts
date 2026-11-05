@@ -17,7 +17,7 @@ import { logger } from '@shared/logger';
 import { getRedis } from '@config/redis';
 import crypto from 'crypto';
 import { dfmePricingEngine } from './dfme-engine';
-import { VEHICLE_PRICING } from '../../database/seed-pricing';
+import { FALLBACK_VEHICLE_CATALOGUE, FallbackVehiclePricing } from './vehicle-catalogue';
 import type {
   FareEstimateRequest,
   FareEstimateResponse,
@@ -89,9 +89,9 @@ async function getVehiclePricingCached() {
     logger.warn('[Pricing] DB vehicle fetch failed:', err);
   }
 
-  // Ensure any newly added vehicles in VEHICLE_PRICING are available even before next DB seed
+  // Ensure any newly added vehicles in FALLBACK_VEHICLE_CATALOGUE are available even before next DB seed
   const existingTypes = new Set(vehicles.map((v: any) => v.vehicleType));
-  for (const fallback of VEHICLE_PRICING) {
+  for (const fallback of FALLBACK_VEHICLE_CATALOGUE) {
     if (fallback.isActive && !existingTypes.has(fallback.vehicleType)) {
       vehicles.push(fallback);
     }
@@ -377,7 +377,7 @@ export const pricingService = {
     }
 
     if (!vehicle) {
-      const fallback = VEHICLE_PRICING.find((v) => v.vehicleType === vehicleType);
+      const fallback = FALLBACK_VEHICLE_CATALOGUE.find((v: FallbackVehiclePricing) => v.vehicleType === vehicleType);
       if (fallback && fallback.isActive) {
         vehicle = fallback;
       }
