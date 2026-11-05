@@ -13,7 +13,7 @@ import {
   PaymentStatus,
 } from '@prisma/client';
 
-const COMMISSION_RATE = Number(process.env.PLATFORM_COMMISSION_RATE ?? 0.20); // 20%
+const COMMISSION_RATE = Number(process.env.PLATFORM_COMMISSION_RATE ?? 0.20); // 20% legacy fallback if no pricingAuditLog found
 const COMMISSION_SOFT_ALERT = Number(process.env.COMMISSION_SOFT_ALERT_THRESHOLD ?? -500);
 const COMMISSION_HARD_BLOCK  = Number(process.env.COMMISSION_HARD_BLOCK_THRESHOLD ?? -2000);
 const MIN_WITHDRAWAL         = Number(process.env.MIN_WITHDRAWAL_AMOUNT ?? 50);
@@ -118,8 +118,22 @@ export interface TripSettlementInput {
 export async function settleTripEarnings(input: TripSettlementInput) {
   const { bookingId, driverId, grossAmount, paymentMethod, fleetOwnerId } = input;
 
-  const commission  = Math.round(grossAmount * COMMISSION_RATE * 100) / 100;
-  const driverNet   = Math.round((grossAmount - commission) * 100) / 100;
+  let calculatedCommission = Math.round(grossAmount * COMMISSION_RATE * 100) / 100;
+  let calculatedDriverNet  = Math.round((grossAmount - calculatedCommission) * 100) / 100;
+
+  try {
+    const auditLog = await prisma.pricingAuditLog.findFirst({
+      where: { bookingId },
+      orderBy: { calculatedAt: 'desc' },
+    });
+    if (auditLog && typeof auditLog.driverPayout === 'number' && auditLog.driverPayout > 0) {
+      calculatedDriverNet = Math.min(grossAmount, Math.round(auditLog.driverPayout * 100) / 100);
+      calculatedCommission = Math.max(0, Math.round((grossAmount - calculatedDriverNet) * 100) / 100);
+    }
+  } catch { /* non-fatal fallback */ }
+
+  const commission  = calculatedCommission;
+  const driverNet   = calculatedDriverNet;
   const isCash      = paymentMethod === PaymentMethod.CASH;
 
   return prisma.$transaction(async (tx) => {

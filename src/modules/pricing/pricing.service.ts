@@ -15,6 +15,8 @@ import { AppError } from '@shared/errors/AppError';
 import { mapsService } from '@modules/maps/maps.service';
 import { logger } from '@shared/logger';
 import { getRedis } from '@config/redis';
+import crypto from 'crypto';
+import { dfmePricingEngine } from './dfme-engine';
 import type {
   FareEstimateRequest,
   FareEstimateResponse,
@@ -363,38 +365,71 @@ export const pricingService = {
 
     const distanceSource = (distanceKm > 0 ? 'mapbox' : 'haversine_fallback') as 'mapbox' | 'haversine_fallback';
 
-    // ── [5–6] Base + distance fare ────────────────────────────────────────
-    const baseFare     = vehicle.baseFare;
-    const distanceFare = distanceKm * vehicle.pricePerKm;
+    // ── [DFME v2.6] Algorithmic Pricing Engine Execution ─────────────────
+    let originCity = req.originCity || '';
+    let originState = req.originState || '';
+    let destCity = req.destinationCity || '';
+    let destState = req.destinationState || '';
 
-    // ── [7] Time/congestion fare (capped at 2× distance fare) ─────────────
-    const rawTimeFare  = computeTimeFare(
-      durationMinutes,
-      vehicle.timeFreeMinutes ?? 30,
-      vehicle.timeChargePerMin ?? 1.5,
-      config.time_charge_enabled,
-    );
-    const timeFare     = Math.min(rawTimeFare, 2 * distanceFare);
+    // Fast geocode reverse fallback if not provided
+    if (!originCity || !originState) {
+      try {
+        const geoO = await mapsService.reverseGeocode(pickupLat, pickupLng);
+        if (geoO) {
+          originCity = geoO.city || originCity;
+          originState = geoO.state || originState;
+        }
+      } catch {}
+    }
+    if (!destCity || !destState) {
+      try {
+        const lastPt = normalizedStops[normalizedStops.length - 1];
+        const geoD = await mapsService.reverseGeocode(lastPt.lat, lastPt.lng);
+        if (geoD) {
+          destCity = geoD.city || destCity;
+          destState = geoD.state || destState;
+        }
+      } catch {}
+    }
 
-    // ── [8] Fuel surcharge ────────────────────────────────────────────────
-    const fuelSurcharge = computeFuelSurcharge(distanceFare, config);
+    const dfmeQuote = dfmePricingEngine.priceShipment({
+      enquiryId: req.bookingId ?? `ENQ-${Date.now()}`,
+      originCity,
+      originState,
+      destinationCity: destCity,
+      destinationState: destState,
+      tripDistanceKm: distanceKm,
+      estimatedDurationMin: durationMinutes,
+      vehicleCode: vehicleType,
+      goodsType: req.goodsType ?? 'General Goods',
+      goodsWeightKg: req.goodsWeightKg ?? vehicle.capacityKg,
+      stopsCount: normalizedStops.length,
+      channel: 'CUSTOMER_APP',
+      isPtl: req.isPtl,
+      ptlLengthCm: req.ptlLengthCm,
+      ptlBreadthCm: req.ptlBreadthCm,
+      ptlHeightCm: req.ptlHeightCm,
+      ptlPackages: req.ptlPackages,
+      declaredInvoiceValueInr: req.declaredInvoiceValueInr,
+      riskType: req.riskType,
+      isOdaRemote: req.isOdaRemote,
+      isHolidayOrSunday: req.isHolidayOrSunday,
+    });
 
-    // ── [9] Surge multiplier (1.0 in Stage 1) ────────────────────────────
-    const { multiplier: surgeMultiplier, surgeActive, surgeReason } = await getSurgeMultiplier(
-      pickupLat, pickupLng, vehicleType, config
-    );
-    const hardCap = vehicle.surgeHardCap ?? 1.5;
-    const effectiveSurge = Math.min(surgeMultiplier, hardCap);
-
-    // ── [10] Apply surge to core fare ─────────────────────────────────────
-    const coreFare = (baseFare + distanceFare + timeFare + fuelSurcharge) * effectiveSurge;
+    // Core fare governed by DFME sell quote (with minimum fare floor safeguard)
+    const coreFare = dfmeQuote.customerSellQuoteInr;
+    const baseFare = round(Math.min(vehicle.baseFare, coreFare * 0.30));
+    const distanceFare = round(Math.max(0, coreFare - baseFare));
+    const timeFare = 0; // Integrated in DFME spatial congestion model
+    const fuelSurcharge = round(dfmeQuote.fuelCostInr);
+    const effectiveSurge = 1.0;
 
     // ── [11] Add-ons (not surged) ─────────────────────────────────────────
     const loadingCharge   = helpers * (vehicle.loadingChargePerHelper ?? 400);
     const insuranceCharge = insuranceOpted ? config.insurance_base_charge : 0;
 
     // ── [12–13] Subtotal + minimum fare floor ─────────────────────────────
-    const subtotal  = coreFare + loadingCharge + insuranceCharge;
+    const subtotal  = round(coreFare + loadingCharge + insuranceCharge);
     const totalFare = Math.max(subtotal, vehicle.minFare + loadingCharge + insuranceCharge);
 
     // ── [14] GST ──────────────────────────────────────────────────────────
@@ -405,21 +440,42 @@ export const pricingService = {
     const totalGst     = freightGst + loadingGst + insuranceGst;
     const grandTotal   = round(totalFare + totalGst);
 
-    // ── [15] Commission & driver payout ───────────────────────────────────
-    const commissionRate   = config.platform_commission_rate;
-    const commissionBase   = totalFare - loadingCharge; // No commission on loading
-    const commissionAmount = round(commissionBase * commissionRate);
-    const driverPayoutGross = totalFare - commissionAmount;
+    // ── [15] Driver Payout & Platform Margin (Guaranteed by DFME Operating Floor & Buy Target) ──
+    const dfmeDriverTarget = round(dfmeQuote.operatorBuyTargetInr + loadingCharge);
+    const driverPayoutGross = Math.max(dfmeDriverTarget, totalFare - round(totalFare * config.platform_commission_rate));
+    const commissionAmount = round(Math.max(0, totalFare - driverPayoutGross));
+    const effectiveCommission = totalFare > 0 ? round(commissionAmount / totalFare, 4) : 0;
 
     // ── [16] MPP enforcement ──────────────────────────────────────────────
-    const { finalPayout, effectiveCommission, subsidyAmount } = await enforceDriverMPP(
+    const { finalPayout, subsidyAmount } = await enforceDriverMPP(
       driverPayoutGross,
       totalFare,
-      commissionRate,
+      effectiveCommission,
       distanceKm,
       vehicle.tcoPerKm ?? 15,
       req.bookingId,
     );
+
+    // ── Ephemeral Quote Token (15-min cache for 0% price disruption on booking) ──
+    const quoteToken = `qt_${crypto.randomUUID()}`;
+    try {
+      const redis = getRedis();
+      const quoteCache = {
+        quoteToken,
+        pickupLat,
+        pickupLng,
+        dropLat,
+        dropLng,
+        vehicleType,
+        totalFare,
+        grandTotal,
+        driverPayout: finalPayout,
+        estimatedDistanceKm: round(distanceKm, 1),
+        estimatedDurationMinutes: durationMinutes,
+        createdAt: Date.now(),
+      };
+      await redis.setex(`pricing:quote:${quoteToken}`, 900, JSON.stringify(quoteCache));
+    } catch { /* non-fatal if Redis down */ }
 
     // ── Assemble components for audit log ─────────────────────────────────
     const components: FareComponents = {
@@ -485,8 +541,8 @@ export const pricingService = {
         timeFare:        components.timeFare,
         fuelSurcharge:   components.fuelSurcharge,
         surgeMultiplier: components.surgeMultiplier,
-        surgeActive,
-        surgeReason,
+        surgeActive:     false,
+        surgeReason:     null,
         loadingCharge:   components.loadingCharge,
         insuranceCharge: components.insuranceCharge,
         subtotal:        components.subtotal,
@@ -511,8 +567,10 @@ export const pricingService = {
       },
 
       tollInfo: {
-        estimatedToll: 0,
-        note: 'Actual toll charges will be added at trip end based on FASTag records',
+        estimatedToll: round(dfmeQuote.tollCostInr),
+        note: dfmeQuote.tollCostInr > 0
+          ? `₹${round(dfmeQuote.tollCostInr)} estimated FASTag toll included across route`
+          : 'Actual toll charges will be added at trip end based on FASTag records',
       },
 
       driverPayout:    components.driverPayout,
@@ -520,9 +578,36 @@ export const pricingService = {
 
       vehicle: vehicleInfo,
       distanceSource: components.distanceSource,
-      surgeActive,
+      surgeActive: false,
       estimatedAt: new Date().toISOString(),
+
+      quoteToken,
+      quoteRangeLow: dfmeQuote.customerQuoteRangeLowInr,
+      quoteRangeHigh: dfmeQuote.customerQuoteRangeHighInr,
+      confidenceScore: dfmeQuote.confidenceScorePct,
+      governanceStatus: dfmeQuote.governanceStatus,
+      dfmeQuote: {
+        regime: dfmeQuote.pricingRegime,
+        costFloor: dfmeQuote.deterministicCostFloorInr,
+        buyTarget: dfmeQuote.operatorBuyTargetInr,
+        sellQuote: dfmeQuote.customerSellQuoteInr,
+        quoteRangeLow: dfmeQuote.customerQuoteRangeLowInr,
+        quoteRangeHigh: dfmeQuote.customerQuoteRangeHighInr,
+        directionalLambda: dfmeQuote.directionalLambda,
+        dieselIndex: dfmeQuote.dieselIndexMultiplier,
+        seasonality: dfmeQuote.seasonalCalendarMultiplier,
+        commodityMultiplier: dfmeQuote.commodityAndStopMultiplier,
+        detentionInr: dfmeQuote.detentionAndAccessorialInr,
+        confidenceScore: dfmeQuote.confidenceScorePct,
+        governanceStatus: dfmeQuote.governanceStatus,
+        auditNotes: dfmeQuote.auditNotes,
+      },
     };
+
+    try {
+      const redis = getRedis();
+      await redis.setex(`pricing:quote:${quoteToken}`, 900, JSON.stringify(response));
+    } catch { /* non-fatal if Redis down */ }
 
     logger.info(
       `[Pricing] ${vehicleType} ${components.distanceKm}km → ` +
@@ -635,6 +720,20 @@ export const pricingService = {
     const routePoints = [{ lat: pickupLat, lng: pickupLng }, ...normalizedStops];
     const { distanceKm, durationMinutes } = await mapsService.getRouteDistanceMatrix(routePoints);
 
+    // Resolve city/state for directional multiplier
+    let originCity = '';
+    let originState = '';
+    let destCity = '';
+    let destState = '';
+    try {
+      const [geoO, geoD] = await Promise.all([
+        mapsService.reverseGeocode(pickupLat, pickupLng),
+        mapsService.reverseGeocode(normalizedStops[normalizedStops.length - 1].lat, normalizedStops[normalizedStops.length - 1].lng),
+      ]);
+      if (geoO) { originCity = geoO.city || ''; originState = geoO.state || ''; }
+      if (geoD) { destCity = geoD.city || ''; destState = geoD.state || ''; }
+    } catch {}
+
     // ── [3] Load config + vehicles from cache (no extra DB/API calls) ─────
     const [vehicles, config] = await Promise.all([
       getVehiclePricingCached(),
@@ -646,46 +745,45 @@ export const pricingService = {
       throw AppError.badRequest(`Minimum trip distance is ${config.min_trip_distance_km} km`, 'DISTANCE_TOO_SHORT');
     }
 
-    // ── [4] Compute price for each vehicle type in memory (no extra I/O) ──
+    // ── [4] Compute price for each vehicle type via DFME v2.6 in memory ──
     const results = await Promise.all(
       (vehicles as any[]).map(async (vehicle) => {
-        const baseFare     = vehicle.baseFare as number;
-        const distanceFare = distanceKm * (vehicle.pricePerKm as number);
+        const dfmeQuote = dfmePricingEngine.priceShipment({
+          enquiryId: `BULK-${Date.now()}`,
+          originCity,
+          originState,
+          destinationCity: destCity,
+          destinationState: destState,
+          tripDistanceKm: distanceKm,
+          estimatedDurationMin: durationMinutes,
+          vehicleCode: vehicle.vehicleType,
+          goodsWeightKg: vehicle.capacityKg,
+          stopsCount: normalizedStops.length,
+          channel: 'CUSTOMER_APP',
+        });
 
-        // Time fare (capped at 2× distance fare)
-        const rawTimeFare = computeTimeFare(
-          durationMinutes,
-          vehicle.timeFreeMinutes ?? 30,
-          vehicle.timeChargePerMin ?? 1.5,
-          config.time_charge_enabled,
-        );
-        const timeFare = Math.min(rawTimeFare, 2 * distanceFare);
+        // Core fare from DFME sell quote (with minimum fare floor safeguard)
+        const totalFare = Math.max(dfmeQuote.customerSellQuoteInr, vehicle.minFare as number);
 
-        // Fuel surcharge
-        const fuelSurcharge = computeFuelSurcharge(distanceFare, config);
-
-        // Surge (always 1.0 in Stage 1; getSurgeMultiplier is fast — Redis read only)
-        const { multiplier: surgeMultiplier, surgeActive } = await getSurgeMultiplier(
-          pickupLat, pickupLng, vehicle.vehicleType, config
-        );
-        const effectiveSurge = Math.min(surgeMultiplier, vehicle.surgeHardCap ?? 1.5);
-
-        // Core fare — no loading/insurance in bulk display
-        const coreFare  = (baseFare + distanceFare + timeFare + fuelSurcharge) * effectiveSurge;
-        const subtotal  = coreFare;
-        const totalFare = Math.max(subtotal, vehicle.minFare as number);
-
-        // GST on freight only (no loading/insurance)
+        // GST on freight only (no loading/insurance in bulk display)
         const freightGst = round(totalFare * config.gst_rate_freight);
         const grandTotal = round(totalFare + freightGst);
 
         return {
           vehicleType:      vehicle.vehicleType as string,
+          displayName:      vehicle.displayName,
+          capacityKg:       vehicle.capacityKg,
+          capacityDesc:     vehicle.capacityDesc,
           grandTotal,
           totalFare:        round(totalFare),
           distanceKm:       round(distanceKm, 1),
           durationMinutes,
-          surgeActive,
+          surgeActive:      false,
+          buyTarget:        dfmeQuote.operatorBuyTargetInr,
+          quoteRangeLow:    dfmeQuote.customerQuoteRangeLowInr,
+          quoteRangeHigh:   dfmeQuote.customerQuoteRangeHighInr,
+          confidenceScore:  dfmeQuote.confidenceScorePct,
+          estimatedToll:    round(dfmeQuote.tollCostInr),
         };
       })
     );

@@ -290,27 +290,45 @@ export async function createBooking(customerId: string, data: CreateBookingInput
     // }
 
     // â”€â”€ FIX CRITICAL-1: Server-side fare recalculation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    let serverFare: FareEstimateResponse;
-    try {
-        const lastStop = stops[stops.length - 1];
-        serverFare = await pricingService.estimateFare({
-            pickupLat: data.pickupLat,
-            pickupLng: data.pickupLng,
-            dropLat: lastStop.latitude,
-            dropLng: lastStop.longitude,
-            stops: stops.map((s: any) => ({
-                latitude: s.latitude,
-                longitude: s.longitude,
-                address: s.address,
-            })),
-            vehicleType: data.vehicleType,
-            hasLoadingService: data.laborRequired || data.hasLoadingService,
-            helperCount: data.laborRequired ? data.laborersCount : undefined,
-            insuranceOpted: data.insuranceOpted,
-        });
-    } catch (err) {
-        logger.error('Server-side fare calculation failed:', err);
-        throw AppError.internal('Unable to calculate fare. Please try again.');
+    let serverFare: FareEstimateResponse | null = null;
+    if (data.quoteToken) {
+        try {
+            const redis = getRedis();
+            const cachedStr = await redis.get(`pricing:quote:${data.quoteToken}`);
+            if (cachedStr) {
+                const cached = JSON.parse(cachedStr) as FareEstimateResponse;
+                if (cached && cached.vehicle && cached.vehicle.vehicleType === data.vehicleType) {
+                    serverFare = cached;
+                    logger.info(`[Booking] Using exact cached quoteToken ${data.quoteToken} for booking (fare: ₹${serverFare.totalFare})`);
+                }
+            }
+        } catch (err) {
+            logger.warn('[Booking] Quote token lookup failed, falling back to recalculation:', err);
+        }
+    }
+
+    if (!serverFare) {
+        try {
+            const lastStop = stops[stops.length - 1];
+            serverFare = await pricingService.estimateFare({
+                pickupLat: data.pickupLat,
+                pickupLng: data.pickupLng,
+                dropLat: lastStop.latitude,
+                dropLng: lastStop.longitude,
+                stops: stops.map((s: any) => ({
+                    latitude: s.latitude,
+                    longitude: s.longitude,
+                    address: s.address,
+                })),
+                vehicleType: data.vehicleType,
+                hasLoadingService: data.laborRequired || data.hasLoadingService,
+                helperCount: data.laborRequired ? data.laborersCount : undefined,
+                insuranceOpted: data.insuranceOpted,
+            });
+        } catch (err) {
+            logger.error('Server-side fare calculation failed:', err);
+            throw AppError.internal('Unable to calculate fare. Please try again.');
+        }
     }
 
     // â”€â”€ Maximum distance validation removed for all-India service â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -326,12 +344,15 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         );
     }
 
-    // Validate client-supplied fare is within 10% of server-calculated fare
+    // Validate client-supplied fare is within 10% of server-calculated fare (checks both pre-GST totalFare and post-GST grandTotal to prevent client format mismatch)
     if (estimatedFare !== undefined) {
-        const deviation = Math.abs(estimatedFare - serverFare.totalFare) / serverFare.totalFare;
-        if (deviation > 0.10) {
+        const targetFare = serverFare.totalFare;
+        const targetGrand = serverFare.grandTotal;
+        const devPreGst = targetFare > 0 ? Math.abs(estimatedFare - targetFare) / targetFare : 0;
+        const devPostGst = targetGrand > 0 ? Math.abs(estimatedFare - targetGrand) / targetGrand : 1.0;
+        if (devPreGst > 0.10 && devPostGst > 0.10) {
             throw AppError.badRequest(
-                `Fare has changed. Server fare: â‚¹${serverFare.totalFare}. Please refresh and try again.`,
+                `Fare has changed. Server fare: ₹${serverFare.totalFare}. Please refresh and try again.`,
                 'FARE_MISMATCH'
             );
         }

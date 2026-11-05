@@ -17,6 +17,24 @@ export interface FareEstimateRequest {
   insuranceOpted?: boolean;
   stops?:          Array<{ lat?: number; lng?: number; latitude?: number; longitude?: number; address?: string }>;
   bookingId?:      string;       // present when re-validating on booking confirm
+
+  // ── Additive DFME v2.6 parameters ──────────────────────────────────────────
+  originCity?:              string;
+  originState?:             string;
+  destinationCity?:         string;
+  destinationState?:        string;
+  goodsType?:               string;
+  goodsWeightKg?:           number;
+  isPtl?:                   boolean;
+  ptlLengthCm?:             number;
+  ptlBreadthCm?:            number;
+  ptlHeightCm?:             number;
+  ptlPackages?:             number;
+  declaredInvoiceValueInr?: number;
+  riskType?:                string;
+  isOdaRemote?:             boolean;
+  isHolidayOrSunday?:       boolean;
+  quoteToken?:              string;
 }
 
 // ── Internal calculation state ────────────────────────────────────────────────
@@ -129,6 +147,29 @@ export interface FareEstimateResponse {
   distanceSource:  'mapbox' | 'haversine_fallback';
   surgeActive:     boolean;
   estimatedAt:     string;
+
+  // ── Additive DFME v2.6 Enterprise Fields ──────────────────────────────────
+  quoteToken?:       string;
+  quoteRangeLow?:    number;
+  quoteRangeHigh?:   number;
+  confidenceScore?:  number;
+  governanceStatus?: string;
+  dfmeQuote?: {
+    regime:                      string;
+    costFloor:                   number;
+    buyTarget:                   number;
+    sellQuote:                   number;
+    quoteRangeLow:               number;
+    quoteRangeHigh:              number;
+    directionalLambda:           number;
+    dieselIndex:                 number;
+    seasonality:                 number;
+    commodityMultiplier:         number;
+    detentionInr:                number;
+    confidenceScore:             number;
+    governanceStatus:            string;
+    auditNotes:                  string[];
+  };
 }
 
 // ── Waiting charge ────────────────────────────────────────────────────────────

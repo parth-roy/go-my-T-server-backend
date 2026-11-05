@@ -51,6 +51,7 @@ export const createBookingSchema = z.object({
     // Fare from the pricing engine — stored as totalFare until Pricing Engine is fully server-side
     estimatedFare: z.number().positive().optional(),
     estimatedDistanceKm: z.number().positive().optional(),
+    quoteToken: z.string().optional(),
     // Booking Persona & Urgency Timer
     bookingPersona: z.enum(["INDIVIDUAL", "ENTERPRISE", "CONTRACTUAL"]).optional().default("INDIVIDUAL"),
     truckCount: z.number().int().min(1).max(50).optional().default(1),
