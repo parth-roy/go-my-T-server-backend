@@ -17,6 +17,7 @@ import { logger } from '@shared/logger';
 import { getRedis } from '@config/redis';
 import crypto from 'crypto';
 import { dfmePricingEngine } from './dfme-engine';
+import { VEHICLE_PRICING } from '../../database/seed-pricing';
 import type {
   FareEstimateRequest,
   FareEstimateResponse,
@@ -75,10 +76,27 @@ async function getVehiclePricingCached() {
   const redis = getRedis();
   try {
     const cached = await redis.get(VEHICLE_CACHE_KEY);
-    if (cached) return JSON.parse(cached);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length >= 20) return parsed;
+    }
   } catch { /* Redis unavailable — fall through to DB */ }
 
-  const vehicles = await prisma.vehicleTypePricing.findMany({ where: { isActive: true } });
+  let vehicles: any[] = [];
+  try {
+    vehicles = await prisma.vehicleTypePricing.findMany({ where: { isActive: true } });
+  } catch (err) {
+    logger.warn('[Pricing] DB vehicle fetch failed:', err);
+  }
+
+  // Ensure any newly added vehicles in VEHICLE_PRICING are available even before next DB seed
+  const existingTypes = new Set(vehicles.map((v: any) => v.vehicleType));
+  for (const fallback of VEHICLE_PRICING) {
+    if (fallback.isActive && !existingTypes.has(fallback.vehicleType)) {
+      vehicles.push(fallback);
+    }
+  }
+
   try {
     await redis.setex(VEHICLE_CACHE_KEY, VEHICLE_CACHE_TTL, JSON.stringify(vehicles));
   } catch { /* non-fatal */ }
@@ -92,7 +110,12 @@ async function getPricingConfig(): Promise<PricingConfigMap> {
     if (cached) return JSON.parse(cached) as PricingConfigMap;
   } catch { /* Redis unavailable — fall through to DB */ }
 
-  const rows = await (prisma as any).pricingConfig.findMany();
+  let rows: any[] = [];
+  try {
+    rows = await (prisma as any).pricingConfig.findMany();
+  } catch (err) {
+    logger.warn('[Pricing] DB pricingConfig fetch failed, using default config:', err);
+  }
   const raw: Record<string, string> = Object.fromEntries(rows.map((r: any) => [r.key, r.value]));
 
   const config: PricingConfigMap = {
@@ -338,8 +361,28 @@ export const pricingService = {
     }
 
     // ── [2] Vehicle lookup ────────────────────────────────────────────────
-    const vehicles = await getVehiclePricingCached();
-    const vehicle = vehicles.find((v: any) => v.vehicleType === vehicleType);
+    let vehicles = await getVehiclePricingCached();
+    let vehicle = vehicles.find((v: any) => v.vehicleType === vehicleType);
+    if (!vehicle) {
+      try {
+        const fresh = await prisma.vehicleTypePricing.findUnique({
+          where: { vehicleType: vehicleType as any },
+        });
+        if (fresh && fresh.isActive) {
+          vehicle = fresh;
+          const redis = getRedis();
+          await redis.del(VEHICLE_CACHE_KEY);
+        }
+      } catch { /* DB query fallback */ }
+    }
+
+    if (!vehicle) {
+      const fallback = VEHICLE_PRICING.find((v) => v.vehicleType === vehicleType);
+      if (fallback && fallback.isActive) {
+        vehicle = fallback;
+      }
+    }
+
     if (!vehicle) {
       throw AppError.badRequest('Invalid or inactive vehicle type', 'INVALID_VEHICLE_TYPE');
     }
