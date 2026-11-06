@@ -9,7 +9,7 @@ import { logger } from '@shared/logger';
 import { sendPasswordResetEmail } from '@shared/services/email.service';
 import { notificationService } from '@modules/notifications/notification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
-import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus, BrokerQuoteStatus, BrokerBookingStatus, DriverStatus, NotificationType, LeadStatus, UlipVerifStatus, VehicleType, SubscriptionPlan } from '@prisma/client';
+import { Prisma, UserRole, BookingStatus, WalletTransactionReason, WalletTransactionType, DocumentStatus, SupportTicketStatus, BrokerQuoteStatus, BrokerBookingStatus, DriverStatus, WorkerStatus, NotificationType, LeadStatus, UlipVerifStatus, VehicleType, SubscriptionPlan } from '@prisma/client';
 import type {
   LoginInput, ForgotPasswordInput, ResetPasswordInput, RefreshInput,
   BookingsQuery, UsersQuery, DriversQuery, FleetQuery, FinanceQuery,
@@ -1995,40 +1995,427 @@ export async function getSystemHealth() {
 // WORKFORCE VERIFICATION
 // ─────────────────────────────────────────────
 
-export async function getPendingWorkerDocumentsCount() {
-  const count = await prisma.worker.count({
-    where: {
-      isDocVerified: false,
-      documents: {
-        some: { status: 'PENDING' },
-      },
+function mapGigLeadToWorkerItem(lead: any, existingWorkerPhoneSet?: Set<string>) {
+  if (lead.status === LeadStatus.CONVERTED || lead.status === LeadStatus.REJECTED) {
+    return null;
+  }
+
+  if (existingWorkerPhoneSet) {
+    const cleanPhone = String(lead.phone || '').replace(/\D/g, '').slice(-10);
+    if (cleanPhone && existingWorkerPhoneSet.has(cleanPhone)) {
+      return null;
+    }
+  }
+
+  const docs: any[] = [];
+  if (lead.profilePhotoUrl && String(lead.profilePhotoUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_selfie`,
+      type: 'SELFIE',
+      status: 'PENDING',
+      fileUrl: String(lead.profilePhotoUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.aadharFrontUrl && String(lead.aadharFrontUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_aadhaar_front`,
+      type: 'AADHAAR',
+      status: 'PENDING',
+      fileUrl: String(lead.aadharFrontUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.aadharBackUrl && String(lead.aadharBackUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_aadhaar_back`,
+      type: 'AADHAAR_BACK',
+      status: 'PENDING',
+      fileUrl: String(lead.aadharBackUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.panFrontUrl && String(lead.panFrontUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_pan_front`,
+      type: 'PAN',
+      status: 'PENDING',
+      fileUrl: String(lead.panFrontUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.dlFrontUrl && String(lead.dlFrontUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_dl_front`,
+      type: 'LICENSE',
+      status: 'PENDING',
+      fileUrl: String(lead.dlFrontUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.dlBackUrl && String(lead.dlBackUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_dl_back`,
+      type: 'DL_BACK',
+      status: 'PENDING',
+      fileUrl: String(lead.dlBackUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.rcBookUrl && String(lead.rcBookUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_rc_front`,
+      type: 'RC',
+      status: 'PENDING',
+      fileUrl: String(lead.rcBookUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+  if (lead.insuranceUrl && String(lead.insuranceUrl).trim()) {
+    docs.push({
+      id: `lead_doc_${lead.id}_insurance`,
+      type: 'PERMIT',
+      status: 'PENDING',
+      fileUrl: String(lead.insuranceUrl).trim(),
+      rejectedReason: null,
+      createdAt: lead.createdAt,
+      verifiedAt: null,
+    });
+  }
+
+  // Strictly require at least one uploaded document
+  if (docs.length === 0) {
+    return null;
+  }
+
+  const name = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Gig Worker';
+
+  return {
+    id: `lead_${lead.id}`,
+    leadId: lead.id,
+    source: 'WEBSITE' as const,
+    userId: `lead_user_${lead.id}`,
+    status: 'AVAILABLE' as WorkerStatus,
+    isDocVerified: false,
+    rating: 5.0,
+    totalJobs: 0,
+    createdAt: lead.createdAt,
+    trade: lead.jobType || 'General Helper',
+    city: lead.city || 'Kolkata',
+    area: lead.area || null,
+    locationAddress: lead.givenAddress || lead.autoAddress || `${lead.city || ''}`,
+    isLocationVerified: !!(lead.givenLat && lead.givenLng),
+    user: {
+      id: `lead_user_${lead.id}`,
+      name,
+      phone: lead.phone,
+      email: lead.email || null,
+      isActive: true,
     },
+    documents: docs,
+  };
+}
+
+export async function getPendingWorkerDocumentsCount() {
+  const existingWorkers = await prisma.worker.findMany({
+    select: { user: { select: { phone: true } } },
   });
-  return { count };
+  const existingWorkerPhoneSet = new Set(
+    existingWorkers
+      .map((w) => (w.user?.phone ? w.user.phone.replace(/\D/g, '').slice(-10) : ''))
+      .filter((p) => p.length === 10)
+  );
+
+  const excludedPhoneVariants = Array.from(existingWorkerPhoneSet).flatMap((p) => [
+    p,
+    `+91${p}`,
+    `91${p}`,
+    `0${p}`,
+  ]);
+
+  const [workerCount, leadCount] = await Promise.all([
+    prisma.worker.count({
+      where: {
+        isDocVerified: false,
+        documents: {
+          some: { status: 'PENDING' },
+        },
+      },
+    }),
+    prisma.formGigLead.count({
+      where: {
+        status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] },
+        createdAt: { gte: ONBOARDING_LEADS_CUTOFF },
+        ...(excludedPhoneVariants.length > 0 ? { phone: { notIn: excludedPhoneVariants } } : {}),
+        AND: [
+          {
+            OR: [
+              { AND: [{ profilePhotoUrl: { not: null } }, { profilePhotoUrl: { not: '' } }] },
+              { AND: [{ aadharFrontUrl: { not: null } }, { aadharFrontUrl: { not: '' } }] },
+              { AND: [{ aadharBackUrl: { not: null } }, { aadharBackUrl: { not: '' } }] },
+              { AND: [{ panFrontUrl: { not: null } }, { panFrontUrl: { not: '' } }] },
+              { AND: [{ dlFrontUrl: { not: null } }, { dlFrontUrl: { not: '' } }] },
+              { AND: [{ dlBackUrl: { not: null } }, { dlBackUrl: { not: '' } }] },
+              { AND: [{ rcBookUrl: { not: null } }, { rcBookUrl: { not: '' } }] },
+              { AND: [{ insuranceUrl: { not: null } }, { insuranceUrl: { not: '' } }] },
+            ],
+          },
+        ],
+      },
+    }),
+  ]);
+
+  return { count: workerCount + leadCount };
 }
 
 export async function getPendingWorkerDocuments() {
-  const pendingWorkers = await prisma.worker.findMany({
-    where: {
-      isDocVerified: false,
-      documents: {
-        some: { status: 'PENDING' },
-      },
-    },
-    include: {
-      user: { select: { name: true, phone: true } },
-      documents: true,
-    },
+  const existingWorkers = await prisma.worker.findMany({
+    select: { user: { select: { phone: true } } },
   });
+  const existingWorkerPhoneSet = new Set(
+    existingWorkers
+      .map((w) => (w.user?.phone ? w.user.phone.replace(/\D/g, '').slice(-10) : ''))
+      .filter((p) => p.length === 10)
+  );
+
+  const excludedPhoneVariants = Array.from(existingWorkerPhoneSet).flatMap((p) => [
+    p,
+    `+91${p}`,
+    `91${p}`,
+    `0${p}`,
+  ]);
+
+  const [pendingWorkers, rawGigLeads] = await Promise.all([
+    prisma.worker.findMany({
+      where: {
+        isDocVerified: false,
+        documents: {
+          some: { status: 'PENDING' },
+        },
+      },
+      include: {
+        user: { select: { id: true, name: true, phone: true, email: true } },
+        documents: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.formGigLead.findMany({
+      where: {
+        status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] },
+        createdAt: { gte: ONBOARDING_LEADS_CUTOFF },
+        ...(excludedPhoneVariants.length > 0 ? { phone: { notIn: excludedPhoneVariants } } : {}),
+        AND: [
+          {
+            OR: [
+              { AND: [{ profilePhotoUrl: { not: null } }, { profilePhotoUrl: { not: '' } }] },
+              { AND: [{ aadharFrontUrl: { not: null } }, { aadharFrontUrl: { not: '' } }] },
+              { AND: [{ aadharBackUrl: { not: null } }, { aadharBackUrl: { not: '' } }] },
+              { AND: [{ panFrontUrl: { not: null } }, { panFrontUrl: { not: '' } }] },
+              { AND: [{ dlFrontUrl: { not: null } }, { dlFrontUrl: { not: '' } }] },
+              { AND: [{ dlBackUrl: { not: null } }, { dlBackUrl: { not: '' } }] },
+              { AND: [{ rcBookUrl: { not: null } }, { rcBookUrl: { not: '' } }] },
+              { AND: [{ insuranceUrl: { not: null } }, { insuranceUrl: { not: '' } }] },
+            ],
+          },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
 
   const workersWithSignedDocs = await Promise.all(
     pendingWorkers.map(async (worker) => ({
       ...worker,
+      source: 'APP' as const,
       documents: await s3Service.resolveDocumentsUrls(worker.documents),
     }))
   );
 
-  return workersWithSignedDocs;
+  const gigLeadsWithSignedDocs = await Promise.all(
+    rawGigLeads.map(async (lead) => {
+      const item = mapGigLeadToWorkerItem(lead, existingWorkerPhoneSet);
+      if (!item) return null;
+      item.documents = await s3Service.resolveDocumentsUrls(item.documents);
+      return item;
+    })
+  );
+
+  const validGigLeads = gigLeadsWithSignedDocs.filter((item): item is NonNullable<typeof item> => item !== null);
+
+  return [...validGigLeads, ...workersWithSignedDocs];
+}
+
+export async function convertGigLeadToWorker(leadId: string) {
+  const cleanLeadId = leadId.replace(/^lead_/, '');
+  const lead = await prisma.formGigLead.findUnique({ where: { id: cleanLeadId } });
+  if (!lead) throw AppError.notFound('Gig lead not found');
+
+  const rawPhone = lead.phone || '';
+  const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
+  if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+    throw AppError.badRequest('Invalid mobile phone number on gig lead');
+  }
+
+  const name = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Gig Worker';
+  const email = lead.email ? lead.email.trim() : null;
+
+  // 1. Upsert User as WORKER
+  const user = await prisma.user.upsert({
+    where: { phone: cleanPhone },
+    create: {
+      phone: cleanPhone,
+      name,
+      email,
+      role: 'WORKER',
+      profileComplete: true,
+      isActive: true,
+      authProvider: 'PHONE',
+    },
+    update: {
+      role: 'WORKER',
+      name,
+      isActive: true,
+      profileComplete: true,
+      ...(email ? { email } : {}),
+    },
+  });
+
+  // 2. Upsert Worker Profile
+  const now = new Date();
+  const worker = await prisma.worker.upsert({
+    where: { userId: user.id },
+    create: {
+      userId: user.id,
+      isActive: true,
+      isDocVerified: true,
+      status: WorkerStatus.AVAILABLE,
+      rating: 5.0,
+      totalJobs: 0,
+      acceptanceRate: 100.0,
+      maxWeightKg: 100.0,
+      preferredWork: JSON.stringify({
+        services: [lead.jobType || 'General Labor'],
+        city: lead.city || 'Kolkata',
+        area: lead.area || '',
+      }),
+      aadhaarNumber: lead.aadharNumber || null,
+      panNumber: lead.panNumber || null,
+      aadhaarVerifStatus: 'VERIFIED',
+      aadhaarVerifiedAt: now,
+      panVerifStatus: 'VERIFIED',
+      panVerifiedAt: now,
+    },
+    update: {
+      isActive: true,
+      isDocVerified: true,
+      status: WorkerStatus.AVAILABLE,
+      preferredWork: JSON.stringify({
+        services: [lead.jobType || 'General Labor'],
+        city: lead.city || 'Kolkata',
+        area: lead.area || '',
+      }),
+      ...(lead.aadharNumber ? { aadhaarNumber: lead.aadharNumber, aadhaarVerifStatus: 'VERIFIED', aadhaarVerifiedAt: now } : {}),
+      ...(lead.panNumber ? { panNumber: lead.panNumber, panVerifStatus: 'VERIFIED', panVerifiedAt: now } : {}),
+    },
+  });
+
+  // 3. Create/update Worker Documents
+  const docMappings = [
+    { type: 'SELFIE', url: lead.profilePhotoUrl },
+    { type: 'AADHAAR', url: lead.aadharFrontUrl },
+    { type: 'AADHAAR_BACK', url: lead.aadharBackUrl },
+    { type: 'PAN', url: lead.panFrontUrl },
+    { type: 'LICENSE', url: lead.dlFrontUrl },
+    { type: 'DL_BACK', url: lead.dlBackUrl },
+    { type: 'RC', url: lead.rcBookUrl },
+    { type: 'PERMIT', url: lead.insuranceUrl },
+  ];
+
+  for (const item of docMappings) {
+    if (item.url && item.url.trim()) {
+      const existing = await prisma.workerDocument.findFirst({
+        where: { workerId: worker.id, type: item.type },
+      });
+      if (existing) {
+        await prisma.workerDocument.update({
+          where: { id: existing.id },
+          data: {
+            fileUrl: item.url.trim(),
+            status: DocumentStatus.VERIFIED,
+            verifiedAt: now,
+            rejectedReason: null,
+          },
+        });
+      } else {
+        await prisma.workerDocument.create({
+          data: {
+            workerId: worker.id,
+            type: item.type,
+            fileUrl: item.url.trim(),
+            status: DocumentStatus.VERIFIED,
+            verifiedAt: now,
+          },
+        });
+      }
+    }
+  }
+
+  // 4. Ensure Worker Wallet exists
+  await prisma.workerWallet.upsert({
+    where: { workerId: worker.id },
+    create: { workerId: worker.id, cachedBalance: 0 },
+    update: {},
+  });
+
+  // 5. Update FormGigLead status to CONVERTED
+  await prisma.formGigLead.update({
+    where: { id: cleanLeadId },
+    data: {
+      status: LeadStatus.CONVERTED,
+      notes: `Approved & Converted to Worker profile (Worker ID: ${worker.id}, User ID: ${user.id}) on ${new Date().toISOString()}`,
+    },
+  });
+
+  logger.info(`[convertGigLeadToWorker] Lead ${cleanLeadId} converted to Worker ${worker.id} (User: ${user.id}, Phone: ${user.phone})`);
+  return {
+    success: true,
+    workerId: worker.id,
+    userId: user.id,
+    name: user.name,
+    phone: user.phone,
+    isDocVerified: true,
+  };
+}
+
+export async function rejectGigLead(leadId: string, reason?: string) {
+  const cleanLeadId = leadId.replace(/^lead_/, '');
+  const lead = await prisma.formGigLead.findUnique({ where: { id: cleanLeadId } });
+  if (!lead) throw AppError.notFound('Gig lead not found');
+
+  await prisma.formGigLead.update({
+    where: { id: cleanLeadId },
+    data: {
+      status: LeadStatus.REJECTED,
+      notes: reason ? `Rejected by Admin: ${reason}` : 'Rejected in workforce verification by Admin',
+    },
+  });
+
+  logger.info(`[rejectGigLead] Lead ${cleanLeadId} rejected by admin`);
+  return { success: true, leadId: cleanLeadId, status: LeadStatus.REJECTED };
 }
 
 export async function verifyWorkerDocuments(workerId: string, input: any) {

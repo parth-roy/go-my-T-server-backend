@@ -191,6 +191,8 @@ import { VerifyWorkerDocumentSchema } from './admin.schema';
 adminRouter.get('/worker-documents/pending-count', ctrl.getPendingWorkerDocumentsCount);
 adminRouter.get('/worker-documents/pending', ctrl.getPendingWorkerDocuments);
 adminRouter.post('/worker-documents/:workerId/verify', validate(VerifyWorkerDocumentSchema), ctrl.verifyWorkerDocuments);
+adminRouter.post('/worker-documents/convert-lead/:leadId', ctrl.convertGigLead);
+adminRouter.post('/worker-documents/reject-lead/:leadId', ctrl.rejectGigLead);
 adminRouter.post('/workforce/:workerId/wallet-credit', ctrl.creditWorkerWallet);
 
 // ── Reconciliation & Exception Queue (Point 6) ────────────────────────────────

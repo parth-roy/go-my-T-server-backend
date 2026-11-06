@@ -566,6 +566,14 @@ export const verifyWorkerDocuments = async (req: Request, res: Response, next: N
   try { ok(res, await adminService.verifyWorkerDocuments(req.params.workerId as string, req.body)); } catch (e) { next(e); }
 };
 
+export const convertGigLead = async (req: Request, res: Response, next: NextFunction) => {
+  try { ok(res, await adminService.convertGigLeadToWorker(req.params.leadId as string)); } catch (e) { next(e); }
+};
+
+export const rejectGigLead = async (req: Request, res: Response, next: NextFunction) => {
+  try { ok(res, await adminService.rejectGigLead(req.params.leadId as string, req.body?.reason)); } catch (e) { next(e); }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BULK HARD DELETE CONTROLLERS
 // ─────────────────────────────────────────────────────────────────────────────
