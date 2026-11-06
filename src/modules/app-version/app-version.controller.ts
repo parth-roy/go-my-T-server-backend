@@ -43,9 +43,9 @@ const APP_POLICIES: Record<string, {
     packageName: 'com.parther.driver',
     appName: 'GoMyTruck Partner',
     minVersionCode: 8,
-    latestVersionCode: 8,
+    latestVersionCode: 9,
     minVersionName: '1.0.5',
-    latestVersionName: '1.0.5',
+    latestVersionName: '1.0.6',
     highlights: [
       'Improved security & other enhancements',
       'Instant load matching & automated dispatch',
