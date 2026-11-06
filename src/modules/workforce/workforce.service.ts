@@ -567,13 +567,27 @@ export async function getMe(userId: string) {
   );
   const verificationStatus: string = isVerified ? 'VERIFIED' : 'PENDING';
 
+  // Resolve avatar URL: check user.profileImageUrl first, or fallback to SELFIE document
+  const selfieDoc = resolvedDocs.find((d: any) => d.type === 'SELFIE' && d.fileUrl);
+  let resolvedAvatarUrl: string | null = null;
+  if (worker.user.profileImageUrl) {
+    resolvedAvatarUrl = await s3Service.resolveViewableUrl(worker.user.profileImageUrl);
+  }
+  if (!resolvedAvatarUrl && selfieDoc?.fileUrl) {
+    resolvedAvatarUrl = selfieDoc.fileUrl;
+  }
+
   return {
     ...worker,
     name: worker.user.name || 'Partner',
     phone: worker.user.phone || '',
     email: worker.user.email,
-    profilePhoto: worker.user.profileImageUrl,
-    avatarUrl: worker.user.profileImageUrl,
+    profilePhoto: resolvedAvatarUrl,
+    avatarUrl: resolvedAvatarUrl,
+    user: {
+      ...worker.user,
+      profileImageUrl: resolvedAvatarUrl,
+    },
     documents: resolvedDocs,
     aadhaarStatus: worker.isDocVerified ? 'VERIFIED' : worker.aadhaarVerifStatus,
     panStatus: worker.isDocVerified ? 'VERIFIED' : worker.panVerifStatus,
@@ -816,7 +830,13 @@ export async function uploadDocuments(userId: string, input: UploadDocumentsInpu
   if (input.bikeUrl) docsToCreate.push({ workerId: worker.id, type: 'BIKE', fileUrl: input.bikeUrl });
   if (input.licenseUrl) docsToCreate.push({ workerId: worker.id, type: 'LICENSE', fileUrl: input.licenseUrl });
   if (input.rcUrl) docsToCreate.push({ workerId: worker.id, type: 'RC', fileUrl: input.rcUrl });
-  if (input.selfieUrl) docsToCreate.push({ workerId: worker.id, type: 'SELFIE', fileUrl: input.selfieUrl });
+  if (input.selfieUrl) {
+    docsToCreate.push({ workerId: worker.id, type: 'SELFIE', fileUrl: input.selfieUrl });
+    await prisma.user.update({
+      where: { id: userId },
+      data: { profileImageUrl: input.selfieUrl },
+    }).catch((err: any) => logger.warn('[Workforce] Failed to sync profileImageUrl from selfie:', err));
+  }
 
   if (docsToCreate.length > 0) {
     await prisma.workerDocument.createMany({
