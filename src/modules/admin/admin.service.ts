@@ -842,7 +842,20 @@ function getVehicleDefaultCapacity(vehicleType: VehicleType | string | null | un
   }
 }
 
-function mapLeadToDriverItem(lead: any) {
+function mapLeadToDriverItem(lead: any, existingPhoneSet?: Set<string>) {
+  // If lead is already converted or rejected, do not show in verification
+  if (lead.status === LeadStatus.CONVERTED || lead.status === LeadStatus.REJECTED) {
+    return null;
+  }
+
+  // If driver account is already created for this phone number, exclude it
+  if (existingPhoneSet) {
+    const cleanPhone = String(lead.phone || '').replace(/\D/g, '').slice(-10);
+    if (cleanPhone && existingPhoneSet.has(cleanPhone)) {
+      return null;
+    }
+  }
+
   const docs: any[] = [];
   if (lead.profilePhotoUrl && String(lead.profilePhotoUrl).trim()) {
     docs.push({
@@ -998,10 +1011,28 @@ export async function getDrivers(q: DriversQuery) {
   // CRITICAL REQUIREMENT:
   // 1. Only leads that have uploaded documents (profile photo, dl, rc, aadhaar, or permit/insurance).
   // 2. Only upcoming / new data from rollout (createdAt >= Nov 5, 2026). Old legacy leads without documents are strictly excluded.
+  // 3. Exclude any driver leads whose driver account is already created (phone already registered in Driver table or converted).
   const includeLeads = q.isDocVerified !== true && !q.plan && (!q.status || q.status === 'OFFLINE');
   let leadWhere: any = null;
+  let existingPhoneSet: Set<string> = new Set();
 
   if (includeLeads) {
+    const existingDrivers = await prisma.driver.findMany({
+      select: { user: { select: { phone: true } } },
+    });
+    existingPhoneSet = new Set(
+      existingDrivers
+        .map((d) => (d.user?.phone ? d.user.phone.replace(/\D/g, '').slice(-10) : ''))
+        .filter((p) => p.length === 10)
+    );
+
+    const excludedPhoneVariants = Array.from(existingPhoneSet).flatMap((p) => [
+      p,
+      `+91${p}`,
+      `91${p}`,
+      `0${p}`,
+    ]);
+
     leadWhere = {
       status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] },
       createdAt: { gte: ONBOARDING_LEADS_CUTOFF },
@@ -1019,6 +1050,12 @@ export async function getDrivers(q: DriversQuery) {
         },
       ],
     };
+
+    if (excludedPhoneVariants.length > 0) {
+      leadWhere.AND.push({
+        phone: { notIn: excludedPhoneVariants },
+      });
+    }
 
     if (q.search) {
       leadWhere.AND.push({
@@ -1056,7 +1093,7 @@ export async function getDrivers(q: DriversQuery) {
       });
       const resolvedLeads = await Promise.all(
         rawLeads.map(async (l) => {
-          const item = mapLeadToDriverItem(l);
+          const item = mapLeadToDriverItem(l, existingPhoneSet);
           if (!item) return null;
           item.documents = await s3Service.resolveDocumentsUrls(item.documents);
           return item;

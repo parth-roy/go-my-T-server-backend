@@ -529,23 +529,19 @@ export async function getMe(userId: string) {
     if (actualCompleted > completedCount) completedCount = actualCompleted;
   } catch (_) {}
 
-  // Fallback defaults matching Metro Mitra standard partner profile
+  // Profile resources & dynamic worker details
   const workingDays: string[] = Array.isArray(meta.workingDays) && meta.workingDays.length > 0
     ? meta.workingDays
     : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const breakTime: string = meta.breakTime || '1:00 – 2:00 PM';
   const workAreaLocality: string = meta.workAreaLocality || 'Barrackpore';
-  const services: string[] = Array.isArray(meta.services) && meta.services.length > 0
+  const rawServices: string[] = Array.isArray(meta.services) && meta.services.length > 0
     ? meta.services
-    : (worker.preferredTypes && worker.preferredTypes.length > 0 ? worker.preferredTypes.map((t: any) => String(t)) : ['Plumbing', 'Electrical']);
-  const bio: string = meta.bio || meta.about || 'Reliable repairs for everyday homes.';
-  const experienceYears: number = typeof meta.experienceYears === 'number' ? meta.experienceYears : 3;
-  const portfolioImages: string[] = Array.isArray(meta.portfolioImages) && meta.portfolioImages.length > 0
-    ? meta.portfolioImages
-    : [
-        'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?auto=format&fit=crop&w=400&q=80',
-        'https://images.unsplash.com/photo-1505798577917-a65157d3320a?auto=format&fit=crop&w=400&q=80',
-      ];
+    : (worker.preferredTypes && worker.preferredTypes.length > 0 ? worker.preferredTypes.map((t: any) => String(t)) : []);
+  const services: string[] = Array.from(new Set(rawServices));
+  const bio: string = meta.bio || meta.about || '';
+  const experienceYears: number = typeof meta.experienceYears === 'number' ? meta.experienceYears : 1;
+  const portfolioImages: string[] = Array.isArray(meta.portfolioImages) ? meta.portfolioImages : [];
 
   const availableTime: string = worker.availableTime || meta.availableTime || '9:00 AM - 6:00 PM';
   let fromTime: string = meta.fromTime;
