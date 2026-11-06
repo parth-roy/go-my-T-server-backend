@@ -276,6 +276,7 @@ test('FIN-004: addMoney executes atomic increment and sets balanceAfter matching
           },
         },
         walletTransaction: {
+          findFirst: async () => null,
           create: async ({ data }) => {
             capturedTxBalanceAfter = data.balanceAfter;
             return { id: 'tx-1', ...data };

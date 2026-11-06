@@ -844,82 +844,87 @@ function getVehicleDefaultCapacity(vehicleType: VehicleType | string | null | un
 
 function mapLeadToDriverItem(lead: any) {
   const docs: any[] = [];
-  if (lead.profilePhotoUrl) {
+  if (lead.profilePhotoUrl && String(lead.profilePhotoUrl).trim()) {
     docs.push({
       id: `lead_doc_${lead.id}_selfie`,
       type: 'SELFIE',
       status: 'PENDING',
-      fileUrl: lead.profilePhotoUrl,
+      fileUrl: String(lead.profilePhotoUrl).trim(),
       rejectedReason: null,
       createdAt: lead.createdAt,
       verifiedAt: null,
     });
   }
-  if (lead.dlFrontUrl) {
+  if (lead.dlFrontUrl && String(lead.dlFrontUrl).trim()) {
     docs.push({
       id: `lead_doc_${lead.id}_dl_front`,
       type: 'DL_FRONT',
       status: 'PENDING',
-      fileUrl: lead.dlFrontUrl,
+      fileUrl: String(lead.dlFrontUrl).trim(),
       rejectedReason: null,
       createdAt: lead.createdAt,
       verifiedAt: null,
     });
   }
-  if (lead.dlBackUrl) {
+  if (lead.dlBackUrl && String(lead.dlBackUrl).trim()) {
     docs.push({
       id: `lead_doc_${lead.id}_dl_back`,
       type: 'DL_BACK',
       status: 'PENDING',
-      fileUrl: lead.dlBackUrl,
+      fileUrl: String(lead.dlBackUrl).trim(),
       rejectedReason: null,
       createdAt: lead.createdAt,
       verifiedAt: null,
     });
   }
-  if (lead.rcBookUrl) {
+  if (lead.rcBookUrl && String(lead.rcBookUrl).trim()) {
     docs.push({
       id: `lead_doc_${lead.id}_rc_front`,
       type: 'RC_FRONT',
       status: 'PENDING',
-      fileUrl: lead.rcBookUrl,
+      fileUrl: String(lead.rcBookUrl).trim(),
       rejectedReason: null,
       createdAt: lead.createdAt,
       verifiedAt: null,
     });
   }
-  if (lead.aadharFrontUrl) {
+  if (lead.aadharFrontUrl && String(lead.aadharFrontUrl).trim()) {
     docs.push({
       id: `lead_doc_${lead.id}_aadhaar_front`,
       type: 'AADHAAR_FRONT',
       status: 'PENDING',
-      fileUrl: lead.aadharFrontUrl,
+      fileUrl: String(lead.aadharFrontUrl).trim(),
       rejectedReason: null,
       createdAt: lead.createdAt,
       verifiedAt: null,
     });
   }
-  if (lead.aadharBackUrl) {
+  if (lead.aadharBackUrl && String(lead.aadharBackUrl).trim()) {
     docs.push({
       id: `lead_doc_${lead.id}_aadhaar_back`,
       type: 'AADHAAR_BACK',
       status: 'PENDING',
-      fileUrl: lead.aadharBackUrl,
+      fileUrl: String(lead.aadharBackUrl).trim(),
       rejectedReason: null,
       createdAt: lead.createdAt,
       verifiedAt: null,
     });
   }
-  if (lead.insuranceUrl) {
+  if (lead.insuranceUrl && String(lead.insuranceUrl).trim()) {
     docs.push({
       id: `lead_doc_${lead.id}_insurance`,
       type: 'PERMIT',
       status: 'PENDING',
-      fileUrl: lead.insuranceUrl,
+      fileUrl: String(lead.insuranceUrl).trim(),
       rejectedReason: null,
       createdAt: lead.createdAt,
       verifiedAt: null,
     });
+  }
+
+  // Strictly exclude any driver lead that does not have uploaded documents
+  if (docs.length === 0) {
+    return null;
   }
 
   let complianceScore = 0;
@@ -971,6 +976,9 @@ function mapLeadToDriverItem(lead: any) {
   };
 }
 
+// Cutoff timestamp: Only website onboarding leads created from Nov 5, 2026 onwards are considered new upcoming data.
+const ONBOARDING_LEADS_CUTOFF = new Date('2026-11-05T00:00:00.000Z');
+
 export async function getDrivers(q: DriversQuery) {
   const where: any = {};
   if (q.status) where.status = q.status;
@@ -986,22 +994,42 @@ export async function getDrivers(q: DriversQuery) {
     ];
   }
 
-  // Include unconverted website onboarding leads when reviewing pending or all drivers
+  // Include unconverted website onboarding leads when reviewing pending or all drivers.
+  // CRITICAL REQUIREMENT:
+  // 1. Only leads that have uploaded documents (profile photo, dl, rc, aadhaar, or permit/insurance).
+  // 2. Only upcoming / new data from rollout (createdAt >= Nov 5, 2026). Old legacy leads without documents are strictly excluded.
   const includeLeads = q.isDocVerified !== true && !q.plan && (!q.status || q.status === 'OFFLINE');
   let leadWhere: any = null;
 
   if (includeLeads) {
     leadWhere = {
       status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] },
+      createdAt: { gte: ONBOARDING_LEADS_CUTOFF },
+      AND: [
+        {
+          OR: [
+            { AND: [{ profilePhotoUrl: { not: null } }, { profilePhotoUrl: { not: '' } }] },
+            { AND: [{ aadharFrontUrl: { not: null } }, { aadharFrontUrl: { not: '' } }] },
+            { AND: [{ aadharBackUrl: { not: null } }, { aadharBackUrl: { not: '' } }] },
+            { AND: [{ dlFrontUrl: { not: null } }, { dlFrontUrl: { not: '' } }] },
+            { AND: [{ dlBackUrl: { not: null } }, { dlBackUrl: { not: '' } }] },
+            { AND: [{ rcBookUrl: { not: null } }, { rcBookUrl: { not: '' } }] },
+            { AND: [{ insuranceUrl: { not: null } }, { insuranceUrl: { not: '' } }] },
+          ],
+        },
+      ],
     };
+
     if (q.search) {
-      leadWhere.OR = [
-        { name: { contains: q.search, mode: 'insensitive' } },
-        { phone: { contains: q.search } },
-        { dlNumber: { contains: q.search, mode: 'insensitive' } },
-        { vehicleNumber: { contains: q.search, mode: 'insensitive' } },
-        { city: { contains: q.search, mode: 'insensitive' } },
-      ];
+      leadWhere.AND.push({
+        OR: [
+          { name: { contains: q.search, mode: 'insensitive' } },
+          { phone: { contains: q.search } },
+          { dlNumber: { contains: q.search, mode: 'insensitive' } },
+          { vehicleNumber: { contains: q.search, mode: 'insensitive' } },
+          { city: { contains: q.search, mode: 'insensitive' } },
+        ],
+      });
     }
   }
 
@@ -1026,13 +1054,15 @@ export async function getDrivers(q: DriversQuery) {
         take: takeLeads,
         orderBy: { createdAt: 'desc' },
       });
-      leadsData = await Promise.all(
+      const resolvedLeads = await Promise.all(
         rawLeads.map(async (l) => {
           const item = mapLeadToDriverItem(l);
+          if (!item) return null;
           item.documents = await s3Service.resolveDocumentsUrls(item.documents);
           return item;
         })
       );
+      leadsData = resolvedLeads.filter((item): item is NonNullable<typeof item> => item !== null);
 
       const remainingTake = limit - leadsData.length;
       if (remainingTake > 0) {
@@ -1101,6 +1131,7 @@ export async function getDriverById(id: string) {
     const lead = await prisma.formDriverLead.findUnique({ where: { id: leadId } });
     if (!lead) throw AppError.notFound('Driver lead not found');
     const item = mapLeadToDriverItem(lead);
+    if (!item) throw AppError.notFound('Driver lead has no uploaded documents');
     item.documents = await s3Service.resolveDocumentsUrls(item.documents);
     return item;
   }

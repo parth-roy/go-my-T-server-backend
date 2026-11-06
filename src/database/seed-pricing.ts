@@ -8,7 +8,7 @@ import { PrismaClient, VehicleType } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-const VEHICLE_PRICING = [
+export const VEHICLE_PRICING = [
   {
     vehicleType: VehicleType.BIKE,
     displayName: 'Bike',
@@ -18,7 +18,7 @@ const VEHICLE_PRICING = [
     timeFreeMinutes: 20, timeChargePerMin: 0.50,
     waitingFreeMinutes: 20, waitingChargePerBlock: 50,
     loadingChargePerHelper: 0, maxHelpers: 0,
-    isActive: true,
+    isActive: false, // 2-wheeler permanently disabled
   },
   {
     vehicleType: VehicleType.THREE_WHEELER,
@@ -29,7 +29,7 @@ const VEHICLE_PRICING = [
     timeFreeMinutes: 25, timeChargePerMin: 1.00,
     waitingFreeMinutes: 25, waitingChargePerBlock: 75,
     loadingChargePerHelper: 400, maxHelpers: 1,
-    isActive: true,
+    isActive: false, // Disabled
   },
   {
     vehicleType: VehicleType.TATA_ACE,
@@ -78,8 +78,8 @@ const VEHICLE_PRICING = [
   {
     vehicleType: 'TRUCK_20FT' as VehicleType,
     displayName: '20ft Truck',
-    baseFare: 900, baseIncludesKm: 5, pricePerKm: 44, minFare: 1800,
-    capacityKg: 8000, capacityDesc: '8 tons — Port cargo, construction material',
+    baseFare: 1100, baseIncludesKm: 5, pricePerKm: 46, minFare: 1600,
+    capacityKg: 10000, capacityDesc: '10 tons — Port cargo, construction material',
     estimatedEta: 30, tcoPerKm: 43.33, surgeHardCap: 2.0,
     timeFreeMinutes: 90, timeChargePerMin: 3.00,
     waitingFreeMinutes: 90, waitingChargePerBlock: 150,
@@ -210,8 +210,8 @@ const VEHICLE_PRICING = [
   {
     vehicleType: 'TRUCK_19FT' as VehicleType,
     displayName: '19 Ft Truck',
-    baseFare: 1100, baseIncludesKm: 5, pricePerKm: 48, minFare: 1400,
-    capacityKg: 8000, capacityDesc: '8.0 Ton — Heavy cargo',
+    baseFare: 950, baseIncludesKm: 5, pricePerKm: 44, minFare: 1400,
+    capacityKg: 10000, capacityDesc: '10.0 Ton — Heavy cargo',
     estimatedEta: 28, tcoPerKm: 40.00, surgeHardCap: 2.0,
     timeFreeMinutes: 80, timeChargePerMin: 3.00,
     waitingFreeMinutes: 80, waitingChargePerBlock: 150,
@@ -380,6 +380,8 @@ async function seedPricing() {
   console.log('   West Bengal 2026 rates applied (research document Phase 3)');
 }
 
-seedPricing()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect());
+if (require.main === module) {
+  seedPricing()
+    .catch(console.error)
+    .finally(() => prisma.$disconnect());
+}

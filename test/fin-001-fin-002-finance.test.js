@@ -74,6 +74,9 @@ test('FIN-001: addMoney marks transaction reason as ADMIN_CREDIT and records adm
 
     const originalWalletUpdate = prisma.wallet.update;
     const originalTxCreate = prisma.walletTransaction.create;
+    const originalTxFindFirst = prisma.walletTransaction.findFirst;
+
+    prisma.walletTransaction.findFirst = () => Promise.resolve(null);
 
     prisma.wallet.update = ({ where, data }) => {
       const inc = data?.cachedBalance?.increment || 0;
@@ -98,6 +101,7 @@ test('FIN-001: addMoney marks transaction reason as ADMIN_CREDIT and records adm
 
     prisma.wallet.update = originalWalletUpdate;
     prisma.walletTransaction.create = originalTxCreate;
+    prisma.walletTransaction.findFirst = originalTxFindFirst;
   } finally {
     prisma.wallet.findUnique = originalWalletFind;
     prisma.$transaction = originalTransaction;
