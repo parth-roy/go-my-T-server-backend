@@ -8,7 +8,7 @@ import { assertRazorpayXPayoutsEnabled } from '@shared/payments/outbound-payment
 import { notificationService } from '@modules/notifications/notification.service';
 import { gamificationService } from '@modules/gamification/gamification.service';
 import { createNotification } from '@modules/notifications/inapp.notification.service';
-import { NotificationType, UserRole, WorkerStatus, WorkerJobStatus, WalletTransactionType, WalletTransactionReason, LaborType, Prisma } from '@prisma/client';
+import { NotificationType, UserRole, WorkerStatus, WorkerJobStatus, GigJobStatus, WalletTransactionType, WalletTransactionReason, LaborType, Prisma } from '@prisma/client';
 import { emitToWorkerRoom, emitToBookingRoom } from '@shared/socket/socket.instance';
 import { s3Service } from '@modules/upload/upload.service';
 import crypto from 'crypto';
@@ -1344,6 +1344,17 @@ export async function getAvailableJobs(userId: string, query: AvailableJobsQuery
 // ─────────────────────────────────────────────
 // JOBS — GET ACTIVE JOB
 // ─────────────────────────────────────────────
+function computeStartOtp(gig: any): string {
+  if (gig?.fareBreakdown && (gig.fareBreakdown as any).startOtp) {
+    return String((gig.fareBreakdown as any).startOtp);
+  }
+  if (gig?.jobNumber) {
+    const digits = String(gig.jobNumber).replace(/\D/g, '');
+    if (digits.length >= 4) return digits.slice(-4);
+  }
+  return '4829';
+}
+
 export async function getActiveJob(userId: string) {
   const worker = await prisma.worker.findUnique({ where: { userId }, select: { id: true } });
   if (!worker) throw AppError.notFound('Worker not found');
@@ -1448,8 +1459,10 @@ export async function getActiveJob(userId: string) {
         customerName: (gigAssignment.gig as any).customer?.name,
         customerPhone: (gigAssignment.gig as any).customer?.phone,
         customerAvatar: (gigAssignment.gig as any).customer?.profileImageUrl,
+        startOtp: computeStartOtp(gigAssignment.gig),
         stops: [],
       },
+      startOtp: computeStartOtp(gigAssignment.gig),
     };
   }
 
@@ -1549,6 +1562,10 @@ export async function acceptJob(userId: string, bookingId: string) {
               status: WorkerJobStatus.ACCEPTED,
               payoutAmount: gigJob.perWorkerRate > 0 ? gigJob.perWorkerRate : (gigJob.totalFare ?? 0) / totalSlots,
             },
+          });
+          await tx.gigJob.update({
+            where: { id: bookingId },
+            data: { status: GigJobStatus.ASSIGNED },
           });
           const workerClaim = await tx.worker.updateMany({
             where: { id: worker.id, status: WorkerStatus.AVAILABLE, isDocVerified: true },
@@ -1806,7 +1823,8 @@ export async function markArrived(userId: string, assignmentId: string) {
   const targetId = isGig ? assignment.gigId : assignment.bookingId;
   if (isGig) {
     updated = await prisma.gigAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.ARRIVED, arrivedAt: new Date() } });
-    emitToBookingRoom(assignment.gigId, 'worker_arrived', { assignmentId: assignment.id, workerId: worker.id });
+    await prisma.gigJob.update({ where: { id: assignment.gigId }, data: { status: GigJobStatus.ASSIGNED } });
+    emitToBookingRoom(assignment.gigId, 'worker_arrived', { assignmentId: assignment.id, workerId: worker.id, status: 'ARRIVED' });
   } else {
     updated = await prisma.jobAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.ARRIVED, arrivedAt: new Date() } });
     emitToBookingRoom(assignment.bookingId, 'worker_arrived', { assignmentId: assignment.id, workerId: worker.id });
@@ -1898,7 +1916,8 @@ export async function startJob(userId: string, assignmentId: string) {
   const targetId = isGig ? assignment.gigId : assignment.bookingId;
   if (isGig) {
     updated = await prisma.gigAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.IN_PROGRESS, startedAt: new Date() } });
-    emitToBookingRoom(assignment.gigId, 'worker_started', { assignmentId: assignment.id, workerId: worker.id });
+    await prisma.gigJob.update({ where: { id: assignment.gigId }, data: { status: GigJobStatus.IN_PROGRESS } });
+    emitToBookingRoom(assignment.gigId, 'worker_started', { assignmentId: assignment.id, workerId: worker.id, status: 'IN_PROGRESS' });
   } else {
     updated = await prisma.jobAssignment.update({ where: { id: assignment.id }, data: { status: WorkerJobStatus.IN_PROGRESS, startedAt: new Date() } });
     emitToBookingRoom(assignment.bookingId, 'worker_started', { assignmentId: assignment.id, workerId: worker.id });
@@ -2137,7 +2156,7 @@ export async function completeJob(userId: string, assignmentId: string, input: C
       if (claim.count === 0) {
         throw AppError.conflict('Gig assignment is already completed or not in progress', 'INVALID_TRANSITION');
       }
-      await tx.gigJob.update({ where: { id: assignment.bookingId }, data: { completionOtp: null } });
+      await tx.gigJob.update({ where: { id: assignment.bookingId }, data: { status: GigJobStatus.COMPLETED, completionOtp: null } });
     } else {
       const claim = await tx.jobAssignment.updateMany({
         where: { id: assignment.id, workerId: worker.id, status: WorkerJobStatus.IN_PROGRESS },

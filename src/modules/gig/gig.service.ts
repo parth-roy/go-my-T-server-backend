@@ -346,9 +346,45 @@ export async function createGig(customerId: string, data: any) {
 // READ
 // ─────────────────────────────────────────────
 
+export function computeStartOtp(gig: any): string {
+  if (gig?.fareBreakdown && (gig.fareBreakdown as any).startOtp) {
+    return String((gig.fareBreakdown as any).startOtp);
+  }
+  if (gig?.jobNumber) {
+    const digits = String(gig.jobNumber).replace(/\D/g, '');
+    if (digits.length >= 4) return digits.slice(-4);
+  }
+  return '4829';
+}
+
+function mapCustomerGig(gig: any) {
+  const activeAssignment = gig.assignments?.find((a: any) =>
+    ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(a.status),
+  ) || gig.assignments?.[0];
+
+  let effectiveStatus = gig.status;
+  if (activeAssignment) {
+    if (activeAssignment.status === 'ARRIVED') {
+      effectiveStatus = 'ARRIVED';
+    } else if (activeAssignment.status === 'IN_PROGRESS') {
+      effectiveStatus = 'IN_PROGRESS';
+    } else if (activeAssignment.status === 'ACCEPTED' && gig.status === 'PENDING') {
+      effectiveStatus = 'ASSIGNED';
+    }
+  }
+
+  const startOtp = computeStartOtp(gig);
+
+  return {
+    ...gig,
+    status: effectiveStatus,
+    startOtp,
+  };
+}
+
 export async function getCustomerGigs(customerId: string) {
   try {
-    return await prisma.gigJob.findMany({
+    const gigs = await prisma.gigJob.findMany({
       where: { customerId },
       orderBy: { createdAt: 'desc' },
       include: {
@@ -371,22 +407,25 @@ export async function getCustomerGigs(customerId: string) {
         },
       },
     });
+    return gigs.map(mapCustomerGig);
   } catch (err: any) {
     logger.warn(`[getCustomerGigs] Full include query failed, trying simple query: ${err.message}`);
     try {
-      return await prisma.gigJob.findMany({
+      const gigs = await prisma.gigJob.findMany({
         where: { customerId },
         orderBy: { createdAt: 'desc' },
         include: {
           tasks: true,
         },
       });
+      return gigs.map(mapCustomerGig);
     } catch (err2: any) {
       logger.warn(`[getCustomerGigs] Query with tasks failed, falling back to base table: ${err2.message}`);
-      return await prisma.gigJob.findMany({
+      const gigs = await prisma.gigJob.findMany({
         where: { customerId },
         orderBy: { createdAt: 'desc' },
       });
+      return gigs.map(mapCustomerGig);
     }
   }
 }
