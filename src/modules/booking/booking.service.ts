@@ -216,6 +216,7 @@ export async function createBooking(customerId: string, data: CreateBookingInput
         pickupTime,
         pickupDateTime,
         customerNote: rawCustomerNote,
+        quoteToken,
         ...bookingData
     } = data as any;
 
@@ -289,17 +290,19 @@ export async function createBooking(customerId: string, data: CreateBookingInput
     //     );
     // }
 
-    // â”€â”€ FIX CRITICAL-1: Server-side fare recalculation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── FIX CRITICAL-1: Server-side fare recalculation ────────────────────────
     let serverFare: FareEstimateResponse | null = null;
-    if (data.quoteToken) {
+    const activeQuoteToken = quoteToken || (data as any).quoteToken;
+    if (activeQuoteToken) {
         try {
             const redis = getRedis();
-            const cachedStr = await redis.get(`pricing:quote:${data.quoteToken}`);
+            const cachedStr = await redis.get(`pricing:quote:${activeQuoteToken}`);
             if (cachedStr) {
-                const cached = JSON.parse(cachedStr) as FareEstimateResponse;
-                if (cached && cached.vehicle && cached.vehicle.vehicleType === data.vehicleType) {
+                const cached = JSON.parse(cachedStr) as any;
+                const cachedVehicleType = cached?.vehicle?.vehicleType || cached?.vehicleType;
+                if (cached && cachedVehicleType === data.vehicleType) {
                     serverFare = cached;
-                    logger.info(`[Booking] Using exact cached quoteToken ${data.quoteToken} for booking (fare: ₹${serverFare.totalFare})`);
+                    logger.info(`[Booking] Using exact cached quoteToken ${activeQuoteToken} for booking (fare: ₹${serverFare?.totalFare})`);
                 }
             }
         } catch (err) {

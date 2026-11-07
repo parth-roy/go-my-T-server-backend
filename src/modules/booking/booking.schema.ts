@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { VehicleType, BookingStatus, BookingMode, LaborType } from '@prisma/client';
+import { VehicleType, BookingStatus, BookingMode, LaborType, PaymentMethod } from '@prisma/client';
 
 const stopSchema = z.object({
     latitude: z.number().min(-90).max(90),
@@ -48,6 +48,7 @@ export const createBookingSchema = z.object({
     insuranceOpted: z.boolean().default(false),
     insuranceProvider: z.string().optional(),
     insuranceAmount: z.number().optional(),
+    paymentMethod: z.nativeEnum(PaymentMethod).optional(),
     // Fare from the pricing engine — stored as totalFare until Pricing Engine is fully server-side
     estimatedFare: z.number().positive().optional(),
     estimatedDistanceKm: z.number().positive().optional(),

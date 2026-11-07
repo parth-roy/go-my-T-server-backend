@@ -1376,12 +1376,23 @@ export async function getActiveJob(userId: string) {
           estimatedDuration: true,
           status: true,
           stops: { take: 1, orderBy: { sequence: 'asc' }, select: { address: true, latitude: true, longitude: true } },
+          customer: { select: { id: true, name: true, phone: true, profileImageUrl: true } },
         },
       },
     },
   });
 
-  if (assignment) return assignment;
+  if (assignment) {
+    return {
+      ...assignment,
+      booking: {
+        ...assignment.booking,
+        customerName: assignment.booking?.customer?.name,
+        customerPhone: assignment.booking?.customer?.phone,
+        customerAvatar: assignment.booking?.customer?.profileImageUrl,
+      },
+    };
+  }
 
   const gigAssignment = await prisma.gigAssignment.findFirst({
     where: {
@@ -1401,6 +1412,7 @@ export async function getActiveJob(userId: string) {
           workersNeeded: true,
           description: true,
           status: true,
+          customer: { select: { id: true, name: true, phone: true, profileImageUrl: true } },
         },
       },
     },
@@ -1432,6 +1444,10 @@ export async function getActiveJob(userId: string) {
         goodsImageUrls: [],
         estimatedDuration: null,
         status: gigAssignment.gig.status,
+        customer: (gigAssignment.gig as any).customer,
+        customerName: (gigAssignment.gig as any).customer?.name,
+        customerPhone: (gigAssignment.gig as any).customer?.phone,
+        customerAvatar: (gigAssignment.gig as any).customer?.profileImageUrl,
         stops: [],
       },
     };
@@ -2772,7 +2788,12 @@ export async function getJobHistory(userId: string, query: HistoryQuery) {
     orderBy: { updatedAt: 'desc' },
     select: {
       id: true, status: true, payoutAmount: true, createdAt: true, completedAt: true,
-      booking: { select: { id: true, bookingNumber: true, pickupAddress: true, stops: { select: { address: true } }, laborType: true } },
+      booking: {
+        select: {
+          id: true, bookingNumber: true, pickupAddress: true, stops: { select: { address: true } }, laborType: true,
+          customer: { select: { id: true, name: true, phone: true, profileImageUrl: true } },
+        },
+      },
     },
   });
 
@@ -2781,7 +2802,12 @@ export async function getJobHistory(userId: string, query: HistoryQuery) {
     orderBy: { updatedAt: 'desc' },
     select: {
       id: true, status: true, payoutAmount: true, createdAt: true, completedAt: true,
-      gig: { select: { id: true, jobNumber: true, locationAddress: true, gigType: true } },
+      gig: {
+        select: {
+          id: true, jobNumber: true, locationAddress: true, gigType: true,
+          customer: { select: { id: true, name: true, phone: true, profileImageUrl: true } },
+        },
+      },
     },
   });
 
@@ -2790,7 +2816,11 @@ export async function getJobHistory(userId: string, query: HistoryQuery) {
     ...gigAssignments.map(g => ({
       id: g.id, status: g.status, payoutAmount: g.payoutAmount, createdAt: g.createdAt, completedAt: g.completedAt,
       booking: {
-        id: g.gig.id, bookingNumber: g.gig.jobNumber, pickupAddress: g.gig.locationAddress, stops: [], laborType: g.gig.gigType
+        id: g.gig.id, bookingNumber: g.gig.jobNumber, pickupAddress: g.gig.locationAddress, stops: [], laborType: g.gig.gigType,
+        customer: (g.gig as any).customer,
+        customerName: (g.gig as any).customer?.name,
+        customerPhone: (g.gig as any).customer?.phone,
+        customerAvatar: (g.gig as any).customer?.profileImageUrl,
       }
     }))
   ];
