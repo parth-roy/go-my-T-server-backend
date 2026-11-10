@@ -1203,13 +1203,26 @@ export async function convertLeadToDriver(leadId: string) {
   const name = (lead.name || 'Driver').trim();
   const email = lead.email ? lead.email.trim() : null;
 
+  // Ensure email uniqueness to prevent P2002 unique constraint violations
+  let safeEmail: string | undefined = undefined;
+  if (email) {
+    const existingEmailUser = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' }, NOT: { phone: cleanPhone } },
+    });
+    if (!existingEmailUser) {
+      safeEmail = email;
+    } else {
+      logger.warn(`[convertLeadToDriver] Email ${email} already in use by user ${existingEmailUser.id}, skipping email assignment for lead ${cleanLeadId}`);
+    }
+  }
+
   // 1. Upsert User as DRIVER
   const user = await prisma.user.upsert({
     where: { phone: cleanPhone },
     create: {
       phone: cleanPhone,
       name,
-      email,
+      ...(safeEmail ? { email: safeEmail } : {}),
       role: UserRole.DRIVER,
       profileComplete: true,
       isActive: true,
@@ -1217,7 +1230,7 @@ export async function convertLeadToDriver(leadId: string) {
     },
     update: {
       name,
-      email: email || undefined,
+      ...(safeEmail ? { email: safeEmail } : {}),
       role: UserRole.DRIVER,
       profileComplete: true,
       isActive: true,
@@ -1255,12 +1268,34 @@ export async function convertLeadToDriver(leadId: string) {
     });
   }
 
+  // Driver.vehicleId has a unique constraint. If this vehicle is currently assigned to another driver,
+  // detach it from the other driver first so it can be assigned to this driver without P2002 collision.
+  const conflictingVehicleDriver = await prisma.driver.findFirst({
+    where: { vehicleId: vehicle.id, NOT: { userId: user.id } },
+  });
+  if (conflictingVehicleDriver) {
+    logger.warn(`[convertLeadToDriver] Vehicle ${vehicle.registrationNo} was linked to driver ${conflictingVehicleDriver.id}. Detaching to assign to lead ${cleanLeadId}.`);
+    await prisma.driver.update({
+      where: { id: conflictingVehicleDriver.id },
+      data: { vehicleId: null },
+    });
+  }
+
   // 3. Upsert Driver
   const rawDl = (lead.dlNumber || `DL_${cleanPhone}`).trim().toUpperCase();
+  let safeLicenseNumber = rawDl;
   const conflictingDriver = await prisma.driver.findFirst({
-    where: { licenseNumber: rawDl, NOT: { userId: user.id } },
+    where: { licenseNumber: safeLicenseNumber, NOT: { userId: user.id } },
   });
-  const safeLicenseNumber = conflictingDriver ? `${rawDl}_${cleanPhone}` : rawDl;
+  if (conflictingDriver) {
+    safeLicenseNumber = `${rawDl}_${cleanPhone}`;
+    const stillConflicting = await prisma.driver.findFirst({
+      where: { licenseNumber: safeLicenseNumber, NOT: { userId: user.id } },
+    });
+    if (stillConflicting) {
+      safeLicenseNumber = `${rawDl}_${Date.now()}`;
+    }
+  }
 
   const driver = await prisma.driver.upsert({
     where: { userId: user.id },
@@ -2273,13 +2308,26 @@ export async function convertGigLeadToWorker(leadId: string) {
   const name = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Gig Worker';
   const email = lead.email ? lead.email.trim() : null;
 
+  // Ensure email uniqueness to prevent P2002 unique constraint violations
+  let safeEmail: string | undefined = undefined;
+  if (email) {
+    const existingEmailUser = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' }, NOT: { phone: cleanPhone } },
+    });
+    if (!existingEmailUser) {
+      safeEmail = email;
+    } else {
+      logger.warn(`[convertGigLeadToWorker] Email ${email} already in use by user ${existingEmailUser.id}, skipping email assignment for gig lead ${cleanLeadId}`);
+    }
+  }
+
   // 1. Upsert User as WORKER
   const user = await prisma.user.upsert({
     where: { phone: cleanPhone },
     create: {
       phone: cleanPhone,
       name,
-      email,
+      ...(safeEmail ? { email: safeEmail } : {}),
       role: 'WORKER',
       profileComplete: true,
       isActive: true,
@@ -2290,7 +2338,7 @@ export async function convertGigLeadToWorker(leadId: string) {
       name,
       isActive: true,
       profileComplete: true,
-      ...(email ? { email } : {}),
+      ...(safeEmail ? { email: safeEmail } : {}),
     },
   });
 

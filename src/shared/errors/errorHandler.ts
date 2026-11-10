@@ -37,10 +37,16 @@ export function globalErrorHandler(
 
   // Prisma unique constraint violation
   if ((err as any).code === 'P2002') {
+    const target = (err as any).meta?.target;
+    const targetStr = Array.isArray(target) ? target.join(', ') : (target ? String(target) : '');
+    logger.warn('Prisma P2002 unique constraint violation:', { target: targetStr, message: err.message });
     res.status(409).json({
       success: false,
-      message: 'A record with that value already exists',
+      message: targetStr
+        ? `A record with this ${targetStr} already exists`
+        : 'A record with that value already exists',
       code: 'DUPLICATE_ENTRY',
+      field: targetStr || undefined,
     });
     return;
   }
