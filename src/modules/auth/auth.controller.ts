@@ -51,7 +51,7 @@ export async function socialLogin(req: Request, res: Response, next: NextFunctio
 export async function getMe(req: Request, res: Response, next: NextFunction) {
   try {
     // req.user is set by the auth middleware
-    const result = await AuthService.getMe(req.user!.id);
+    const result = await AuthService.getMe(req.user!.id, req.user!.role);
     sendSuccess(res, result, 'User fetched successfully');
   } catch (err) {
     next(err);

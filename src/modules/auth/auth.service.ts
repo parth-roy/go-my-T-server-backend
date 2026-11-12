@@ -283,19 +283,16 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
     throw AppError.forbidden('Cannot self-assign ADMIN role');
   }
 
-  // Preserve MIDDLEMAN role for admin-registered agents even if logging in via generic phone
-  let effectiveRole = role as any;
-  if (existingUser?.role === 'MIDDLEMAN' || existingUser?.brokerProfile) {
-    effectiveRole = 'MIDDLEMAN';
-    updateData.role = 'MIDDLEMAN';
-  } else if (role === 'MIDDLEMAN') {
-    effectiveRole = 'MIDDLEMAN';
-    updateData.role = 'MIDDLEMAN';
-  } else if (role && existingUser && existingUser.role !== 'ADMIN' && role !== 'ADMIN') {
-    if (existingUser.role === 'CUSTOMER') {
-      updateData.role = role as any;
-      effectiveRole = role;
-    }
+  // Honor the login's requested role so multi-persona users (including MIDDLEMAN/Agents)
+  // can authenticate into Driver, Fleet Owner, Customer, or Workforce apps seamlessly.
+  const effectiveRole: UserRole = (
+    role && (role !== 'ADMIN' || existingUser?.role === 'ADMIN')
+      ? role
+      : (existingUser?.role || 'CUSTOMER')
+  ) as UserRole;
+
+  if (existingUser && existingUser.role === 'CUSTOMER' && effectiveRole !== 'CUSTOMER' && effectiveRole !== 'ADMIN') {
+    updateData.role = effectiveRole;
   }
 
   // Find or create user
@@ -327,7 +324,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
       data: {
         phone: synthPhone,
         email: isEmail ? normalizedIdentifier : (email?.trim() || undefined),
-        role: role as any,
+        role: effectiveRole,
         name: (name && name.trim()) || demoInfo?.name,
         profileComplete: !!demoInfo || !!(name && name.trim()),
         ...(tokenToSave && { fcmToken: tokenToSave }),
@@ -347,7 +344,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
   }
 
   // Auto-provision Worker and Wallet if logging into Workforce app
-  if (user.role === 'WORKER') {
+  if (effectiveRole === 'WORKER') {
     await prisma.worker.upsert({
       where: { userId: user.id },
       update: {},
@@ -369,7 +366,7 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
   }
 
   // Auto-provision BrokerProfile if logging in as MIDDLEMAN (Transport Agent)
-  if (user.role === 'MIDDLEMAN') {
+  if (effectiveRole === 'MIDDLEMAN') {
     await prisma.brokerProfile.upsert({
       where: { userId: user.id },
       update: {},
@@ -406,8 +403,8 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
     }
   }
 
-  // Issue token pair with effective role
-  const tokenRole = user.role || effectiveRole || 'CUSTOMER';
+  // Issue token pair with requested effective role (multi-persona support)
+  const tokenRole = effectiveRole || user.role || 'CUSTOMER';
   const { accessToken, refreshToken } = await issueTokenPair(user.id, user.phone, tokenRole);
 
   const isNewUser = !existingUser;
@@ -417,20 +414,27 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
     eventBus.emit('user.registered', { userId: user.id, fcmToken: tokenToSave ?? undefined });
   }
 
-  // Check if user is a driver or has active 90-day premium membership
-  const driverProfile = await prisma.driver.findFirst({
-    where: {
-      OR: [
-        { userId: user.id },
-        { user: { phone: user.phone } },
-      ],
-    },
-    include: {
-      subscription: true,
-    },
-  });
+  // Fetch associated persona profiles in parallel
+  const [driverProfile, fleetOwnerProfile, workerProfile, brokerProfile] = await Promise.all([
+    prisma.driver.findFirst({
+      where: {
+        OR: [
+          { userId: user.id },
+          { user: { phone: user.phone } },
+        ],
+      },
+      include: {
+        vehicle: true,
+        documents: { orderBy: { createdAt: 'desc' } },
+        subscription: true,
+      },
+    }),
+    prisma.fleetOwner.findUnique({ where: { userId: user.id } }),
+    prisma.worker.findUnique({ where: { userId: user.id } }),
+    prisma.brokerProfile.findUnique({ where: { userId: user.id } }),
+  ]);
 
-  const isDriver = Boolean(driverProfile || user.role === 'DRIVER');
+  const isDriver = Boolean(driverProfile || user.role === 'DRIVER' || tokenRole === 'DRIVER');
   let driverMembership: any = null;
   let isPremiumDriver = false;
 
@@ -451,8 +455,17 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
     }
   }
 
-  const brokerProfile = await prisma.brokerProfile.findUnique({
-    where: { userId: user.id },
+  const availableRoles: string[] = ['CUSTOMER'];
+  if (workerProfile || user.role === 'WORKER' || tokenRole === 'WORKER') availableRoles.push('WORKER');
+  if (driverProfile || user.role === 'DRIVER' || tokenRole === 'DRIVER') availableRoles.push('DRIVER');
+  if (fleetOwnerProfile || user.role === 'FLEET_OWNER' || tokenRole === 'FLEET_OWNER') availableRoles.push('FLEET_OWNER');
+  if (brokerProfile || user.role === 'MIDDLEMAN' || tokenRole === 'MIDDLEMAN') availableRoles.push('MIDDLEMAN');
+
+  // Role-specific onboarding status so cross-role users complete new persona setup if needed
+  const effectiveProfileComplete = computeRoleProfileComplete(tokenRole, Boolean(user.profileComplete), {
+    driver: driverProfile,
+    fleetOwner: fleetOwnerProfile,
+    worker: workerProfile,
   });
 
   return {
@@ -467,12 +480,15 @@ export async function verifyOtp({ phone, otp, fcmToken, role = 'CUSTOMER', name,
       role: tokenRole,
       usageType: user.usageType,
       whatsappOptIn: user.whatsappOptIn,
-      profileComplete: user.profileComplete,
+      profileComplete: effectiveProfileComplete,
       isNewUser,
       isDriver,
       isPremiumDriver,
       driverMembership,
+      driver: driverProfile || null,
+      fleetOwner: fleetOwnerProfile || null,
       brokerProfile: brokerProfile || null,
+      availableRoles,
     },
   };
 }
@@ -604,10 +620,31 @@ async function issueTokenPair(userId: string, phone: string | null | undefined, 
   };
 }
 
+// Helper: Compute effective profileComplete for the active persona role
+function computeRoleProfileComplete(
+  role: string,
+  baseProfileComplete: boolean,
+  profiles: { driver?: { isDocVerified?: boolean } | null; fleetOwner?: any; worker?: { isDocVerified?: boolean } | null }
+): boolean {
+  if (role === 'DRIVER') {
+    return Boolean(profiles.driver && (baseProfileComplete || profiles.driver.isDocVerified));
+  }
+  if (role === 'FLEET_OWNER') {
+    return Boolean(profiles.fleetOwner);
+  }
+  if (role === 'WORKER') {
+    return Boolean(profiles.worker && (baseProfileComplete || profiles.worker.isDocVerified));
+  }
+  if (role === 'MIDDLEMAN') {
+    return true;
+  }
+  return Boolean(baseProfileComplete);
+}
+
 // ─────────────────────────────────────────────
 // GET ME
 // ─────────────────────────────────────────────
-export async function getMe(userId: string) {
+export async function getMe(userId: string, activeRole?: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -720,11 +757,13 @@ export async function getMe(userId: string) {
     throw AppError.notFound('User not found');
   }
 
+  const effectiveRole = activeRole || user.role;
+
   const availableRoles: string[] = ['CUSTOMER'];
-  if (user.worker) availableRoles.push('WORKER');
-  if (user.driver) availableRoles.push('DRIVER');
-  if (user.fleetOwner) availableRoles.push('FLEET_OWNER');
-  if (user.brokerProfile || user.role === 'MIDDLEMAN') availableRoles.push('MIDDLEMAN');
+  if (user.worker || user.role === 'WORKER' || effectiveRole === 'WORKER') availableRoles.push('WORKER');
+  if (user.driver || user.role === 'DRIVER' || effectiveRole === 'DRIVER') availableRoles.push('DRIVER');
+  if (user.fleetOwner || user.role === 'FLEET_OWNER' || effectiveRole === 'FLEET_OWNER') availableRoles.push('FLEET_OWNER');
+  if (user.brokerProfile || user.role === 'MIDDLEMAN' || effectiveRole === 'MIDDLEMAN') availableRoles.push('MIDDLEMAN');
 
   const sub = user.driver?.subscription;
   const now = new Date();
@@ -741,12 +780,20 @@ export async function getMe(userId: string) {
     daysRemaining,
   } : null;
 
+  const effectiveProfileComplete = computeRoleProfileComplete(effectiveRole, Boolean(user.profileComplete), {
+    driver: user.driver,
+    fleetOwner: user.fleetOwner,
+    worker: user.worker,
+  });
+
   return {
     ...user,
+    role: effectiveRole,
+    profileComplete: effectiveProfileComplete,
     hasWorkerProfile: !!user.worker,
     hasDriverProfile: !!user.driver,
     hasFleetOwnerProfile: !!user.fleetOwner,
-    isDriver: !!user.driver || user.role === 'DRIVER',
+    isDriver: !!user.driver || user.role === 'DRIVER' || effectiveRole === 'DRIVER',
     isPremiumDriver,
     driverMembership,
     availableRoles,
@@ -766,6 +813,7 @@ export async function switchRole(userId: string, targetRole: UserRole) {
       worker: true,
       driver: true,
       fleetOwner: true,
+      brokerProfile: true,
     },
   });
 
@@ -831,7 +879,7 @@ export async function switchRole(userId: string, targetRole: UserRole) {
   if (user.worker || targetRole === 'WORKER') availableRoles.push('WORKER');
   if (user.driver) availableRoles.push('DRIVER');
   if (user.fleetOwner) availableRoles.push('FLEET_OWNER');
-  if (targetRole === 'MIDDLEMAN') availableRoles.push('MIDDLEMAN');
+  if (user.brokerProfile || user.role === 'MIDDLEMAN' || targetRole === 'MIDDLEMAN') availableRoles.push('MIDDLEMAN');
 
   return {
     ...tokens,
@@ -880,6 +928,12 @@ export async function socialLogin(input: SocialLoginInput) {
   if (input.role === 'ADMIN' && (!user || user.role !== 'ADMIN')) {
     throw AppError.forbidden('Cannot self-assign ADMIN role');
   }
+  const effectiveRole: UserRole = (
+    input.role && (input.role !== 'ADMIN' || user?.role === 'ADMIN')
+      ? input.role
+      : (user?.role || 'CUSTOMER')
+  ) as UserRole;
+
   if (!user) {
     isNewUser = true;
     user = await prisma.user.create({
@@ -890,19 +944,19 @@ export async function socialLogin(input: SocialLoginInput) {
         phone: phone_number || null,
         firebaseUid: uid,
         authProvider: input.provider,
-        role: input.role as any,
+        role: effectiveRole,
         fcmToken: input.fcmToken || null,
         isActive: true,
         profileComplete: false,
       },
     });
-    logger.info(`[Social Auth] Created new user: ${user.id} (${normalizedEmail || uid}) with role ${input.role}`);
+    logger.info(`[Social Auth] Created new user: ${user.id} (${normalizedEmail || uid}) with role ${effectiveRole}`);
   } else {
     // Existing user status checks
     if (!user.isActive) {
       throw AppError.forbidden('Your account has been deactivated by an administrator.');
     }
-    if (user.role === 'FLEET_OWNER') {
+    if (effectiveRole === 'FLEET_OWNER') {
       const fleet = await prisma.fleetOwner.findUnique({ where: { userId: user.id } });
       if (fleet && !fleet.isActive) {
         throw AppError.forbidden('Your fleet account has been deactivated by an administrator.');
@@ -914,8 +968,8 @@ export async function socialLogin(input: SocialLoginInput) {
     if (!user.firebaseUid) updateData.firebaseUid = uid;
     if (!user.profileImageUrl && picture) updateData.profileImageUrl = picture;
     if (input.fcmToken && user.fcmToken !== input.fcmToken) updateData.fcmToken = input.fcmToken;
-    if (input.role && user.role !== input.role && (user.role === 'CUSTOMER' || !user.role)) {
-      updateData.role = input.role as any;
+    if (user.role === 'CUSTOMER' && effectiveRole !== 'CUSTOMER' && effectiveRole !== 'ADMIN') {
+      updateData.role = effectiveRole;
     }
     if (Object.keys(updateData).length > 0) {
       user = await prisma.user.update({
@@ -925,7 +979,7 @@ export async function socialLogin(input: SocialLoginInput) {
     }
   }
 
-  if (user.role === 'WORKER') {
+  if (effectiveRole === 'WORKER') {
     const existingWorker = await prisma.worker.findUnique({ where: { userId: user.id } });
     if (existingWorker && !existingWorker.isActive) {
       throw AppError.forbidden('Your workforce account has been deactivated by an administrator.');
@@ -951,7 +1005,18 @@ export async function socialLogin(input: SocialLoginInput) {
     });
   }
 
-  const tokens = await issueTokenPair(user.id, user.phone, user.role);
+  if (effectiveRole === 'MIDDLEMAN') {
+    await prisma.brokerProfile.upsert({
+      where: { userId: user.id },
+      update: {},
+      create: {
+        userId: user.id,
+        isActive: true,
+      },
+    });
+  }
+
+  const tokens = await issueTokenPair(user.id, user.phone, effectiveRole);
 
   return {
     ...tokens,
@@ -961,7 +1026,7 @@ export async function socialLogin(input: SocialLoginInput) {
       name: user.name,
       email: user.email,
       profileImageUrl: user.profileImageUrl,
-      role: user.role,
+      role: effectiveRole,
       profileComplete: user.profileComplete,
     },
     isNewUser,

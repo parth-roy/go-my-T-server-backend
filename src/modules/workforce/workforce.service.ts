@@ -479,7 +479,7 @@ export async function verifyOtp(input: VerifyOtpInput) {
   });
 
   return {
-    user: { ...user, workerId: worker.id },
+    user: { ...user, role: UserRole.WORKER, workerId: worker.id },
     accessToken,
     refreshToken: refreshTokenValue,
     isNewUser: !user.profileComplete,
