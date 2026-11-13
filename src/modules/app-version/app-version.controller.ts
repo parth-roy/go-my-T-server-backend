@@ -56,13 +56,13 @@ const APP_POLICIES: Record<string, {
     packageName: 'com.gomytruck.workforce',
     appName: 'MetroMitra Workforce',
     minVersionCode: 8,
-    latestVersionCode: 10,
+    latestVersionCode: 11,
     minVersionName: '1.0.6',
-    latestVersionName: '1.0.8',
+    latestVersionName: '1.0.9',
     highlights: [
-      'Improved security & other enhancements',
-      'Real-time job radar and instant dispatching',
-      'Seamless digital attendance & payout tracking',
+      'Verified workforce directory & direct contacts',
+      'Profile management & responsive layout improvements',
+      'Performance enhancements & bug fixes',
     ],
   },
 };
