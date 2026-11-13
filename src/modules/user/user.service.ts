@@ -543,14 +543,57 @@ export interface GetVerifiedWorkersQuery {
   limit?: number;
 }
 
+function parseWorkerSkills(preferredWork: string | null): string[] {
+  if (!preferredWork) return ['General Maintenance'];
+  const trimmed = preferredWork.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed.skills) && parsed.skills.length > 0) {
+        return parsed.skills
+          .map((s: any) => String(s).replace(/["{}\[\]]/g, '').trim())
+          .filter(Boolean);
+      }
+    } catch (_) {}
+  }
+
+  const parts = trimmed
+    .split(/,\s*/)
+    .map((s) => s.replace(/["{}\[\]]/g, '').trim())
+    .filter(
+      (s) =>
+        s.length > 0 &&
+        !s.includes(':') &&
+        !['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].includes(s)
+    );
+
+  const cleanMap: Record<string, string> = {
+    packer: 'Packer & Mover',
+    'loader-unloader': 'Loading & Unloading',
+    'general-helper': 'General Helper',
+    'security-guard': 'Security Guard',
+    electrician: 'Electrician',
+    'All Types': 'Multi-Skilled Technician',
+    Residential: 'Residential Services',
+    Commercial: 'Commercial Maintenance',
+    Industrial: 'Industrial Workforce',
+    Plumbing: 'Plumbing',
+    Cleaning: 'Cleaning & Janitorial',
+    Housekeeping: 'Housekeeping',
+    'AC Repair': 'AC Technician',
+  };
+
+  const mapped = parts.map((p) => cleanMap[p] || p);
+  return mapped.length > 0 ? mapped : ['Skilled Professional'];
+}
+
 export async function getVerifiedWorkers(query: GetVerifiedWorkersQuery) {
   const page = Math.max(1, Number(query.page) || 1);
-  const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
-  const skip = (page - 1) * limit;
+  const limit = Math.min(200, Math.max(1, Number(query.limit) || 100));
 
   // Filter ONLY admin-verified workers who onboarded from app/website
-  // NOT gig leads (FormGigLead)
-  const where: any = {
+  // isDocVerified: true
+  const baseWhere: any = {
     isActive: true,
     isDocVerified: true,
     user: {
@@ -558,126 +601,117 @@ export async function getVerifiedWorkers(query: GetVerifiedWorkersQuery) {
     },
   };
 
-  if (query.state && query.state.trim().toLowerCase() !== 'all') {
-    where.user.addresses = {
-      some: {
-        state: {
-          contains: query.state.trim(),
-          mode: 'insensitive',
-        },
-      },
-    };
-  }
-
-  if (query.category && query.category.trim().toLowerCase() !== 'all') {
-    where.preferredWork = {
-      contains: query.category.trim(),
-      mode: 'insensitive',
-    };
-  }
-
-  if (query.search && query.search.trim().length > 0) {
-    const s = query.search.trim();
-    where.OR = [
-      { user: { name: { contains: s, mode: 'insensitive' } } },
-      { user: { phone: { contains: s, mode: 'insensitive' } } },
-      { preferredWork: { contains: s, mode: 'insensitive' } },
-      { user: { addresses: { some: { city: { contains: s, mode: 'insensitive' } } } } },
-      { user: { addresses: { some: { state: { contains: s, mode: 'insensitive' } } } } },
-    ];
-  }
-
-  const [workers, total] = await Promise.all([
-    prisma.worker.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy: [
-        { rating: 'desc' },
-        { totalJobs: 'desc' },
-        { createdAt: 'desc' },
-      ],
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
-            profileImageUrl: true,
-            role: true,
-            createdAt: true,
-            addresses: {
-              select: {
-                id: true,
-                label: true,
-                addressLine1: true,
-                city: true,
-                state: true,
-                pincode: true,
-                isDefault: true,
-              },
+  const allVerifiedWorkers = await prisma.worker.findMany({
+    where: baseWhere,
+    orderBy: [
+      { rating: 'desc' },
+      { totalJobs: 'desc' },
+      { createdAt: 'desc' },
+    ],
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          profileImageUrl: true,
+          role: true,
+          createdAt: true,
+          addresses: {
+            select: {
+              id: true,
+              label: true,
+              addressLine1: true,
+              city: true,
+              state: true,
+              pincode: true,
+              isDefault: true,
             },
           },
         },
-        workerBadges: {
-          include: {
-            badge: true,
-          },
-        },
       },
-    }),
-    prisma.worker.count({ where }),
-  ]);
-
-  // Aggregate distinct states from verified workers for state-wise filter tabs
-  const verifiedWorkersWithAddresses = await prisma.worker.findMany({
-    where: {
-      isActive: true,
-      isDocVerified: true,
-      user: { isActive: true },
-    },
-    select: {
-      preferredWork: true,
-      user: {
-        select: {
-          addresses: {
-            select: { state: true, city: true },
-          },
+      workerBadges: {
+        include: {
+          badge: true,
         },
       },
     },
-    take: 500,
   });
+
+  // Cross-reference location from FormGigLead where user phone matches
+  const phones = allVerifiedWorkers
+    .map((w) => w.user.phone)
+    .filter(Boolean) as string[];
+
+  const leads = await prisma.formGigLead.findMany({
+    where: { phone: { in: phones } },
+    select: { phone: true, city: true, givenState: true },
+  });
+
+  const phoneToLocation = new Map<string, { city: string; state: string }>();
+  for (const l of leads) {
+    if (!phoneToLocation.has(l.phone)) {
+      phoneToLocation.set(l.phone, {
+        city: l.city,
+        state: l.givenState || l.city,
+      });
+    }
+  }
 
   const stateSet = new Set<string>();
   const categorySet = new Set<string>();
 
-  for (const w of verifiedWorkersWithAddresses) {
-    if (w.user?.addresses) {
-      for (const addr of w.user.addresses) {
-        if (addr.state && addr.state.trim().length > 0) {
-          stateSet.add(addr.state.trim());
-        }
-      }
-    }
-    if (w.preferredWork) {
-      const skills = w.preferredWork.split(/,\s*/);
-      for (const s of skills) {
-        const clean = s.trim();
-        if (clean.length > 0 && !clean.startsWith('{')) {
-          categorySet.add(clean);
-        }
-      }
-    }
-  }
+  // Resolve clean location and skills for all verified workers
+  const resolvedList = allVerifiedWorkers.map((w) => {
+    const primaryAddress =
+      w.user.addresses.find((a) => a.isDefault) || w.user.addresses[0];
 
-  // Format workers for clean frontend consumption
-  const formattedWorkers = workers.map((w) => {
-    const primaryAddress = w.user.addresses.find((a) => a.isDefault) || w.user.addresses[0];
-    const categories = w.preferredWork
-      ? w.preferredWork.split(/,\s*/).map((s) => s.trim()).filter((s) => s.length > 0 && !s.startsWith('{'))
-      : ['General Maintenance'];
+    let city = 'Kolkata';
+    let state = 'West Bengal';
+
+    if (
+      primaryAddress &&
+      primaryAddress.state &&
+      primaryAddress.state !== 'Unknown' &&
+      primaryAddress.state.trim().length > 0
+    ) {
+      city = primaryAddress.city || city;
+      state = primaryAddress.state.trim();
+    } else if (w.user.phone && phoneToLocation.has(w.user.phone)) {
+      const match = phoneToLocation.get(w.user.phone)!;
+      city = match.city || city;
+      state = match.state || state;
+    } else if (w.preferredWork && w.preferredWork.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(w.preferredWork);
+        if (parsed.workAreaLocality) {
+          city = parsed.workAreaLocality;
+          state = 'Maharashtra';
+        }
+      } catch (_) {}
+    } else if (w.currentLat && w.currentLng) {
+      if (w.currentLat > 28 && w.currentLat < 29) {
+        city = 'New Delhi';
+        state = 'Delhi';
+      } else if (w.currentLat > 18 && w.currentLat < 20) {
+        city = 'Mumbai';
+        state = 'Maharashtra';
+      } else if (w.currentLat > 12 && w.currentLat < 14) {
+        city = 'Bengaluru';
+        state = 'Karnataka';
+      } else if (w.currentLat > 17 && w.currentLat < 18) {
+        city = 'Hyderabad';
+        state = 'Telangana';
+      }
+    }
+
+    stateSet.add(state);
+
+    const categories = parseWorkerSkills(w.preferredWork);
+    for (const c of categories) {
+      categorySet.add(c);
+    }
 
     return {
       id: w.id,
@@ -691,10 +725,10 @@ export async function getVerifiedWorkers(query: GetVerifiedWorkersQuery) {
       acceptanceRate: w.acceptanceRate || 100.0,
       status: w.status,
       isDocVerified: w.isDocVerified,
-      categories: categories.length > 0 ? categories : ['Technician'],
+      categories,
       primaryCategory: categories[0] || 'Technician',
-      state: primaryAddress?.state || 'West Bengal',
-      city: primaryAddress?.city || 'Kolkata',
+      state,
+      city,
       addressLine: primaryAddress?.addressLine1 || '',
       languages: w.languages || ['Hindi', 'English'],
       availableTime: w.availableTime || '8:00 AM - 8:00 PM',
@@ -703,12 +737,43 @@ export async function getVerifiedWorkers(query: GetVerifiedWorkersQuery) {
     };
   });
 
+  // Apply State, Category, and Search filtering
+  let filtered = resolvedList;
+
+  if (query.state && query.state.trim().toLowerCase() !== 'all') {
+    const qState = query.state.trim().toLowerCase();
+    filtered = filtered.filter((w) => w.state.toLowerCase().includes(qState));
+  }
+
+  if (query.category && query.category.trim().toLowerCase() !== 'all') {
+    const qCat = query.category.trim().toLowerCase();
+    filtered = filtered.filter((w) =>
+      w.categories.some((c) => c.toLowerCase().includes(qCat))
+    );
+  }
+
+  if (query.search && query.search.trim().length > 0) {
+    const s = query.search.trim().toLowerCase();
+    filtered = filtered.filter(
+      (w) =>
+        w.name.toLowerCase().includes(s) ||
+        w.phone.includes(s) ||
+        w.city.toLowerCase().includes(s) ||
+        w.state.toLowerCase().includes(s) ||
+        w.categories.some((c) => c.toLowerCase().includes(s))
+    );
+  }
+
+  const total = filtered.length;
+  const skip = (page - 1) * limit;
+  const paginatedWorkers = filtered.slice(skip, skip + limit);
+
   return {
-    workers: formattedWorkers,
+    workers: paginatedWorkers,
     total,
     page,
     limit,
-    totalPages: Math.ceil(total / limit),
+    totalPages: Math.ceil(total / limit) || 1,
     availableStates: Array.from(stateSet).sort(),
     availableCategories: Array.from(categorySet).sort(),
   };
