@@ -530,3 +530,186 @@ export async function deleteTeamMember(userId: string, memberId: string) {
   await prisma.teamMember.delete({ where: { id: memberId } });
   return { message: 'Team member removed' };
 }
+
+// ─────────────────────────────────────────────
+// VERIFIED WORKERS DIRECTORY (FOR HIRER / CUSTOMER)
+// ─────────────────────────────────────────────
+
+export interface GetVerifiedWorkersQuery {
+  state?: string;
+  category?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export async function getVerifiedWorkers(query: GetVerifiedWorkersQuery) {
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+  const skip = (page - 1) * limit;
+
+  // Filter ONLY admin-verified workers who onboarded from app/website
+  // NOT gig leads (FormGigLead)
+  const where: any = {
+    isActive: true,
+    isDocVerified: true,
+    user: {
+      isActive: true,
+    },
+  };
+
+  if (query.state && query.state.trim().toLowerCase() !== 'all') {
+    where.user.addresses = {
+      some: {
+        state: {
+          contains: query.state.trim(),
+          mode: 'insensitive',
+        },
+      },
+    };
+  }
+
+  if (query.category && query.category.trim().toLowerCase() !== 'all') {
+    where.preferredWork = {
+      contains: query.category.trim(),
+      mode: 'insensitive',
+    };
+  }
+
+  if (query.search && query.search.trim().length > 0) {
+    const s = query.search.trim();
+    where.OR = [
+      { user: { name: { contains: s, mode: 'insensitive' } } },
+      { user: { phone: { contains: s, mode: 'insensitive' } } },
+      { preferredWork: { contains: s, mode: 'insensitive' } },
+      { user: { addresses: { some: { city: { contains: s, mode: 'insensitive' } } } } },
+      { user: { addresses: { some: { state: { contains: s, mode: 'insensitive' } } } } },
+    ];
+  }
+
+  const [workers, total] = await Promise.all([
+    prisma.worker.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: [
+        { rating: 'desc' },
+        { totalJobs: 'desc' },
+        { createdAt: 'desc' },
+      ],
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            email: true,
+            profileImageUrl: true,
+            role: true,
+            createdAt: true,
+            addresses: {
+              select: {
+                id: true,
+                label: true,
+                addressLine1: true,
+                city: true,
+                state: true,
+                pincode: true,
+                isDefault: true,
+              },
+            },
+          },
+        },
+        workerBadges: {
+          include: {
+            badge: true,
+          },
+        },
+      },
+    }),
+    prisma.worker.count({ where }),
+  ]);
+
+  // Aggregate distinct states from verified workers for state-wise filter tabs
+  const verifiedWorkersWithAddresses = await prisma.worker.findMany({
+    where: {
+      isActive: true,
+      isDocVerified: true,
+      user: { isActive: true },
+    },
+    select: {
+      preferredWork: true,
+      user: {
+        select: {
+          addresses: {
+            select: { state: true, city: true },
+          },
+        },
+      },
+    },
+    take: 500,
+  });
+
+  const stateSet = new Set<string>();
+  const categorySet = new Set<string>();
+
+  for (const w of verifiedWorkersWithAddresses) {
+    if (w.user?.addresses) {
+      for (const addr of w.user.addresses) {
+        if (addr.state && addr.state.trim().length > 0) {
+          stateSet.add(addr.state.trim());
+        }
+      }
+    }
+    if (w.preferredWork) {
+      const skills = w.preferredWork.split(/,\s*/);
+      for (const s of skills) {
+        const clean = s.trim();
+        if (clean.length > 0 && !clean.startsWith('{')) {
+          categorySet.add(clean);
+        }
+      }
+    }
+  }
+
+  // Format workers for clean frontend consumption
+  const formattedWorkers = workers.map((w) => {
+    const primaryAddress = w.user.addresses.find((a) => a.isDefault) || w.user.addresses[0];
+    const categories = w.preferredWork
+      ? w.preferredWork.split(/,\s*/).map((s) => s.trim()).filter((s) => s.length > 0 && !s.startsWith('{'))
+      : ['General Maintenance'];
+
+    return {
+      id: w.id,
+      userId: w.userId,
+      name: w.user.name || 'Verified Professional',
+      phone: w.user.phone || '',
+      email: w.user.email || '',
+      profileImageUrl: w.user.profileImageUrl || '',
+      rating: w.rating || 5.0,
+      totalJobs: w.totalJobs || 0,
+      acceptanceRate: w.acceptanceRate || 100.0,
+      status: w.status,
+      isDocVerified: w.isDocVerified,
+      categories: categories.length > 0 ? categories : ['Technician'],
+      primaryCategory: categories[0] || 'Technician',
+      state: primaryAddress?.state || 'West Bengal',
+      city: primaryAddress?.city || 'Kolkata',
+      addressLine: primaryAddress?.addressLine1 || '',
+      languages: w.languages || ['Hindi', 'English'],
+      availableTime: w.availableTime || '8:00 AM - 8:00 PM',
+      badges: w.workerBadges.map((b) => b.badge.name),
+      joinedAt: w.user.createdAt,
+    };
+  });
+
+  return {
+    workers: formattedWorkers,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+    availableStates: Array.from(stateSet).sort(),
+    availableCategories: Array.from(categorySet).sort(),
+  };
+}

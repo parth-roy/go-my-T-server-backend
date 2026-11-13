@@ -228,3 +228,18 @@ export async function clearFcmToken(req: Request, res: Response, next: NextFunct
     next(error);
   }
 }
+
+export async function getVerifiedWorkers(req: Request, res: Response, next: NextFunction) {
+  try {
+    const result = await UserService.getVerifiedWorkers({
+      state: req.query.state as string,
+      category: req.query.category as string,
+      search: req.query.search as string,
+      page: req.query.page ? Number(req.query.page) : 1,
+      limit: req.query.limit ? Number(req.query.limit) : 20,
+    });
+    sendSuccess(res, result, 'Verified workers retrieved successfully');
+  } catch (err) {
+    next(err);
+  }
+}

@@ -15,7 +15,10 @@ import {
 
 export const userRouter = Router();
 
-// All user routes require authentication
+// GET /api/v1/users/verified-workers — Public/Hirer directory of admin-verified workers (onboarded from app/web)
+userRouter.get('/verified-workers', UserController.getVerifiedWorkers);
+
+// All user routes below require authentication
 userRouter.use(authenticate);
 
 // ─── Profile ───────────────────────────────────────────────────────────────
