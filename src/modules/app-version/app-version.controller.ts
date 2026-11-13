@@ -30,9 +30,9 @@ const APP_POLICIES: Record<string, {
     packageName: 'com.gomytruck.customer',
     appName: 'GoMyTruck',
     minVersionCode: 8,
-    latestVersionCode: 11,
+    latestVersionCode: 12,
     minVersionName: '1.0.6',
-    latestVersionName: '1.0.9',
+    latestVersionName: '1.0.10',
     highlights: [
       'Improved security & other enhancements',
       'DFME v2.6 live freight pricing engine',
