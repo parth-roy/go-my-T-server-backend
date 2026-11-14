@@ -826,6 +826,7 @@ export async function uploadDocuments(userId: string, input: UploadDocumentsInpu
 
   const docsToCreate: any[] = [];
   if (input.aadhaarUrl) docsToCreate.push({ workerId: worker.id, type: 'AADHAAR', fileUrl: input.aadhaarUrl });
+  if (input.aadhaarBackUrl) docsToCreate.push({ workerId: worker.id, type: 'AADHAAR_BACK', fileUrl: input.aadhaarBackUrl });
   if (input.panUrl) docsToCreate.push({ workerId: worker.id, type: 'PAN', fileUrl: input.panUrl });
   if (input.bikeUrl) docsToCreate.push({ workerId: worker.id, type: 'BIKE', fileUrl: input.bikeUrl });
   if (input.licenseUrl) docsToCreate.push({ workerId: worker.id, type: 'LICENSE', fileUrl: input.licenseUrl });
@@ -842,6 +843,20 @@ export async function uploadDocuments(userId: string, input: UploadDocumentsInpu
     await prisma.workerDocument.createMany({
       data: docsToCreate,
     });
+  }
+
+  // Also sync document URLs and numbers directly onto the Worker KYC model
+  const workerUpdateData: any = {};
+  if (input.aadhaarUrl) workerUpdateData.aadhaarUrl = input.aadhaarUrl;
+  if (input.panUrl) workerUpdateData.panUrl = input.panUrl;
+  if (input.aadhaarNumber) workerUpdateData.aadhaarNumber = input.aadhaarNumber;
+  if (input.panNumber) workerUpdateData.panNumber = input.panNumber;
+
+  if (Object.keys(workerUpdateData).length > 0) {
+    await prisma.worker.update({
+      where: { id: worker.id },
+      data: workerUpdateData,
+    }).catch((err: any) => logger.warn('[Workforce] Failed to sync worker KYC document fields:', err));
   }
 
   return { success: true, message: 'Documents uploaded successfully for verification.' };
