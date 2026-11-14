@@ -2165,6 +2165,54 @@ function mapGigLeadToWorkerItem(lead: any, existingWorkerPhoneSet?: Set<string>)
   };
 }
 
+export async function getPendingDriverDocumentsCount() {
+  const existingDrivers = await prisma.driver.findMany({
+    select: { user: { select: { phone: true } } },
+  });
+  const existingDriverPhoneSet = new Set(
+    existingDrivers
+      .map((d) => (d.user?.phone ? d.user.phone.replace(/\D/g, '').slice(-10) : ''))
+      .filter((p) => p.length === 10)
+  );
+
+  const excludedPhoneVariants = Array.from(existingDriverPhoneSet).flatMap((p) => [
+    p,
+    `+91${p}`,
+    `91${p}`,
+    `0${p}`,
+  ]);
+
+  const [driverCount, leadCount] = await Promise.all([
+    prisma.driver.count({
+      where: {
+        isDocVerified: false,
+      },
+    }),
+    prisma.formDriverLead.count({
+      where: {
+        status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] },
+        createdAt: { gte: ONBOARDING_LEADS_CUTOFF },
+        ...(excludedPhoneVariants.length > 0 ? { phone: { notIn: excludedPhoneVariants } } : {}),
+        AND: [
+          {
+            OR: [
+              { AND: [{ profilePhotoUrl: { not: null } }, { profilePhotoUrl: { not: '' } }] },
+              { AND: [{ aadharFrontUrl: { not: null } }, { aadharFrontUrl: { not: '' } }] },
+              { AND: [{ aadharBackUrl: { not: null } }, { aadharBackUrl: { not: '' } }] },
+              { AND: [{ dlFrontUrl: { not: null } }, { dlFrontUrl: { not: '' } }] },
+              { AND: [{ dlBackUrl: { not: null } }, { dlBackUrl: { not: '' } }] },
+              { AND: [{ rcBookUrl: { not: null } }, { rcBookUrl: { not: '' } }] },
+              { AND: [{ insuranceUrl: { not: null } }, { insuranceUrl: { not: '' } }] },
+            ],
+          },
+        ],
+      },
+    }),
+  ]);
+
+  return { count: driverCount + leadCount, driverCount, leadCount };
+}
+
 export async function getPendingWorkerDocumentsCount() {
   const existingWorkers = await prisma.worker.findMany({
     select: { user: { select: { phone: true } } },

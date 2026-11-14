@@ -70,6 +70,8 @@ adminRouter.delete('/users/:id/hard',                 ctrl.hardDeleteUser);
 adminRouter.post('/users/bulk-hard',                  ctrl.bulkHardDeleteUsers);
 
 // ── Drivers ───────────────────────────────────────────────────────────────────
+adminRouter.get('/drivers/pending-count',                              ctrl.getPendingDriverDocumentsCount);
+adminRouter.get('/driver-documents/pending-count',                     ctrl.getPendingDriverDocumentsCount);
 adminRouter.get('/drivers',                                          ctrl.listDrivers);
 adminRouter.post('/drivers/convert-lead/:id',                         ctrl.convertLeadToDriver);
 adminRouter.post('/drivers/reject-lead/:id',                          ctrl.rejectLeadFromVerification);
