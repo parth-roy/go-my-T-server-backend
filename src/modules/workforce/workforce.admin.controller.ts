@@ -9,7 +9,7 @@ import { deleteEntitySchema, bulkDeleteSchema } from '@modules/admin/admin.schem
 
 const workforceQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).max(100).default(25),
+  limit: z.coerce.number().min(1).max(10000).default(25),
   search: z.string().optional(),
   status: z.enum(['OFFLINE', 'AVAILABLE', 'ON_JOB']).optional(),
   isDocVerified: z.coerce.boolean().optional(),
@@ -41,7 +41,8 @@ export const listWorkforce = async (req: Request, res: Response, next: NextFunct
         include: {
           user: { select: { id: true, name: true, phone: true, email: true, profileImageUrl: true, isActive: true } },
           workerWallet: { select: { cachedBalance: true } },
-          documents: { select: { status: true, type: true } }
+          documents: { select: { status: true, type: true } },
+          _count: { select: { jobAssignments: true } },
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -66,6 +67,7 @@ export const getWorker = async (req: Request, res: Response, next: NextFunction)
       include: {
         user: { select: { name: true, phone: true, email: true, profileImageUrl: true } },
         documents: true,
+        _count: { select: { jobAssignments: true } },
       },
     });
     if (!worker) throw AppError.notFound('Worker not found');
