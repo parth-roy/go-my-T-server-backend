@@ -71,6 +71,7 @@ adminRouter.delete('/users/:id/hard',                 ctrl.hardDeleteUser);
 adminRouter.post('/users/bulk-hard',                  ctrl.bulkHardDeleteUsers);
 
 // ── Drivers ───────────────────────────────────────────────────────────────────
+adminRouter.get('/drivers/stats',                                      ctrl.getDriverStats);
 adminRouter.get('/drivers/pending-count',                              ctrl.getPendingDriverDocumentsCount);
 adminRouter.get('/driver-documents/pending-count',                     ctrl.getPendingDriverDocumentsCount);
 adminRouter.get('/drivers',                                          ctrl.listDrivers);

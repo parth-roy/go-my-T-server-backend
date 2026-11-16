@@ -560,6 +560,10 @@ export const systemHealth = async (_req: Request, res: Response, next: NextFunct
 // WORKFORCE VERIFICATION
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const getDriverStats = async (_req: Request, res: Response, next: NextFunction) => {
+  try { ok(res, await adminService.getDriverStats()); } catch (e) { next(e); }
+};
+
 export const getPendingDriverDocumentsCount = async (_req: Request, res: Response, next: NextFunction) => {
   try { ok(res, await adminService.getPendingDriverDocumentsCount()); } catch (e) { next(e); }
 };

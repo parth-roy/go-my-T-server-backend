@@ -1406,25 +1406,60 @@ const ONBOARDING_LEADS_CUTOFF = new Date('2026-11-05T00:00:00.000Z');
 
 export async function getDrivers(q: DriversQuery) {
   const where: any = {};
-  if (q.status) where.status = q.status;
-  if (q.dlVerifStatus) where.dlVerifStatus = q.dlVerifStatus;
-  if (q.rcVerifStatus) where.vehicle = { rcVerifStatus: q.rcVerifStatus };
-  if (q.plan) where.subscription = { plan: q.plan };
+  if (q.status && q.status !== 'all') where.status = q.status;
+  if (q.dlVerifStatus && q.dlVerifStatus !== 'all') where.dlVerifStatus = q.dlVerifStatus;
+  if (q.rcVerifStatus && q.rcVerifStatus !== 'all') {
+    where.vehicle = { ...(where.vehicle || {}), rcVerifStatus: q.rcVerifStatus };
+  }
+  if (q.vehicleType && q.vehicleType !== 'all') {
+    where.vehicle = { ...(where.vehicle || {}), type: q.vehicleType };
+  }
+  if (q.accountStatus === 'ACTIVE') {
+    where.user = { ...(where.user || {}), isActive: true };
+  } else if (q.accountStatus === 'BLOCKED') {
+    where.user = { ...(where.user || {}), isActive: false };
+  }
+  if (q.state && q.state !== 'all') {
+    where.vehicle = { ...(where.vehicle || {}), registrationNo: { startsWith: q.state, mode: 'insensitive' } };
+  }
+  if (q.tripsFilter === 'HAS_TRIPS') {
+    where.totalTrips = { gt: 0 };
+  } else if (q.tripsFilter === 'ZERO_TRIPS') {
+    where.totalTrips = 0;
+  }
+  if (q.plan && q.plan !== 'all') where.subscription = { plan: q.plan };
   if (q.isDocVerified !== undefined) where.isDocVerified = q.isDocVerified;
-  if (q.search) {
-    where.OR = [
-      { user: { name: { contains: q.search, mode: 'insensitive' } } },
-      { user: { phone: { contains: q.search } } },
-      { licenseNumber: { contains: q.search, mode: 'insensitive' } },
+
+  if (q.search && q.search.trim()) {
+    const term = q.search.trim();
+    const cleanDigits = term.replace(/\D/g, '');
+    const searchOr: any[] = [
+      { user: { name: { contains: term, mode: 'insensitive' } } },
+      { user: { phone: { contains: term } } },
+      { licenseNumber: { contains: term, mode: 'insensitive' } },
+      { vehicle: { registrationNo: { contains: term, mode: 'insensitive' } } },
+      { vehicle: { model: { contains: term, mode: 'insensitive' } } },
+      { vehicle: { make: { contains: term, mode: 'insensitive' } } },
     ];
+    if (cleanDigits.length >= 4) {
+      searchOr.push({ user: { phone: { contains: cleanDigits } } });
+    }
+    where.OR = searchOr;
   }
 
-  // Include unconverted website onboarding leads when reviewing pending or all drivers.
-  // CRITICAL REQUIREMENT:
-  // 1. Only leads that have uploaded documents (profile photo, dl, rc, aadhaar, or permit/insurance).
-  // 2. Only upcoming / new data from rollout (createdAt >= Nov 5, 2026). Old legacy leads without documents are strictly excluded.
-  // 3. Exclude any driver leads whose driver account is already created (phone already registered in Driver table or converted).
-  const includeLeads = q.isDocVerified !== true && !q.plan && (!q.status || q.status === 'OFFLINE');
+  // Dynamic ordering
+  let orderBy: any = { createdAt: 'desc' };
+  if (q.sortBy === 'createdAt_asc') orderBy = { createdAt: 'asc' };
+  else if (q.sortBy === 'rating_desc') orderBy = { rating: 'desc' };
+  else if (q.sortBy === 'trips_desc') orderBy = { totalTrips: 'desc' };
+  else if (q.sortBy === 'name_asc') orderBy = { user: { name: 'asc' } };
+
+  // Source handling
+  const source = q.source || 'ALL';
+  const isOnlyOnboarded = source === 'ONBOARDED';
+  const isOnlyLeads = source === 'LEADS';
+
+  const includeLeads = !isOnlyOnboarded && (isOnlyLeads || (q.isDocVerified !== true && !q.plan && (!q.status || q.status === 'OFFLINE' || q.status === 'all') && !q.tripsFilter));
   let leadWhere: any = null;
   let existingPhoneSet: Set<string> = new Set();
 
@@ -1469,27 +1504,60 @@ export async function getDrivers(q: DriversQuery) {
       });
     }
 
-    if (q.search) {
+    if (q.vehicleType && q.vehicleType !== 'all') {
+      leadWhere.vehicleType = q.vehicleType;
+    }
+
+    if (q.state && q.state !== 'all') {
       leadWhere.AND.push({
         OR: [
-          { name: { contains: q.search, mode: 'insensitive' } },
-          { phone: { contains: q.search } },
-          { dlNumber: { contains: q.search, mode: 'insensitive' } },
-          { vehicleNumber: { contains: q.search, mode: 'insensitive' } },
-          { city: { contains: q.search, mode: 'insensitive' } },
+          { state: { contains: q.state, mode: 'insensitive' } },
+          { vehicleNumber: { startsWith: q.state, mode: 'insensitive' } },
         ],
       });
+    }
+
+    if (q.search && q.search.trim()) {
+      const term = q.search.trim();
+      const cleanDigits = term.replace(/\D/g, '');
+      const leadSearchOr: any[] = [
+        { name: { contains: term, mode: 'insensitive' } },
+        { phone: { contains: term } },
+        { dlNumber: { contains: term, mode: 'insensitive' } },
+        { vehicleNumber: { contains: term, mode: 'insensitive' } },
+        { city: { contains: term, mode: 'insensitive' } },
+      ];
+      if (cleanDigits.length >= 4) {
+        leadSearchOr.push({ phone: { contains: cleanDigits } });
+      }
+      leadWhere.AND.push({ OR: leadSearchOr });
     }
   }
 
   const [driverCount, leadCount] = await Promise.all([
-    prisma.driver.count({ where }),
+    isOnlyLeads ? Promise.resolve(0) : prisma.driver.count({ where }),
     leadWhere ? prisma.formDriverLead.count({ where: leadWhere }) : Promise.resolve(0),
   ]);
 
   const total = driverCount + leadCount;
   const skip = (q.page - 1) * q.limit;
   const limit = q.limit;
+
+  const driverSelectInclude = {
+    user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
+    vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true, make: true, model: true } },
+    subscription: { select: { plan: true, endDate: true, isActive: true } },
+    documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
+    fleetMemberships: {
+      where: { isActive: true },
+      include: {
+        fleetOwner: {
+          select: { id: true, companyName: true, user: { select: { name: true, phone: true } } },
+        },
+      },
+      take: 1,
+    },
+  };
 
   let leadsData: any[] = [];
   let driversData: any[] = [];
@@ -1514,59 +1582,50 @@ export async function getDrivers(q: DriversQuery) {
       leadsData = resolvedLeads.filter((item): item is NonNullable<typeof item> => item !== null);
 
       const remainingTake = limit - leadsData.length;
-      if (remainingTake > 0) {
+      if (remainingTake > 0 && !isOnlyLeads) {
         driversData = await prisma.driver.findMany({
           where,
           skip: 0,
           take: remainingTake,
-          orderBy: { createdAt: 'desc' },
-          include: {
-            user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
-            vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true } },
-            subscription: { select: { plan: true, endDate: true, isActive: true } },
-            documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
-          },
+          orderBy,
+          include: driverSelectInclude,
         });
       }
-    } else {
+    } else if (!isOnlyLeads) {
       const driverSkip = skip - leadCount;
       driversData = await prisma.driver.findMany({
         where,
         skip: driverSkip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
-          vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true } },
-          subscription: { select: { plan: true, endDate: true, isActive: true } },
-          documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
-        },
+        orderBy,
+        include: driverSelectInclude,
       });
     }
-  } else {
+  } else if (!isOnlyLeads) {
     driversData = await prisma.driver.findMany({
       where,
       skip,
       take: limit,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
-        vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true } },
-        subscription: { select: { plan: true, endDate: true, isActive: true } },
-        documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
-      },
+      orderBy,
+      include: driverSelectInclude,
     });
   }
 
   const processedDrivers = await Promise.all(
-    driversData.map(async (d) => {
+    driversData.map(async (d: any) => {
       let complianceScore = 0;
       if (d.dlVerifStatus === 'VERIFIED') complianceScore += 30;
       if (d.isDocVerified) complianceScore += 40;
       if (d.user?.isActive) complianceScore += 10;
       if (d.vehicle?.rcVerifStatus === 'VERIFIED') complianceScore += 20;
       const resolvedDocs = await s3Service.resolveDocumentsUrls(d.documents);
-      return { ...d, source: 'APP' as const, complianceScore, documents: resolvedDocs };
+      return {
+        ...d,
+        source: 'APP' as const,
+        complianceScore,
+        documents: resolvedDocs,
+        fleetOwner: d.fleetMemberships?.[0]?.fleetOwner || null,
+      };
     })
   );
 
@@ -2623,6 +2682,30 @@ export async function getPendingDriverDocumentsCount() {
   ]);
 
   return { count: driverCount + leadCount, driverCount, leadCount };
+}
+
+export async function getDriverStats() {
+  const [totalDrivers, available, onTrip, offline, docsPending, docsVerified, blocked, totalLeads] = await Promise.all([
+    prisma.driver.count(),
+    prisma.driver.count({ where: { status: 'AVAILABLE', user: { isActive: true } } }),
+    prisma.driver.count({ where: { status: 'ON_TRIP' } }),
+    prisma.driver.count({ where: { status: 'OFFLINE' } }),
+    prisma.driver.count({ where: { isDocVerified: false } }),
+    prisma.driver.count({ where: { isDocVerified: true } }),
+    prisma.driver.count({ where: { user: { isActive: false } } }),
+    prisma.formDriverLead.count({ where: { status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] } } }),
+  ]);
+  return {
+    total: totalDrivers + totalLeads,
+    totalDrivers,
+    totalLeads,
+    available,
+    onTrip,
+    offline,
+    docsPending,
+    docsVerified,
+    blocked,
+  };
 }
 
 export async function getPendingWorkerDocumentsCount() {
