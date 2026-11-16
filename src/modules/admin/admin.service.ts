@@ -1454,162 +1454,34 @@ export async function getDrivers(q: DriversQuery) {
   else if (q.sortBy === 'trips_desc') orderBy = { totalTrips: 'desc' };
   else if (q.sortBy === 'name_asc') orderBy = { user: { name: 'asc' } };
 
-  // Source handling
-  const source = q.source || 'ALL';
-  const isOnlyOnboarded = source === 'ONBOARDED';
-  const isOnlyLeads = source === 'LEADS';
-
-  const includeLeads = !isOnlyOnboarded && (isOnlyLeads || (q.isDocVerified !== true && !q.plan && (!q.status || q.status === 'OFFLINE' || q.status === 'all') && !q.tripsFilter));
-  let leadWhere: any = null;
-  let existingPhoneSet: Set<string> = new Set();
-
-  if (includeLeads) {
-    const existingDrivers = await prisma.driver.findMany({
-      select: { user: { select: { phone: true } } },
-    });
-    existingPhoneSet = new Set(
-      existingDrivers
-        .map((d) => (d.user?.phone ? d.user.phone.replace(/\D/g, '').slice(-10) : ''))
-        .filter((p) => p.length === 10)
-    );
-
-    const excludedPhoneVariants = Array.from(existingPhoneSet).flatMap((p) => [
-      p,
-      `+91${p}`,
-      `91${p}`,
-      `0${p}`,
-    ]);
-
-    leadWhere = {
-      status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] },
-      createdAt: { gte: ONBOARDING_LEADS_CUTOFF },
-      AND: [
-        {
-          OR: [
-            { AND: [{ profilePhotoUrl: { not: null } }, { profilePhotoUrl: { not: '' } }] },
-            { AND: [{ aadharFrontUrl: { not: null } }, { aadharFrontUrl: { not: '' } }] },
-            { AND: [{ aadharBackUrl: { not: null } }, { aadharBackUrl: { not: '' } }] },
-            { AND: [{ dlFrontUrl: { not: null } }, { dlFrontUrl: { not: '' } }] },
-            { AND: [{ dlBackUrl: { not: null } }, { dlBackUrl: { not: '' } }] },
-            { AND: [{ rcBookUrl: { not: null } }, { rcBookUrl: { not: '' } }] },
-            { AND: [{ insuranceUrl: { not: null } }, { insuranceUrl: { not: '' } }] },
-          ],
-        },
-      ],
-    };
-
-    if (excludedPhoneVariants.length > 0) {
-      leadWhere.AND.push({
-        phone: { notIn: excludedPhoneVariants },
-      });
-    }
-
-    if (q.vehicleType && q.vehicleType !== 'all') {
-      leadWhere.vehicleType = q.vehicleType;
-    }
-
-    if (q.state && q.state !== 'all') {
-      leadWhere.AND.push({
-        OR: [
-          { state: { contains: q.state, mode: 'insensitive' } },
-          { vehicleNumber: { startsWith: q.state, mode: 'insensitive' } },
-        ],
-      });
-    }
-
-    if (q.search && q.search.trim()) {
-      const term = q.search.trim();
-      const cleanDigits = term.replace(/\D/g, '');
-      const leadSearchOr: any[] = [
-        { name: { contains: term, mode: 'insensitive' } },
-        { phone: { contains: term } },
-        { dlNumber: { contains: term, mode: 'insensitive' } },
-        { vehicleNumber: { contains: term, mode: 'insensitive' } },
-        { city: { contains: term, mode: 'insensitive' } },
-      ];
-      if (cleanDigits.length >= 4) {
-        leadSearchOr.push({ phone: { contains: cleanDigits } });
-      }
-      leadWhere.AND.push({ OR: leadSearchOr });
-    }
-  }
-
-  const [driverCount, leadCount] = await Promise.all([
-    isOnlyLeads ? Promise.resolve(0) : prisma.driver.count({ where }),
-    leadWhere ? prisma.formDriverLead.count({ where: leadWhere }) : Promise.resolve(0),
-  ]);
-
-  const total = driverCount + leadCount;
+  // STRICT REQUIREMENT:
+  // /drivers directory is strictly and exclusively for onboarded drivers in the system (prisma.driver).
+  // Raw unconverted website onboarding leads belong in their dedicated queue (/verification and /platform/form-driver-leads), NEVER mixed here.
+  const total = await prisma.driver.count({ where });
   const skip = (q.page - 1) * q.limit;
   const limit = q.limit;
 
-  const driverSelectInclude = {
-    user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
-    vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true, make: true, model: true } },
-    subscription: { select: { plan: true, endDate: true, isActive: true } },
-    documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
-    fleetMemberships: {
-      where: { isActive: true },
-      include: {
-        fleetOwner: {
-          select: { id: true, companyName: true, user: { select: { name: true, phone: true } } },
+  const driversData = await prisma.driver.findMany({
+    where,
+    skip,
+    take: limit,
+    orderBy,
+    include: {
+      user: { select: { id: true, name: true, phone: true, email: true, isActive: true } },
+      vehicle: { select: { id: true, registrationNo: true, type: true, rcVerifStatus: true, make: true, model: true } },
+      subscription: { select: { plan: true, endDate: true, isActive: true } },
+      documents: { select: { id: true, type: true, status: true, fileUrl: true, rejectedReason: true, createdAt: true, verifiedAt: true } },
+      fleetMemberships: {
+        where: { isActive: true },
+        include: {
+          fleetOwner: {
+            select: { id: true, companyName: true, user: { select: { name: true, phone: true } } },
+          },
         },
+        take: 1,
       },
-      take: 1,
     },
-  };
-
-  let leadsData: any[] = [];
-  let driversData: any[] = [];
-
-  if (leadWhere && leadCount > 0) {
-    if (skip < leadCount) {
-      const takeLeads = Math.min(limit, leadCount - skip);
-      const rawLeads = await prisma.formDriverLead.findMany({
-        where: leadWhere,
-        skip,
-        take: takeLeads,
-        orderBy: { createdAt: 'desc' },
-      });
-      const resolvedLeads = await Promise.all(
-        rawLeads.map(async (l) => {
-          const item = mapLeadToDriverItem(l, existingPhoneSet);
-          if (!item) return null;
-          item.documents = await s3Service.resolveDocumentsUrls(item.documents);
-          return item;
-        })
-      );
-      leadsData = resolvedLeads.filter((item): item is NonNullable<typeof item> => item !== null);
-
-      const remainingTake = limit - leadsData.length;
-      if (remainingTake > 0 && !isOnlyLeads) {
-        driversData = await prisma.driver.findMany({
-          where,
-          skip: 0,
-          take: remainingTake,
-          orderBy,
-          include: driverSelectInclude,
-        });
-      }
-    } else if (!isOnlyLeads) {
-      const driverSkip = skip - leadCount;
-      driversData = await prisma.driver.findMany({
-        where,
-        skip: driverSkip,
-        take: limit,
-        orderBy,
-        include: driverSelectInclude,
-      });
-    }
-  } else if (!isOnlyLeads) {
-    driversData = await prisma.driver.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy,
-      include: driverSelectInclude,
-    });
-  }
+  });
 
   const processedDrivers = await Promise.all(
     driversData.map(async (d: any) => {
@@ -1629,8 +1501,7 @@ export async function getDrivers(q: DriversQuery) {
     })
   );
 
-  const combined = [...leadsData, ...processedDrivers];
-  return { total, page: q.page, limit: q.limit, data: combined };
+  return { total, page: q.page, limit: q.limit, data: processedDrivers };
 }
 
 export async function getDriverById(id: string) {
@@ -1651,13 +1522,32 @@ export async function getDriverById(id: string) {
       vehicle: true,
       documents: { orderBy: { createdAt: 'desc' } },
       subscription: true,
-      earnings: { take: 20, orderBy: { createdAt: 'desc' } },
+      earnings: { take: 20, orderBy: { createdAt: 'desc' }, include: { booking: { select: { bookingNumber: true } } } },
       verificationLogs: { orderBy: { calledAt: 'desc' }, take: 10 },
+      fleetMemberships: {
+        where: { isActive: true },
+        include: {
+          fleetOwner: {
+            select: { id: true, companyName: true, user: { select: { name: true, phone: true } } },
+          },
+        },
+        take: 1,
+      },
+      bookings: {
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, bookingNumber: true, status: true, totalFare: true, pickupAddress: true, createdAt: true },
+      },
     },
   });
   if (!driver) throw AppError.notFound('Driver not found');
   const resolvedDocs = await s3Service.resolveDocumentsUrls(driver.documents);
-  return { ...driver, source: 'APP' as const, documents: resolvedDocs };
+  return {
+    ...driver,
+    source: 'APP' as const,
+    documents: resolvedDocs,
+    fleetOwner: driver.fleetMemberships?.[0]?.fleetOwner || null,
+  };
 }
 
 export async function convertLeadToDriver(leadId: string) {
@@ -2685,7 +2575,7 @@ export async function getPendingDriverDocumentsCount() {
 }
 
 export async function getDriverStats() {
-  const [totalDrivers, available, onTrip, offline, docsPending, docsVerified, blocked, totalLeads] = await Promise.all([
+  const [totalDrivers, available, onTrip, offline, docsPending, docsVerified, blocked] = await Promise.all([
     prisma.driver.count(),
     prisma.driver.count({ where: { status: 'AVAILABLE', user: { isActive: true } } }),
     prisma.driver.count({ where: { status: 'ON_TRIP' } }),
@@ -2693,12 +2583,10 @@ export async function getDriverStats() {
     prisma.driver.count({ where: { isDocVerified: false } }),
     prisma.driver.count({ where: { isDocVerified: true } }),
     prisma.driver.count({ where: { user: { isActive: false } } }),
-    prisma.formDriverLead.count({ where: { status: { in: [LeadStatus.PENDING, LeadStatus.SUITABLE, LeadStatus.CONTACTED] } } }),
   ]);
   return {
-    total: totalDrivers + totalLeads,
+    total: totalDrivers,
     totalDrivers,
-    totalLeads,
     available,
     onTrip,
     offline,
