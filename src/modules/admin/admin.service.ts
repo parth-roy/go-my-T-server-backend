@@ -1512,7 +1512,10 @@ export async function getDriverById(id: string) {
     const item = mapLeadToDriverItem(lead);
     if (!item) throw AppError.notFound('Driver lead has no uploaded documents');
     item.documents = await s3Service.resolveDocumentsUrls(item.documents);
-    return item;
+    return {
+      ...item,
+      verificationLogs: [],
+    };
   }
 
   const driver = await prisma.driver.findUnique({
@@ -1523,7 +1526,6 @@ export async function getDriverById(id: string) {
       documents: { orderBy: { createdAt: 'desc' } },
       subscription: true,
       earnings: { take: 20, orderBy: { createdAt: 'desc' }, include: { booking: { select: { bookingNumber: true } } } },
-      verificationLogs: { orderBy: { calledAt: 'desc' }, take: 10 },
       fleetMemberships: {
         where: { isActive: true },
         include: {
@@ -1541,9 +1543,22 @@ export async function getDriverById(id: string) {
     },
   });
   if (!driver) throw AppError.notFound('Driver not found');
+
+  const verificationLogs = await prisma.verificationLog.findMany({
+    where: {
+      OR: [
+        { entityType: 'driver', entityId: driver.id },
+        ...(driver.vehicleId ? [{ entityType: 'vehicle', entityId: driver.vehicleId }] : []),
+      ],
+    },
+    orderBy: { calledAt: 'desc' },
+    take: 10,
+  });
+
   const resolvedDocs = await s3Service.resolveDocumentsUrls(driver.documents);
   return {
     ...driver,
+    verificationLogs: verificationLogs || [],
     source: 'APP' as const,
     documents: resolvedDocs,
     fleetOwner: driver.fleetMemberships?.[0]?.fleetOwner || null,
