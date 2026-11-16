@@ -39,6 +39,9 @@ formDriverLeadRouter.post(
   formDriverLeadController.onboardWithPayment
 );
 
+// GET /api/v1/form-driver-leads/check-phone?phone= - Check if phone already has submitted registration
+formDriverLeadRouter.get('/check-phone', formDriverLeadController.checkPhone);
+
 // GET /api/v1/form-driver-leads/direct-preview?vehicleType=&city= - Public preview for Direct Contact
 formDriverLeadRouter.get('/direct-preview', formDriverLeadController.getDirectDriversPreview);
 

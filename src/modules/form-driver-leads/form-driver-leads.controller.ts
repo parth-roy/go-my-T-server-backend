@@ -10,10 +10,29 @@ export const formDriverLeadController = {
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
       const lead = await formDriverLeadService.createLead(req.body, files || {});
       
-      return res.status(201).json({
+      const isExisting = Boolean((lead as any).isExisting);
+      return res.status(200).json({
         success: true,
+        alreadySubmitted: isExisting,
+        isExisting,
+        existingRecord: (lead as any).existingRecord || null,
         data: lead,
-        message: 'Driver lead created successfully',
+        message: isExisting
+          ? 'Same records were already submitted. Your details have been synchronized.'
+          : 'Driver lead created successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  checkPhone: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const phone = String(req.query.phone || '');
+      const result = await formDriverLeadService.checkPhoneExists(phone);
+      return res.status(200).json({
+        success: true,
+        ...result,
       });
     } catch (error) {
       next(error);

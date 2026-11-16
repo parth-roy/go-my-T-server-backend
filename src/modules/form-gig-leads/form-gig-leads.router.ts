@@ -42,6 +42,9 @@ formGigLeadRouter.post(
   FormGigLeadController.onboardWithPayment
 );
 
+// GET /api/v1/form-gig-leads/check-phone?phone= - Check if phone already has submitted registration
+formGigLeadRouter.get('/check-phone', FormGigLeadController.checkPhone);
+
 // GET /api/v1/form-gig-leads/direct-preview?service=&city= - Public preview for Direct Contact
 formGigLeadRouter.get('/direct-preview', FormGigLeadController.getDirectWorkersPreview);
 

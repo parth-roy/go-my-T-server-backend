@@ -119,50 +119,106 @@ export class FormDriverLeadService {
       }
     }
 
-    // Save to database
-    const lead = await prisma.formDriverLead.create({
-      data: {
-        name,
-        email,
-        phone,
-        alternatePhone: altPhone || null,
-        city,
-        state,
-        transportHub,
-        vehicleType: vehicleType as VehicleType,
-        vehicleNumber,
-        aadharNumber,
-        dlNumber,
-        profilePhotoUrl: uploadedUrls['profilePhotoUrl'] || null,
-        aadharFrontUrl: uploadedUrls['aadharFrontUrl'] || null,
-        aadharBackUrl: uploadedUrls['aadharBackUrl'] || null,
-        dlFrontUrl: uploadedUrls['dlFrontUrl'] || null,
-        dlBackUrl: uploadedUrls['dlBackUrl'] || null,
-        rcBookUrl: uploadedUrls['rcBookUrl'] || null,
-        insuranceUrl: uploadedUrls['insuranceUrl'] || null,
+    // Check if lead with this phone already exists to avoid duplicates
+    const cleanPhone = (phone || '').replace(/\D/g, '').slice(-10);
+    const existingLead = cleanPhone && cleanPhone.length === 10
+      ? await prisma.formDriverLead.findFirst({
+          where: {
+            OR: [
+              { phone: cleanPhone },
+              { phone: { endsWith: cleanPhone } },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+        })
+      : null;
 
-        // Given Location
-        givenAddress: givenAddress || null,
-        givenStreet: givenStreet || null,
-        givenDistrict: givenDistrict || null,
-        givenState: givenState || null,
-        givenPincode: givenPincode || null,
-        givenLat: givenLat,
-        givenLng: givenLng,
+    let lead;
+    if (existingLead) {
+      lead = await prisma.formDriverLead.update({
+        where: { id: existingLead.id },
+        data: {
+          name: name || existingLead.name,
+          email: email || existingLead.email,
+          phone: cleanPhone || existingLead.phone,
+          alternatePhone: altPhone || existingLead.alternatePhone,
+          city: city || existingLead.city,
+          state: state || existingLead.state,
+          transportHub: transportHub || existingLead.transportHub,
+          vehicleType: (vehicleType as VehicleType) || existingLead.vehicleType,
+          vehicleNumber: vehicleNumber || existingLead.vehicleNumber,
+          aadharNumber: aadharNumber || existingLead.aadharNumber,
+          dlNumber: dlNumber || existingLead.dlNumber,
+          profilePhotoUrl: uploadedUrls['profilePhotoUrl'] || existingLead.profilePhotoUrl,
+          aadharFrontUrl: uploadedUrls['aadharFrontUrl'] || existingLead.aadharFrontUrl,
+          aadharBackUrl: uploadedUrls['aadharBackUrl'] || existingLead.aadharBackUrl,
+          dlFrontUrl: uploadedUrls['dlFrontUrl'] || existingLead.dlFrontUrl,
+          dlBackUrl: uploadedUrls['dlBackUrl'] || existingLead.dlBackUrl,
+          rcBookUrl: uploadedUrls['rcBookUrl'] || existingLead.rcBookUrl,
+          insuranceUrl: uploadedUrls['insuranceUrl'] || existingLead.insuranceUrl,
+          givenAddress: givenAddress || existingLead.givenAddress,
+          givenStreet: givenStreet || existingLead.givenStreet,
+          givenDistrict: givenDistrict || existingLead.givenDistrict,
+          givenState: givenState || existingLead.givenState,
+          givenPincode: givenPincode || existingLead.givenPincode,
+          givenLat: givenLat != null ? givenLat : existingLead.givenLat,
+          givenLng: givenLng != null ? givenLng : existingLead.givenLng,
+          autoAddress: autoAddress || existingLead.autoAddress,
+          autoStreet: autoStreet || existingLead.autoStreet,
+          autoDistrict: autoDistrict || existingLead.autoDistrict,
+          autoState: autoState || existingLead.autoState,
+          autoPincode: autoPincode || existingLead.autoPincode,
+          autoLat: autoLat != null ? autoLat : existingLead.autoLat,
+          autoLng: autoLng != null ? autoLng : existingLead.autoLng,
+          locationDistance: locationDistance != null ? locationDistance : existingLead.locationDistance,
+          isLocationVerified: isLocationVerified || existingLead.isLocationVerified,
+        },
+      });
+    } else {
+      lead = await prisma.formDriverLead.create({
+        data: {
+          name,
+          email,
+          phone,
+          alternatePhone: altPhone || null,
+          city,
+          state,
+          transportHub,
+          vehicleType: vehicleType as VehicleType,
+          vehicleNumber,
+          aadharNumber,
+          dlNumber,
+          profilePhotoUrl: uploadedUrls['profilePhotoUrl'] || null,
+          aadharFrontUrl: uploadedUrls['aadharFrontUrl'] || null,
+          aadharBackUrl: uploadedUrls['aadharBackUrl'] || null,
+          dlFrontUrl: uploadedUrls['dlFrontUrl'] || null,
+          dlBackUrl: uploadedUrls['dlBackUrl'] || null,
+          rcBookUrl: uploadedUrls['rcBookUrl'] || null,
+          insuranceUrl: uploadedUrls['insuranceUrl'] || null,
 
-        // Auto Location
-        autoAddress: autoAddress || null,
-        autoStreet: autoStreet || null,
-        autoDistrict: autoDistrict || null,
-        autoState: autoState || null,
-        autoPincode: autoPincode || null,
-        autoLat: autoLat,
-        autoLng: autoLng,
+          // Given Location
+          givenAddress: givenAddress || null,
+          givenStreet: givenStreet || null,
+          givenDistrict: givenDistrict || null,
+          givenState: givenState || null,
+          givenPincode: givenPincode || null,
+          givenLat: givenLat,
+          givenLng: givenLng,
 
-        locationDistance: locationDistance,
-        isLocationVerified: isLocationVerified,
-      }
-    });
+          // Auto Location
+          autoAddress: autoAddress || null,
+          autoStreet: autoStreet || null,
+          autoDistrict: autoDistrict || null,
+          autoState: autoState || null,
+          autoPincode: autoPincode || null,
+          autoLat: autoLat,
+          autoLng: autoLng,
+
+          locationDistance: locationDistance,
+          isLocationVerified: isLocationVerified,
+        }
+      });
+    }
 
     // Fire and forget Google Sheets sync (legacy Sheets API)
     this.syncToGoogleSheets(lead).catch(e => logger.error("Google Sheets Sync failed", e));
@@ -186,7 +242,55 @@ export class FormDriverLeadService {
       });
     }).catch(() => {});
 
-    return lead;
+    const resultLead: any = {
+      ...lead,
+      isExisting: Boolean(existingLead),
+      alreadySubmitted: Boolean(existingLead),
+      existingRecord: existingLead ? {
+        id: existingLead.id,
+        name: existingLead.name,
+        phone: existingLead.phone,
+        vehicleType: existingLead.vehicleType,
+        vehicleNumber: existingLead.vehicleNumber,
+        city: existingLead.city,
+        state: existingLead.state,
+        status: existingLead.status,
+        createdAt: existingLead.createdAt,
+      } : null,
+    };
+
+    return resultLead;
+  }
+
+  async checkPhoneExists(rawPhone: string) {
+    const cleanPhone = (rawPhone || '').replace(/\D/g, '').slice(-10);
+    if (!cleanPhone || cleanPhone.length !== 10) {
+      return { exists: false, lead: null };
+    }
+    const existing = await prisma.formDriverLead.findFirst({
+      where: {
+        OR: [
+          { phone: cleanPhone },
+          { phone: { endsWith: cleanPhone } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        vehicleType: true,
+        vehicleNumber: true,
+        city: true,
+        state: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      exists: Boolean(existing),
+      lead: existing || null,
+    };
   }
 
   /**

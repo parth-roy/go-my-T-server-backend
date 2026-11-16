@@ -270,7 +270,55 @@ export const FormGigLeadService = {
       submittedAt: new Date().toISOString(),
     }).catch(() => {}); // explicitly swallow — fire and forget
 
-    return lead;
+    const resultLead: any = {
+      ...lead,
+      isExisting: Boolean(existingLead),
+      alreadySubmitted: Boolean(existingLead),
+      existingRecord: existingLead ? {
+        id: existingLead.id,
+        firstName: existingLead.firstName,
+        lastName: existingLead.lastName,
+        phone: existingLead.phone,
+        jobType: existingLead.jobType,
+        city: existingLead.city,
+        area: existingLead.area,
+        status: existingLead.status,
+        createdAt: existingLead.createdAt,
+      } : null,
+    };
+
+    return resultLead;
+  },
+
+  checkPhoneExists: async (rawPhone: string) => {
+    const cleanPhone = (rawPhone || '').replace(/\D/g, '').slice(-10);
+    if (!cleanPhone || cleanPhone.length !== 10) {
+      return { exists: false, lead: null };
+    }
+    const existing = await prisma.formGigLead.findFirst({
+      where: {
+        OR: [
+          { phone: cleanPhone },
+          { phone: { endsWith: cleanPhone } },
+        ],
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        jobType: true,
+        city: true,
+        area: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      exists: Boolean(existing),
+      lead: existing || null,
+    };
   },
 
   getMyLead: async (userId?: string, userPhone?: string) => {
