@@ -571,6 +571,368 @@ export async function adminAssignDriver(bookingId: string, input: AssignDriverIn
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MATCHED ONBOARDED DRIVERS FOR BOOKING INSPECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RTO_LOCATION_MAP: Record<string, { lat: number; lng: number; locationName: string; state: string }> = {
+  // Kerala
+  'KL14': { lat: 12.5064, lng: 74.9943, locationName: 'Kasaragod, Kerala', state: 'Kerala' },
+  'KL13': { lat: 11.8745, lng: 75.3704, locationName: 'Kannur, Kerala', state: 'Kerala' },
+  'KL58': { lat: 12.0461, lng: 75.3622, locationName: 'Thalassery / Kannur, Kerala', state: 'Kerala' },
+  'KL59': { lat: 11.9686, lng: 75.4922, locationName: 'Taliparamba, Kerala', state: 'Kerala' },
+  'KL12': { lat: 11.6103, lng: 76.0827, locationName: 'Wayanad (Kalpetta), Kerala', state: 'Kerala' },
+  'KL72': { lat: 11.7580, lng: 76.0838, locationName: 'Mananthavady, Wayanad', state: 'Kerala' },
+  'KL73': { lat: 11.6667, lng: 76.2667, locationName: 'Sulthan Bathery, Wayanad', state: 'Kerala' },
+  'KL11': { lat: 11.2588, lng: 75.7804, locationName: 'Kozhikode (Calicut), Kerala', state: 'Kerala' },
+  'KL57': { lat: 11.3556, lng: 75.9122, locationName: 'Koduvally (Calicut Ghats), Kerala', state: 'Kerala' },
+  'KL10': { lat: 11.0510, lng: 76.0711, locationName: 'Malappuram, Kerala', state: 'Kerala' },
+  'KL55': { lat: 10.9167, lng: 75.9167, locationName: 'Tirur, Malappuram', state: 'Kerala' },
+  'KL71': { lat: 11.2764, lng: 76.2267, locationName: 'Nilambur, Kerala', state: 'Kerala' },
+  'KL09': { lat: 10.7867, lng: 76.6548, locationName: 'Palakkad, Kerala', state: 'Kerala' },
+  'KL24': { lat: 10.7500, lng: 76.7500, locationName: 'Kozhinjampara, Palakkad', state: 'Kerala' },
+  'KL08': { lat: 10.5276, lng: 76.2144, locationName: 'Thrissur, Kerala', state: 'Kerala' },
+  'KL64': { lat: 10.3000, lng: 76.3333, locationName: 'Chalakkudy, Thrissur', state: 'Kerala' },
+  'KL07': { lat: 9.9816, lng: 76.2999, locationName: 'Ernakulam / Kochi, Kerala', state: 'Kerala' },
+  'KL42': { lat: 10.0889, lng: 76.3533, locationName: 'North Paravur, Ernakulam', state: 'Kerala' },
+  'KL01': { lat: 8.5241, lng: 76.9366, locationName: 'Thiruvananthapuram, Kerala', state: 'Kerala' },
+  'KL02': { lat: 8.8932, lng: 76.6141, locationName: 'Kollam, Kerala', state: 'Kerala' },
+  'KL03': { lat: 9.2648, lng: 76.7870, locationName: 'Pathanamthitta, Kerala', state: 'Kerala' },
+  'KL04': { lat: 9.4981, lng: 76.3388, locationName: 'Alappuzha, Kerala', state: 'Kerala' },
+  'KL05': { lat: 9.5916, lng: 76.5222, locationName: 'Kottayam, Kerala', state: 'Kerala' },
+  'KL06': { lat: 9.8500, lng: 76.9667, locationName: 'Idukki, Kerala', state: 'Kerala' },
+
+  // Karnataka
+  'KA19': { lat: 12.9141, lng: 74.8560, locationName: 'Mangalore (Dakshina Kannada), KA', state: 'Karnataka' },
+  'KA20': { lat: 13.3409, lng: 74.7421, locationName: 'Udupi, Karnataka', state: 'Karnataka' },
+  'KA21': { lat: 12.7663, lng: 75.2057, locationName: 'Puttur (Kasaragod Border), KA', state: 'Karnataka' },
+  'KA47': { lat: 14.2833, lng: 74.4333, locationName: 'Honnavar (Uttara Kannada), KA', state: 'Karnataka' },
+  'KA09': { lat: 12.2958, lng: 76.6394, locationName: 'Mysore, Karnataka', state: 'Karnataka' },
+  'KA12': { lat: 12.4244, lng: 75.7382, locationName: 'Madikeri (Kodagu), Karnataka', state: 'Karnataka' },
+  'KA18': { lat: 13.3167, lng: 75.7667, locationName: 'Chikkamagaluru, Karnataka', state: 'Karnataka' },
+  'KA14': { lat: 13.9299, lng: 75.5681, locationName: 'Shimoga, Karnataka', state: 'Karnataka' },
+  'KA01': { lat: 12.9716, lng: 77.5946, locationName: 'Bangalore Central, Karnataka', state: 'Karnataka' },
+  'KA02': { lat: 12.9800, lng: 77.5700, locationName: 'Bangalore West, Karnataka', state: 'Karnataka' },
+  'KA03': { lat: 12.9850, lng: 77.6100, locationName: 'Bangalore East (Indiranagar), KA', state: 'Karnataka' },
+  'KA04': { lat: 13.0100, lng: 77.5500, locationName: 'Bangalore North (Yeshwantpur), KA', state: 'Karnataka' },
+  'KA05': { lat: 12.9300, lng: 77.5800, locationName: 'Bangalore South (Jayanagar), KA', state: 'Karnataka' },
+  'KA41': { lat: 13.0000, lng: 77.5000, locationName: 'Bangalore West (Kengeri/Peenya), KA', state: 'Karnataka' },
+  'KA51': { lat: 12.8500, lng: 77.6500, locationName: 'Bangalore (Electronic City), KA', state: 'Karnataka' },
+  'KA53': { lat: 13.0000, lng: 77.7000, locationName: 'Bangalore (Whitefield/KR Puram), KA', state: 'Karnataka' },
+  'KA07': { lat: 13.1367, lng: 78.1342, locationName: 'Kolar, Karnataka', state: 'Karnataka' },
+  'KA08': { lat: 12.9556, lng: 78.2711, locationName: 'KGF, Karnataka', state: 'Karnataka' },
+  'KA13': { lat: 13.0072, lng: 76.1030, locationName: 'Hassan, Karnataka', state: 'Karnataka' },
+
+  // Tamil Nadu
+  'TN37': { lat: 11.0058, lng: 76.9667, locationName: 'Coimbatore South, Tamil Nadu', state: 'Tamil Nadu' },
+  'TN38': { lat: 11.0200, lng: 76.9700, locationName: 'Coimbatore North, Tamil Nadu', state: 'Tamil Nadu' },
+  'TN66': { lat: 11.0300, lng: 76.9900, locationName: 'Coimbatore Central, Tamil Nadu', state: 'Tamil Nadu' },
+  'TN39': { lat: 11.1085, lng: 77.3411, locationName: 'Tirupur, Tamil Nadu', state: 'Tamil Nadu' },
+  'TN43': { lat: 11.4102, lng: 76.6950, locationName: 'Ooty (Nilgiris), Tamil Nadu', state: 'Tamil Nadu' },
+  'TN33': { lat: 11.3410, lng: 77.7172, locationName: 'Erode, Tamil Nadu', state: 'Tamil Nadu' },
+  'TN30': { lat: 11.6643, lng: 78.1460, locationName: 'Salem, Tamil Nadu', state: 'Tamil Nadu' },
+  'TN01': { lat: 13.0827, lng: 80.2707, locationName: 'Chennai Central, Tamil Nadu', state: 'Tamil Nadu' },
+
+  // Delhi NCR & North
+  'DL': { lat: 28.6139, lng: 77.2090, locationName: 'Delhi NCR', state: 'Delhi' },
+  'HR': { lat: 28.4595, lng: 77.0266, locationName: 'Gurugram / Haryana', state: 'Haryana' },
+  'UP': { lat: 26.8467, lng: 80.9462, locationName: 'Uttar Pradesh', state: 'Uttar Pradesh' },
+  'WB': { lat: 22.5726, lng: 88.3639, locationName: 'Kolkata, West Bengal', state: 'West Bengal' },
+  'MH': { lat: 19.0760, lng: 72.8777, locationName: 'Mumbai, Maharashtra', state: 'Maharashtra' },
+  'TS': { lat: 17.3850, lng: 78.4867, locationName: 'Hyderabad, Telangana', state: 'Telangana' },
+  'AP': { lat: 16.5062, lng: 80.6480, locationName: 'Vijayawada / Andhra Pradesh', state: 'Andhra Pradesh' },
+};
+
+function calculateHaversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 10) / 10;
+}
+
+export async function getMatchedOnboardedDriversForBooking(bookingId: string, options: any = {}) {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    select: {
+      id: true,
+      bookingNumber: true,
+      pickupAddress: true,
+      pickupLat: true,
+      pickupLng: true,
+      vehicleType: true,
+      goodsType: true,
+      goodsWeightKg: true,
+      estimatedDistance: true,
+      status: true,
+      driverId: true,
+    },
+  });
+
+  if (!booking) {
+    throw AppError.notFound('Booking not found');
+  }
+
+  const pickupLat = Number(booking.pickupLat || 0);
+  const pickupLng = Number(booking.pickupLng || 0);
+  const pickupAddressUpper = (booking.pickupAddress || '').toUpperCase();
+
+  // Determine pickup state/district hints
+  const isPickupKerala = pickupAddressUpper.includes('KERALA') || pickupAddressUpper.includes('KASARAGOD') || pickupAddressUpper.includes('WAYANAD') || pickupAddressUpper.includes('KANNUR') || pickupAddressUpper.includes('KOZHIKODE');
+  const isPickupKarnataka = pickupAddressUpper.includes('KARNATAKA') || pickupAddressUpper.includes('BANGALORE') || pickupAddressUpper.includes('MANGALORE') || pickupAddressUpper.includes('PUTTUR');
+
+  // Query strictly ONBOARDED drivers (from Driver table)
+  const drivers = await prisma.driver.findMany({
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          profileImageUrl: true,
+          isActive: true,
+        },
+      },
+      vehicle: {
+        select: {
+          id: true,
+          registrationNo: true,
+          type: true,
+          model: true,
+          capacityKg: true,
+          year: true,
+          color: true,
+          isActive: true,
+          rcVerifStatus: true,
+        },
+      },
+      documents: {
+        select: {
+          id: true,
+          type: true,
+          status: true,
+          fileUrl: true,
+        },
+      },
+    },
+  });
+
+  const searchFilter = (options.search || '').toLowerCase().trim();
+  const statusFilter = (options.status || 'ALL').toUpperCase();
+  const maxRadiusKm = options.radiusKm && options.radiusKm !== 'ALL' ? Number(options.radiusKm) : null;
+  const filterVehicle = options.vehicleType && options.vehicleType !== 'ALL' ? options.vehicleType : null;
+
+  const results: any[] = [];
+
+  for (const d of drivers) {
+    const user = d.user || { name: 'Driver Partner', phone: '' };
+    const vehicle = d.vehicle || null;
+
+    // Filter by status if specified
+    if (statusFilter !== 'ALL' && d.status !== statusFilter) {
+      continue;
+    }
+
+    // Filter by vehicle type if specified
+    if (filterVehicle && vehicle?.type !== filterVehicle) {
+      continue;
+    }
+
+    // Determine Driver Coordinates & Location Name
+    let dLat: number | null = null;
+    let dLng: number | null = null;
+    let locationSource: 'LIVE_GPS' | 'RTO_REGISTRATION' | 'STATE_CAPITAL' = 'RTO_REGISTRATION';
+    let locationName = 'Registered Location';
+    let detectedState = '';
+    let rtoCode = '';
+
+    if (d.currentLat && d.currentLng && d.currentLat !== 0 && d.currentLng !== 0) {
+      dLat = d.currentLat;
+      dLng = d.currentLng;
+      locationSource = 'LIVE_GPS';
+      locationName = `Live GPS Location (${d.currentLat.toFixed(3)}, ${d.currentLng.toFixed(3)})`;
+    }
+
+    // Extract RTO prefix from license or vehicle
+    const cleanLic = (d.licenseNumber || d.dlNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cleanReg = (vehicle?.registrationNo || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    // Check 4-char RTO code first (e.g. KL14, KA19, KA21, KL57)
+    const licRto4 = cleanLic.slice(0, 4);
+    const regRto4 = cleanReg.slice(0, 4);
+
+    const rtoInfo = RTO_LOCATION_MAP[licRto4] || RTO_LOCATION_MAP[regRto4];
+    if (rtoInfo) {
+      rtoCode = licRto4 || regRto4;
+      detectedState = rtoInfo.state;
+      if (!dLat || !dLng) {
+        dLat = rtoInfo.lat;
+        dLng = rtoInfo.lng;
+        locationSource = 'RTO_REGISTRATION';
+        locationName = rtoInfo.locationName;
+      } else {
+        locationName += ` · Registered in ${rtoInfo.locationName}`;
+      }
+    } else {
+      // Check 2-letter state code
+      const state2 = cleanLic.slice(0, 2) || cleanReg.slice(0, 2);
+      const stateInfo = RTO_LOCATION_MAP[state2];
+      if (stateInfo) {
+        rtoCode = state2;
+        detectedState = stateInfo.state;
+        if (!dLat || !dLng) {
+          dLat = stateInfo.lat;
+          dLng = stateInfo.lng;
+          locationSource = 'STATE_CAPITAL';
+          locationName = stateInfo.locationName;
+        }
+      }
+    }
+
+    // Calculate distance to pickup
+    let distanceKm: number | null = null;
+    if (dLat !== null && dLng !== null && pickupLat && pickupLng) {
+      distanceKm = calculateHaversineKm(pickupLat, pickupLng, dLat, dLng);
+    }
+
+    // Filter by radius if requested
+    if (maxRadiusKm !== null && distanceKm !== null && distanceKm > maxRadiusKm) {
+      continue;
+    }
+
+    // Keyword Search filter
+    if (searchFilter) {
+      const matchText = `${user.name || ''} ${user.phone || ''} ${vehicle?.registrationNo || ''} ${vehicle?.model || ''} ${vehicle?.type || ''} ${d.licenseNumber || ''} ${locationName}`.toLowerCase();
+      if (!matchText.includes(searchFilter)) {
+        continue;
+      }
+    }
+
+    // Match Scoring
+    let matchScore = 0;
+    const matchBadges: string[] = [];
+
+    // Exact vehicle match
+    const isVehicleMatch = vehicle?.type === booking.vehicleType;
+    if (isVehicleMatch) {
+      matchScore += 40;
+      matchBadges.push(`Vehicle Type Match (${vehicle?.type?.replace(/_/g, ' ')})`);
+    }
+
+    // Status Score
+    if (d.status === 'AVAILABLE') {
+      matchScore += 25;
+      matchBadges.push('Available Now');
+    } else if (d.status === 'BREAK') {
+      matchScore += 10;
+      matchBadges.push('On Break');
+    } else if (d.status === 'ON_TRIP') {
+      matchScore += 5;
+      matchBadges.push('On Active Trip');
+    }
+
+    // KYC Verification
+    if (d.isDocVerified) {
+      matchScore += 15;
+      matchBadges.push('KYC Verified');
+    }
+
+    // Proximity Scoring
+    let tier: 'LOCAL' | 'NEARBY' | 'REGIONAL' | 'EXTENDED' = 'EXTENDED';
+    if (distanceKm !== null) {
+      if (distanceKm <= 35) {
+        tier = 'LOCAL';
+        matchScore += 45;
+        matchBadges.push(`Immediate Local (< ${Math.round(distanceKm)} km)`);
+      } else if (distanceKm <= 100) {
+        tier = 'NEARBY';
+        matchScore += 30;
+        matchBadges.push(`Nearby Hub (${Math.round(distanceKm)} km)`);
+      } else if (distanceKm <= 250) {
+        tier = 'REGIONAL';
+        matchScore += 15;
+        matchBadges.push(`Regional Corridor (${Math.round(distanceKm)} km)`);
+      }
+    }
+
+    // Exact RTO / Local Corridor Boost
+    if (isPickupKerala && rtoCode.startsWith('KL14')) {
+      matchScore += 40;
+      matchBadges.push('🎯 Exact Kasaragod RTO Match');
+    } else if (isPickupKerala && (rtoCode === 'KA19' || rtoCode === 'KA21')) {
+      matchScore += 25;
+      matchBadges.push('Adjacent Kasaragod Border (DK / Puttur)');
+    } else if (isPickupKerala && rtoCode.startsWith('KL')) {
+      matchScore += 15;
+      matchBadges.push('Kerala State Transport Fleet');
+    }
+
+    results.push({
+      driverId: d.id,
+      userId: user.id,
+      name: user.name || 'Driver Partner',
+      phone: user.phone,
+      email: user.email,
+      profileImageUrl: user.profileImageUrl,
+      rating: d.rating,
+      totalTrips: d.totalTrips,
+      status: d.status,
+      isDocVerified: d.isDocVerified,
+      dlNumber: d.licenseNumber || d.dlNumber,
+      rtoCode,
+      locationName,
+      locationSource,
+      lat: dLat,
+      lng: dLng,
+      distanceKm,
+      tier,
+      isVehicleMatch,
+      matchScore,
+      matchBadges,
+      isCurrentlyAssigned: booking.driverId === d.id,
+      vehicle: vehicle ? {
+        id: vehicle.id,
+        registrationNo: vehicle.registrationNo,
+        type: vehicle.type,
+        model: vehicle.model,
+        capacityKg: vehicle.capacityKg,
+        year: vehicle.year,
+        color: vehicle.color,
+        rcVerifStatus: vehicle.rcVerifStatus,
+      } : null,
+    });
+  }
+
+  // Sort: Highest match score first, then closest distance
+  results.sort((a, b) => {
+    if (b.matchScore !== a.matchScore) {
+      return b.matchScore - a.matchScore;
+    }
+    return (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999);
+  });
+
+  return {
+    booking: {
+      id: booking.id,
+      bookingNumber: booking.bookingNumber,
+      pickupAddress: booking.pickupAddress,
+      vehicleType: booking.vehicleType,
+      goodsType: booking.goodsType,
+      status: booking.status,
+      assignedDriverId: booking.driverId,
+    },
+    totalMatched: results.length,
+    drivers: results,
+  };
+}
+
 export async function adminAssignAgentDriver(bookingId: string, quoteId?: string) {
   const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
   if (!booking) throw AppError.notFound('Booking not found');

@@ -39,6 +39,7 @@ adminRouter.get('/dashboard/alerts',         ctrl.getDashboardAlerts);
 adminRouter.get('/bookings/export',                   ctrl.exportBookings);  // BEFORE /:id
 adminRouter.get('/bookings',                          ctrl.listBookings);
 adminRouter.get('/bookings/:id',                      ctrl.getBooking);
+adminRouter.get('/bookings/:id/matched-drivers',      ctrl.getMatchedDriversForBooking);
 adminRouter.post('/bookings/:id/assign-driver',       ctrl.assignDriver);
 adminRouter.post('/bookings/:id/assign-agent-driver', ctrl.assignAgentDriver);
 adminRouter.post('/bookings/:id/cancel',              ctrl.cancelBooking);

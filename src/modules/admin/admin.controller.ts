@@ -107,6 +107,12 @@ export const getBooking = async (req: Request, res: Response, next: NextFunction
   try { ok(res, await adminService.getBookingById(p(req.params.id))); } catch (e) { next(e); }
 };
 
+export const getMatchedDriversForBooking = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    ok(res, await adminService.getMatchedOnboardedDriversForBooking(p(req.params.id), req.query));
+  } catch (e) { next(e); }
+};
+
 export const assignDriver = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const input = assignDriverSchema.parse(req.body);
