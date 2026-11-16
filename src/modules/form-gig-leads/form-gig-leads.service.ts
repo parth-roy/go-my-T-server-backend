@@ -119,41 +119,94 @@ export const FormGigLeadService = {
       }
     }
 
-    const lead = await prisma.formGigLead.create({
-      data: {
-        firstName: firstName || 'Worker',
-        lastName: lastName || '',
-        email: email || null,
-        phone: phone || '',
-        jobType: jobType || 'general-helper',
-        secondarySkills: secondarySkills || null,
-        experience: experience || null,
-        dailyRate: dailyRate || null,
-        certification: certification || null,
-        city: city || 'India',
-        area: area || null,
-        vehicleType: vehicleType || assets || null,
-        vehicleMake: vehicleMake || null,
-        aadharNumber: aadharNumber || '',
-        panNumber: panNumber || '',
-        dlNumber: dlNumber || null,
-        rcNumber: rcNumber || null,
-        insuranceDetails: insuranceDetails || null,
-        sourcePlatform,
-        sourceUrl,
-        
-        givenAddress,
-        givenStreet,
-        givenDistrict,
-        givenState,
-        givenPincode, 
-        givenLat, 
-        givenLng,
-        notes: combinedNotes,
+    // Check if a lead with this phone already exists to prevent duplicate rows
+    const existingLead = cleanPhone && cleanPhone.length === 10
+      ? await prisma.formGigLead.findFirst({
+          where: {
+            OR: [
+              { phone: cleanPhone },
+              { phone: { endsWith: cleanPhone } },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+        })
+      : null;
 
-        ...uploadedUrls
-      }
-    });
+    let lead;
+    if (existingLead) {
+      lead = await prisma.formGigLead.update({
+        where: { id: existingLead.id },
+        data: {
+          firstName: firstName || existingLead.firstName,
+          lastName: lastName !== undefined ? lastName : existingLead.lastName,
+          email: email || existingLead.email,
+          phone: cleanPhone || existingLead.phone,
+          jobType: jobType || existingLead.jobType,
+          secondarySkills: secondarySkills || existingLead.secondarySkills,
+          experience: experience || existingLead.experience,
+          dailyRate: dailyRate || existingLead.dailyRate,
+          certification: certification || existingLead.certification,
+          city: city || existingLead.city,
+          area: area || existingLead.area,
+          vehicleType: vehicleType || assets || existingLead.vehicleType,
+          vehicleMake: vehicleMake || existingLead.vehicleMake,
+          aadharNumber: aadharNumber || existingLead.aadharNumber,
+          panNumber: panNumber || existingLead.panNumber,
+          dlNumber: dlNumber || existingLead.dlNumber,
+          rcNumber: rcNumber || existingLead.rcNumber,
+          insuranceDetails: insuranceDetails || existingLead.insuranceDetails,
+          sourcePlatform: sourcePlatform || existingLead.sourcePlatform,
+          sourceUrl: sourceUrl || existingLead.sourceUrl,
+
+          givenAddress: givenAddress || existingLead.givenAddress,
+          givenStreet: givenStreet || existingLead.givenStreet,
+          givenDistrict: givenDistrict || existingLead.givenDistrict,
+          givenState: givenState || existingLead.givenState,
+          givenPincode: givenPincode || existingLead.givenPincode,
+          givenLat: givenLat || existingLead.givenLat,
+          givenLng: givenLng || existingLead.givenLng,
+          notes: combinedNotes || existingLead.notes,
+
+          ...uploadedUrls,
+        },
+      });
+    } else {
+      lead = await prisma.formGigLead.create({
+        data: {
+          firstName: firstName || 'Worker',
+          lastName: lastName || '',
+          email: email || null,
+          phone: phone || '',
+          jobType: jobType || 'general-helper',
+          secondarySkills: secondarySkills || null,
+          experience: experience || null,
+          dailyRate: dailyRate || null,
+          certification: certification || null,
+          city: city || 'India',
+          area: area || null,
+          vehicleType: vehicleType || assets || null,
+          vehicleMake: vehicleMake || null,
+          aadharNumber: aadharNumber || '',
+          panNumber: panNumber || '',
+          dlNumber: dlNumber || null,
+          rcNumber: rcNumber || null,
+          insuranceDetails: insuranceDetails || null,
+          sourcePlatform,
+          sourceUrl,
+          
+          givenAddress,
+          givenStreet,
+          givenDistrict,
+          givenState,
+          givenPincode, 
+          givenLat, 
+          givenLng,
+          notes: combinedNotes,
+
+          ...uploadedUrls
+        }
+      });
+    }
 
     // Ensure User and Worker records are synced in DB
     if (cleanPhone && cleanPhone.length === 10) {
@@ -542,12 +595,13 @@ export const FormGigLeadService = {
 
     const searchJobType = (service && categoryMapping[service.toLowerCase().trim()]) || service || 'Electrician';
 
-    let leads = await prisma.formGigLead.findMany({
+    // 1. Fetch recent candidate leads matching jobType and city
+    const candidateLeads = await prisma.formGigLead.findMany({
       where: {
         jobType: { contains: searchJobType, mode: 'insensitive' },
         ...(city && city !== 'All' ? { city: { contains: city.trim(), mode: 'insensitive' } } : {}),
       },
-      take: 10,
+      take: 60,
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -565,14 +619,29 @@ export const FormGigLeadService = {
       },
     });
 
-    if (leads.length < 10) {
-      const existingIds = leads.map((l: any) => l.id);
-      const moreLeads = await prisma.formGigLead.findMany({
+    // Enforce strictly unique phone numbers
+    const seenPhones = new Set<string>();
+    let distinctLeads: any[] = [];
+
+    for (const lead of candidateLeads) {
+      const cleanPhone = (lead.phone || '').replace(/\D/g, '').slice(-10);
+      const phoneKey = cleanPhone.length === 10 ? cleanPhone : (lead.phone || lead.id);
+      if (!seenPhones.has(phoneKey)) {
+        seenPhones.add(phoneKey);
+        distinctLeads.push(lead);
+        if (distinctLeads.length >= 10) break;
+      }
+    }
+
+    // 2. If fewer than 10 distinct leads found in the specific city, fill remaining from other hubs with that jobType
+    if (distinctLeads.length < 10) {
+      const existingIds = distinctLeads.map((l: any) => l.id);
+      const moreCandidates = await prisma.formGigLead.findMany({
         where: {
           jobType: { contains: searchJobType, mode: 'insensitive' },
           id: { notIn: existingIds },
         },
-        take: 10 - leads.length,
+        take: 80,
         orderBy: { createdAt: 'desc' },
         select: {
           id: true,
@@ -589,8 +658,19 @@ export const FormGigLeadService = {
           givenLng: true,
         },
       });
-      leads = [...leads, ...moreLeads];
+
+      for (const lead of moreCandidates) {
+        if (distinctLeads.length >= 10) break;
+        const cleanPhone = (lead.phone || '').replace(/\D/g, '').slice(-10);
+        const phoneKey = cleanPhone.length === 10 ? cleanPhone : (lead.phone || lead.id);
+        if (!seenPhones.has(phoneKey)) {
+          seenPhones.add(phoneKey);
+          distinctLeads.push(lead);
+        }
+      }
     }
+
+    const leads = distinctLeads;
 
     return leads.map((lead: any, idx: number) => {
       const notes = lead.notes || '';

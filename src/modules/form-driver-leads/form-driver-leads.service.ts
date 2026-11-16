@@ -864,13 +864,13 @@ export class FormDriverLeadService {
     };
     const baseRate = baseRatesMap[vehicleCategory?.toLowerCase().trim() || 'tata-ace'] || '₹800 Base';
 
-    // 1. Try finding in the specified city
-    let leads = await prisma.formDriverLead.findMany({
+    // 1. Fetch candidate driver leads matching vehicleType and city
+    const candidateLeads = await prisma.formDriverLead.findMany({
       where: {
         vehicleType: { in: targetTypes },
         ...(city && city !== 'All' ? { city: { contains: city.trim(), mode: 'insensitive' } } : {}),
       },
-      take: 10,
+      take: 60,
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -886,15 +886,29 @@ export class FormDriverLeadService {
       },
     });
 
-    // 2. If fewer than 10 leads found in the specific city, fill remaining from other hubs with that vehicle type
-    if (leads.length < 10) {
-      const existingIds = leads.map((l: any) => l.id);
+    // Enforce strictly unique phone numbers
+    const seenPhones = new Set<string>();
+    let distinctDrivers: any[] = [];
+
+    for (const lead of candidateLeads) {
+      const cleanPhone = (lead.phone || '').replace(/\D/g, '').slice(-10);
+      const phoneKey = cleanPhone.length === 10 ? cleanPhone : (lead.phone || lead.id);
+      if (!seenPhones.has(phoneKey)) {
+        seenPhones.add(phoneKey);
+        distinctDrivers.push(lead);
+        if (distinctDrivers.length >= 10) break;
+      }
+    }
+
+    // 2. If fewer than 10 distinct leads found in the specific city, fill remaining from other hubs with that vehicle type
+    if (distinctDrivers.length < 10) {
+      const existingIds = distinctDrivers.map((l: any) => l.id);
       const moreLeads = await prisma.formDriverLead.findMany({
         where: {
           vehicleType: { in: targetTypes },
           id: { notIn: existingIds },
         },
-        take: 10 - leads.length,
+        take: 80,
         orderBy: { createdAt: 'desc' },
         select: {
           id: true,
@@ -909,8 +923,19 @@ export class FormDriverLeadService {
           status: true,
         },
       });
-      leads = [...leads, ...moreLeads];
+
+      for (const lead of moreLeads) {
+        if (distinctDrivers.length >= 10) break;
+        const cleanPhone = (lead.phone || '').replace(/\D/g, '').slice(-10);
+        const phoneKey = cleanPhone.length === 10 ? cleanPhone : (lead.phone || lead.id);
+        if (!seenPhones.has(phoneKey)) {
+          seenPhones.add(phoneKey);
+          distinctDrivers.push(lead);
+        }
+      }
     }
+
+    const leads = distinctDrivers;
 
     return leads.map((lead: any, idx: number) => {
       const phone = (lead.phone || '9876543210').replace(/\D/g, '');

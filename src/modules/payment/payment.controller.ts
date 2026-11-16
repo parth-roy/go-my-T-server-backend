@@ -871,7 +871,7 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
             throw AppError.badRequest('Invalid payment signature', 'PAYMENT_SIGNATURE_INVALID');
         }
 
-        // Return the full unmasked phone numbers for the unlocked workers
+        // Return the full unmasked phone numbers for the unlocked workers (strictly deduplicated by phone)
         let unlockedWorkers: any[] = [];
         if (workerIds && Array.isArray(workerIds) && workerIds.length > 0) {
             const leads = await prisma.formGigLead.findMany({
@@ -887,14 +887,23 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                 },
             });
             if (leads.length > 0) {
-                unlockedWorkers = leads.map((l) => ({
-                    id: l.id,
-                    name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
-                    phone: l.phone,
-                    jobType: l.jobType,
-                    city: l.city,
-                    area: l.area,
-                }));
+                const seenPhones = new Set<string>();
+                unlockedWorkers = [];
+                for (const l of leads) {
+                    const clean = (l.phone || '').replace(/\D/g, '').slice(-10);
+                    const key = clean.length === 10 ? clean : l.id;
+                    if (!seenPhones.has(key)) {
+                        seenPhones.add(key);
+                        unlockedWorkers.push({
+                            id: l.id,
+                            name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
+                            phone: l.phone,
+                            jobType: l.jobType,
+                            city: l.city,
+                            area: l.area,
+                        });
+                    }
+                }
             } else {
                 const driverLeads = await prisma.formDriverLead.findMany({
                     where: { id: { in: workerIds } },
@@ -909,15 +918,24 @@ export async function verifyDirectContactPayment(req: Request, res: Response, ne
                         vehicleNumber: true,
                     },
                 });
-                unlockedWorkers = driverLeads.map((d) => ({
-                    id: d.id,
-                    name: d.name,
-                    phone: d.phone,
-                    jobType: String(d.vehicleType),
-                    city: d.city,
-                    area: d.transportHub || d.givenStreet || d.city,
-                    vehicleNumber: d.vehicleNumber,
-                }));
+                const seenPhones = new Set<string>();
+                unlockedWorkers = [];
+                for (const d of driverLeads) {
+                    const clean = (d.phone || '').replace(/\D/g, '').slice(-10);
+                    const key = clean.length === 10 ? clean : d.id;
+                    if (!seenPhones.has(key)) {
+                        seenPhones.add(key);
+                        unlockedWorkers.push({
+                            id: d.id,
+                            name: d.name,
+                            phone: d.phone,
+                            jobType: String(d.vehicleType),
+                            city: d.city,
+                            area: d.transportHub || d.givenStreet || d.city,
+                            vehicleNumber: d.vehicleNumber,
+                        });
+                    }
+                }
             }
         }
 
@@ -1111,17 +1129,24 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
 
         const leadsMap = new Map(allLeads.map((l) => [l.id, l]));
 
-        const purchasedPacks = allVerifiedRequests.map((r) => ({
-            id: r.id,
-            serviceCategory: r.serviceCategory,
-            city: r.city,
-            amount: r.amount,
-            paymentMethod: r.paymentMethod,
-            razorpayPaymentId: r.razorpayPaymentId,
-            verifiedAt: r.verifiedAt || r.createdAt,
-            workerCount: (r.workerIds || []).length,
-            isMasked: !isOwner,
-            workers: (r.workerIds || []).map((id) => {
+        // Helper to deduplicate workers by normalized 10-digit phone
+        const deduplicateWorkersList = (workerList: any[]) => {
+            const seen = new Set<string>();
+            const result: any[] = [];
+            for (const w of workerList) {
+                if (!w) continue;
+                const clean = (w.phone || '').replace(/\D/g, '').slice(-10);
+                const key = clean.length === 10 ? clean : w.id;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    result.push(w);
+                }
+            }
+            return result;
+        };
+
+        const purchasedPacks = allVerifiedRequests.map((r) => {
+            const rawWorkers = (r.workerIds || []).map((id) => {
                 const lead = leadsMap.get(id);
                 if (!lead) return null;
                 return {
@@ -1132,8 +1157,23 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
                     city: lead.city,
                     area: lead.area,
                 };
-            }).filter(Boolean),
-        }));
+            }).filter(Boolean);
+
+            const distinctWorkers = deduplicateWorkersList(rawWorkers);
+
+            return {
+                id: r.id,
+                serviceCategory: r.serviceCategory,
+                city: r.city,
+                amount: r.amount,
+                paymentMethod: r.paymentMethod,
+                razorpayPaymentId: r.razorpayPaymentId,
+                verifiedAt: r.verifiedAt || r.createdAt,
+                workerCount: distinctWorkers.length,
+                isMasked: !isOwner,
+                workers: distinctWorkers,
+            };
+        });
 
         // 3. Find matching request for current service/city query if provided, or fallback to most recent verified
         let matchedRequest = allVerifiedRequests.find((r) => {
@@ -1164,10 +1204,10 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
             }, 'Status checked');
         }
 
-        // Return workers for the matched request (masked if caller is not authenticated owner)
+        // Return workers for the matched request (masked if caller is not authenticated owner, deduplicated by phone)
         let unlockedWorkers: any[] = [];
         if (matchedRequest?.workerIds && matchedRequest.workerIds.length > 0) {
-            unlockedWorkers = matchedRequest.workerIds
+            const rawMatched = matchedRequest.workerIds
                 .map((id) => {
                     const lead = leadsMap.get(id);
                     if (!lead) return null;
@@ -1181,6 +1221,7 @@ export async function checkDirectContactStatus(req: Request, res: Response, next
                     };
                 })
                 .filter(Boolean);
+            unlockedWorkers = deduplicateWorkersList(rawMatched);
         }
 
         sendSuccess(res, {
@@ -1392,14 +1433,24 @@ async function fetchUnlockedWorkerDetails(workerIds: string[]): Promise<any[]> {
         },
     });
     if (leads.length > 0) {
-        return leads.map((l) => ({
-            id: l.id,
-            name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
-            phone: l.phone,
-            jobType: l.jobType,
-            city: l.city,
-            area: l.area,
-        }));
+        const seenPhones = new Set<string>();
+        const result: any[] = [];
+        for (const l of leads) {
+            const clean = (l.phone || '').replace(/\D/g, '').slice(-10);
+            const key = clean.length === 10 ? clean : l.id;
+            if (!seenPhones.has(key)) {
+                seenPhones.add(key);
+                result.push({
+                    id: l.id,
+                    name: `${l.firstName} ${l.lastName !== '-' ? l.lastName : ''}`.trim(),
+                    phone: l.phone,
+                    jobType: l.jobType,
+                    city: l.city,
+                    area: l.area,
+                });
+            }
+        }
+        return result;
     }
 
     const driverLeads = await prisma.formDriverLead.findMany({
@@ -1415,15 +1466,25 @@ async function fetchUnlockedWorkerDetails(workerIds: string[]): Promise<any[]> {
             vehicleNumber: true,
         },
     });
-    return driverLeads.map((d) => ({
-        id: d.id,
-        name: d.name,
-        phone: d.phone,
-        jobType: String(d.vehicleType),
-        city: d.city,
-        area: d.transportHub || d.givenStreet || d.city,
-        vehicleNumber: d.vehicleNumber,
-    }));
+    const seenPhones = new Set<string>();
+    const result: any[] = [];
+    for (const d of driverLeads) {
+        const clean = (d.phone || '').replace(/\D/g, '').slice(-10);
+        const key = clean.length === 10 ? clean : d.id;
+        if (!seenPhones.has(key)) {
+            seenPhones.add(key);
+            result.push({
+                id: d.id,
+                name: d.name,
+                phone: d.phone,
+                jobType: String(d.vehicleType),
+                city: d.city,
+                area: d.transportHub || d.givenStreet || d.city,
+                vehicleNumber: d.vehicleNumber,
+            });
+        }
+    }
+    return result;
 }
 
 // ─────────────────────────────────────────────
