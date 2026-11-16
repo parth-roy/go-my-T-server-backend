@@ -424,11 +424,22 @@ export async function getBookingById(id: string) {
     where: { id },
     include: {
       customer: { select: { id: true, name: true, phone: true, email: true } },
-      driver: { include: { user: { select: { name: true, phone: true } } } },
+      driver: {
+        include: {
+          user: { select: { id: true, name: true, phone: true, email: true, profileImageUrl: true } },
+          vehicle: { select: { id: true, registrationNo: true, type: true, model: true } },
+        },
+      },
       stops: { orderBy: { sequence: 'asc' } },
-      locationHistory: { orderBy: { recordedAt: 'desc' }, take: 100 },
+      locationHistory: { orderBy: { recordedAt: 'asc' }, take: 300 },
       earning: true,
       fleetEarning: true,
+      truckAssignment: {
+        include: {
+          fleetOwner: { select: { id: true, companyName: true, user: { select: { name: true, phone: true } } } },
+          fleetDriver: { select: { id: true, name: true, phone: true, licenseNumber: true } },
+        },
+      },
     },
   });
   if (!booking) throw AppError.notFound('Booking not found');
