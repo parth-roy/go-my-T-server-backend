@@ -420,51 +420,90 @@ export async function getBookings(q: BookingsQuery) {
 }
 
 export async function getBookingById(id: string) {
-  const booking = await prisma.booking.findUnique({
-    where: { id },
-    include: {
-      customer: { select: { id: true, name: true, phone: true, email: true } },
-      driver: {
-        include: {
-          user: { select: { id: true, name: true, phone: true, email: true, profileImageUrl: true } },
-          vehicle: { select: { id: true, registrationNo: true, type: true, model: true } },
+  let booking: any = null;
+  try {
+    booking = await prisma.booking.findUnique({
+      where: { id },
+      include: {
+        customer: { select: { id: true, name: true, phone: true, email: true } },
+        driver: {
+          include: {
+            user: { select: { id: true, name: true, phone: true, email: true, profileImageUrl: true } },
+            vehicle: { select: { id: true, registrationNo: true, type: true, model: true } },
+          },
+        },
+        stops: { orderBy: { sequence: 'asc' } },
+        locationHistory: { orderBy: { recordedAt: 'asc' }, take: 300 },
+        earning: true,
+        fleetEarning: true,
+        truckAssignment: {
+          include: {
+            fleetOwner: { select: { id: true, companyName: true, user: { select: { name: true, phone: true } } } },
+            fleetDriver: {
+              include: {
+                driver: {
+                  select: {
+                    id: true,
+                    licenseNumber: true,
+                    user: { select: { name: true, phone: true } },
+                  },
+                },
+              },
+            },
+          },
         },
       },
-      stops: { orderBy: { sequence: 'asc' } },
-      locationHistory: { orderBy: { recordedAt: 'asc' }, take: 300 },
-      earning: true,
-      fleetEarning: true,
-      truckAssignment: {
-        include: {
-          fleetOwner: { select: { id: true, companyName: true, user: { select: { name: true, phone: true } } } },
-          fleetDriver: { select: { id: true, name: true, phone: true, licenseNumber: true } },
+    });
+  } catch (err: any) {
+    logger.warn(`[getBookingById] Rich include query failed, falling back to safe include: ${err?.message}`);
+    booking = await prisma.booking.findUnique({
+      where: { id },
+      include: {
+        customer: { select: { id: true, name: true, phone: true, email: true } },
+        driver: {
+          include: {
+            user: { select: { id: true, name: true, phone: true, email: true } },
+          },
         },
+        stops: { orderBy: { sequence: 'asc' } },
+        earning: true,
       },
-    },
-  });
+    });
+  }
+
   if (!booking) throw AppError.notFound('Booking not found');
 
-  const pricingLog = await prisma.pricingAuditLog.findFirst({
-    where: { bookingId: booking.id },
-    orderBy: { calculatedAt: 'desc' }
-  });
+  let pricingLog: any = null;
+  try {
+    pricingLog = await prisma.pricingAuditLog.findFirst({
+      where: { bookingId: booking.id },
+      orderBy: { calculatedAt: 'desc' }
+    });
+  } catch (err) {
+    logger.warn(`[getBookingById] pricingAuditLog query failed: ${err}`);
+  }
 
   // Query agent driver details if exists
-  const bl = await prisma.brokerLoad.findFirst({
-    where: { sourceBookingId: booking.id },
-    include: {
-      quotes: {
-        include: {
-          broker: { include: { user: { select: { name: true, phone: true, email: true } } } },
+  let bl: any = null;
+  try {
+    bl = await prisma.brokerLoad.findFirst({
+      where: { sourceBookingId: booking.id },
+      include: {
+        quotes: {
+          include: {
+            broker: { include: { user: { select: { name: true, phone: true, email: true } } } },
+          },
+          orderBy: { createdAt: 'desc' },
         },
-        orderBy: { createdAt: 'desc' },
+        auditLog: {
+          where: { action: { in: ['QUOTE_SUBMITTED', 'DRIVER_ASSIGNED_BY_AGENT'] } },
+          orderBy: { timestamp: 'desc' },
+        },
       },
-      auditLog: {
-        where: { action: { in: ['QUOTE_SUBMITTED', 'DRIVER_ASSIGNED_BY_AGENT'] } },
-        orderBy: { timestamp: 'desc' },
-      },
-    },
-  });
+    });
+  } catch (err) {
+    logger.warn(`[getBookingById] brokerLoad query failed: ${err}`);
+  }
 
   const quotes = bl?.quotes || [];
   const latestQuote = quotes[0] || null;
@@ -478,11 +517,11 @@ export async function getBookingById(id: string) {
     isDriverVerified: latestQuote.isDriverVerified,
     createdAt: latestQuote.createdAt,
     agent: {
-      id: latestQuote.broker.id,
-      name: latestQuote.broker.user?.name || 'Agent Partner',
-      phone: latestQuote.broker.user?.phone || '',
-      primaryCity: latestQuote.broker.primaryCity || '',
-      isKycVerified: latestQuote.broker.isKycVerified,
+      id: latestQuote.broker?.id || '',
+      name: latestQuote.broker?.user?.name || 'Agent Partner',
+      phone: latestQuote.broker?.user?.phone || '',
+      primaryCity: latestQuote.broker?.primaryCity || '',
+      isKycVerified: latestQuote.broker?.isKycVerified || false,
     },
     driver: {
       name: dossier?.driverName || latestQuote.driverName || 'Driver Partner',
